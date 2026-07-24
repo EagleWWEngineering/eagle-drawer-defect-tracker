@@ -1,0 +1,247 @@
+"""Dashboard KPIs, Pareto, trend, work-order drilldown, and the rework queue.
+
+All counting math is delegated to app/services/metrics_service.py so the numbers
+shown here can never drift from the numbers in exports or MCP tool results.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session, selectinload
+
+from app.dependencies import get_db
+from app.models import DailyProductionSummary, DefectCase, DefectItem
+from app.schemas import (
+    KpiOut,
+    ParetoRowOut,
+    ReworkQueueItemOut,
+    TrendPointOut,
+    WorkOrderHistoryOut,
+    defect_case_to_out,
+)
+from app.services import metrics_service
+
+router = APIRouter(prefix="/api/v1/reports", tags=["reports"])
+rework_router = APIRouter(prefix="/api/v1", tags=["rework-queue"])
+
+
+def _daily_totals(db: Session, start_date: dt.date | None, end_date: dt.date | None) -> dict:
+    query = db.query(DailyProductionSummary)
+    if start_date is not None:
+        query = query.filter(DailyProductionSummary.production_date >= start_date)
+    if end_date is not None:
+        query = query.filter(DailyProductionSummary.production_date <= end_date)
+    rows = query.all()
+    return {
+        "drawers_inspected": sum(r.drawers_inspected for r in rows),
+        "drawers_rejected_unique": sum(r.drawers_rejected_unique for r in rows),
+        "drawers_reworked": sum(r.drawers_reworked for r in rows),
+        "drawers_scrapped": sum(r.drawers_scrapped for r in rows),
+    }
+
+
+@router.get("/summary", response_model=KpiOut)
+def get_summary(
+    db: Session = Depends(get_db),
+    start_date: dt.date | None = None,
+    end_date: dt.date | None = None,
+    work_order_number: str | None = None,
+    category_id: int | None = None,
+    found_station_id: int | None = None,
+    possible_source_station_id: int | None = None,
+    priority: str | None = None,
+    status: str | None = None,
+    disposition: str | None = None,
+) -> KpiOut:
+    items_query = metrics_service.filtered_defect_items_query(
+        db,
+        start_date=start_date,
+        end_date=end_date,
+        work_order_number=work_order_number,
+        category_id=category_id,
+        found_station_id=found_station_id,
+        possible_source_station_id=possible_source_station_id,
+        priority=priority,
+        status=status,
+        disposition=disposition,
+    )
+    defect_events = sum(item.affected_drawer_quantity for item, _case in items_query.all())
+    totals = _daily_totals(db, start_date, end_date)
+
+    kpis = metrics_service.compute_kpis(
+        drawers_inspected=totals["drawers_inspected"],
+        defect_events=defect_events,
+        unique_drawers_rejected=totals["drawers_rejected_unique"],
+        drawers_reworked=totals["drawers_reworked"],
+        drawers_scrapped=totals["drawers_scrapped"],
+    )
+    return KpiOut(**kpis.to_dict())
+
+
+@router.get("/pareto", response_model=list[ParetoRowOut])
+def get_pareto(
+    db: Session = Depends(get_db),
+    start_date: dt.date | None = None,
+    end_date: dt.date | None = None,
+    work_order_number: str | None = None,
+    found_station_id: int | None = None,
+    possible_source_station_id: int | None = None,
+    priority: str | None = None,
+    status: str | None = None,
+    disposition: str | None = None,
+    group_by: str = "category",
+    limit: int = 10,
+) -> list[ParetoRowOut]:
+    """group_by: 'category' (default) or 'source_station'.
+
+    Possible source station is a hypothesis, not a confirmed root cause — the label
+    returned for that grouping is "possible source station", never "root cause".
+    """
+    items_query = metrics_service.filtered_defect_items_query(
+        db,
+        start_date=start_date,
+        end_date=end_date,
+        work_order_number=work_order_number,
+        found_station_id=found_station_id,
+        possible_source_station_id=possible_source_station_id,
+        priority=priority,
+        status=status,
+        disposition=disposition,
+    )
+
+    counts: dict[str, int] = {}
+    for item, case in items_query.all():
+        if group_by == "source_station":
+            label = case.possible_source_station.name if case.possible_source_station else "Unknown"
+        else:
+            label = item.defect_category.name
+        counts[label] = counts.get(label, 0) + item.affected_drawer_quantity
+
+    rows = metrics_service.compute_pareto(counts)
+    return [ParetoRowOut(**r) for r in rows[:limit]]
+
+
+@router.get("/trend", response_model=list[TrendPointOut])
+def get_trend(
+    db: Session = Depends(get_db),
+    start_date: dt.date | None = None,
+    end_date: dt.date | None = None,
+    group_by: str = "day",
+) -> list[TrendPointOut]:
+    items_query = metrics_service.filtered_defect_items_query(
+        db, start_date=start_date, end_date=end_date
+    )
+    events_by_bucket: dict[str, int] = {}
+    for item, case in items_query.all():
+        label = metrics_service.trend_bucket_label(case.production_date, group_by)
+        events_by_bucket[label] = events_by_bucket.get(label, 0) + item.affected_drawer_quantity
+
+    summary_query = db.query(DailyProductionSummary)
+    if start_date is not None:
+        summary_query = summary_query.filter(DailyProductionSummary.production_date >= start_date)
+    if end_date is not None:
+        summary_query = summary_query.filter(DailyProductionSummary.production_date <= end_date)
+
+    inspected_by_bucket: dict[str, int] = {}
+    rejected_by_bucket: dict[str, int] = {}
+    for row in summary_query.all():
+        label = metrics_service.trend_bucket_label(row.production_date, group_by)
+        inspected_by_bucket[label] = inspected_by_bucket.get(label, 0) + row.drawers_inspected
+        rejected_by_bucket[label] = rejected_by_bucket.get(label, 0) + row.drawers_rejected_unique
+
+    all_labels = sorted(set(events_by_bucket) | set(inspected_by_bucket))
+    return [
+        TrendPointOut(
+            period=label,
+            defect_events=events_by_bucket.get(label, 0),
+            drawers_inspected=inspected_by_bucket.get(label, 0),
+            unique_drawers_rejected=rejected_by_bucket.get(label, 0),
+        )
+        for label in all_labels
+    ]
+
+
+@router.get("/work-orders/{work_order_number}", response_model=WorkOrderHistoryOut)
+def get_work_order_history(
+    work_order_number: str, db: Session = Depends(get_db)
+) -> WorkOrderHistoryOut:
+    cases = (
+        db.query(DefectCase)
+        .options(
+            selectinload(DefectCase.items).selectinload(DefectItem.defect_category),
+            selectinload(DefectCase.photos),
+            selectinload(DefectCase.status_history),
+            selectinload(DefectCase.found_station),
+            selectinload(DefectCase.possible_source_station),
+        )
+        .filter(
+            DefectCase.work_order_number == work_order_number,
+            DefectCase.is_deleted.is_(False),
+        )
+        .order_by(DefectCase.detected_at.asc())
+        .all()
+    )
+    total_events = sum(i.affected_drawer_quantity for c in cases for i in c.items)
+    return WorkOrderHistoryOut(
+        work_order_number=work_order_number,
+        cases=[defect_case_to_out(c) for c in cases],
+        total_defect_events=total_events,
+    )
+
+
+@rework_router.get("/rework-queue", response_model=list[ReworkQueueItemOut])
+def get_rework_queue(
+    db: Session = Depends(get_db),
+    priority: str | None = None,
+    status: str | None = None,
+) -> list[ReworkQueueItemOut]:
+    """Open work only, sorted Urgent > High > Normal, oldest first within priority."""
+    open_statuses = {"Open", "In Rework", "Waiting", "Ready for QC Recheck"}
+    query = (
+        db.query(DefectCase)
+        .options(
+            selectinload(DefectCase.items).selectinload(DefectItem.defect_category),
+            selectinload(DefectCase.found_station),
+            selectinload(DefectCase.possible_source_station),
+        )
+        .filter(DefectCase.is_deleted.is_(False))
+    )
+    if status is not None:
+        query = query.filter(DefectCase.status == status)
+    else:
+        query = query.filter(DefectCase.status.in_(open_statuses))
+    if priority is not None:
+        query = query.filter(DefectCase.priority == priority)
+
+    cases = query.all()
+    now = dt.datetime.now(dt.timezone.utc)
+    ordered = sorted(
+        cases, key=lambda c: (metrics_service.priority_sort_index(c.priority), c.detected_at)
+    )
+
+    result = []
+    for c in ordered:
+        detected = (
+            c.detected_at if c.detected_at.tzinfo else c.detected_at.replace(tzinfo=dt.timezone.utc)
+        )
+        age_hours = (now - detected).total_seconds() / 3600
+        result.append(
+            ReworkQueueItemOut(
+                id=c.id,
+                case_number=c.case_number,
+                work_order_number=c.work_order_number,
+                categories=[i.defect_category.name for i in c.items],
+                status=c.status,
+                disposition=c.disposition,
+                priority=c.priority,
+                found_station_name=c.found_station.name,
+                possible_source_station_name=(
+                    c.possible_source_station.name if c.possible_source_station else None
+                ),
+                detected_at=c.detected_at,
+                age_hours=round(age_hours, 1),
+            )
+        )
+    return result

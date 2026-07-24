@@ -6,6 +6,7 @@ layer and the unit tests can exercise the exact same math without a database.
 
 from __future__ import annotations
 
+import datetime as dt
 from dataclasses import dataclass
 
 PRIORITY_ORDER: list[str] = ["Urgent", "High", "Normal"]
@@ -83,6 +84,62 @@ def compute_kpis(
         rework_rate=rework_rate,
         scrap_rate=scrap_rate,
     )
+
+
+def filtered_defect_items_query(
+    db,
+    *,
+    start_date: dt.date | None = None,
+    end_date: dt.date | None = None,
+    work_order_number: str | None = None,
+    category_id: int | None = None,
+    found_station_id: int | None = None,
+    possible_source_station_id: int | None = None,
+    priority: str | None = None,
+    status: str | None = None,
+    disposition: str | None = None,
+):
+    """Shared report filter set (PROJECT_SPEC.md section 9: 'chart totals must match
+    the filtered record total'). Used by /reports/summary, /reports/pareto, and
+    /reports/trend so they can never disagree with each other over what "filtered"
+    means. Returns a query over (DefectItem, DefectCase) joined rows.
+    """
+    from app.models import DefectCase, DefectItem
+
+    query = (
+        db.query(DefectItem, DefectCase)
+        .join(DefectCase, DefectItem.defect_case_id == DefectCase.id)
+        .filter(DefectCase.is_deleted.is_(False))
+    )
+
+    if start_date is not None:
+        query = query.filter(DefectCase.production_date >= start_date)
+    if end_date is not None:
+        query = query.filter(DefectCase.production_date <= end_date)
+    if work_order_number:
+        query = query.filter(DefectCase.work_order_number.ilike(f"%{work_order_number}%"))
+    if category_id is not None:
+        query = query.filter(DefectItem.defect_category_id == category_id)
+    if found_station_id is not None:
+        query = query.filter(DefectCase.found_station_id == found_station_id)
+    if possible_source_station_id is not None:
+        query = query.filter(DefectCase.possible_source_station_id == possible_source_station_id)
+    if priority is not None:
+        query = query.filter(DefectCase.priority == priority)
+    if status is not None:
+        query = query.filter(DefectCase.status == status)
+    if disposition is not None:
+        query = query.filter(DefectCase.disposition == disposition)
+
+    return query
+
+
+def trend_bucket_label(production_date: dt.date, group_by: str) -> str:
+    """'day' -> ISO date string. 'week' -> ISO year-week, e.g. '2026-W30' (Mon-start)."""
+    if group_by == "week":
+        iso_year, iso_week, _ = production_date.isocalendar()
+        return f"{iso_year}-W{iso_week:02d}"
+    return production_date.isoformat()
 
 
 def compute_pareto(counts: dict[str, int]) -> list[dict]:
