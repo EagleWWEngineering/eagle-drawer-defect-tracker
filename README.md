@@ -1,0 +1,64 @@
+# Eagle Drawer Defect Tracker
+
+A local-first defect tracking system for Eagle Woodworking's drawer-production pilot:
+a FastAPI + SQLite web app for QC and the Manufacturing Engineer, plus a stdio MCP
+server so Claude Code / Codex can query and (with confirmation) record data using the
+same rules as the UI.
+
+Full specification: [`docs/PROJECT_SPEC.md`](docs/PROJECT_SPEC.md).
+Field reference: [`docs/DATA_DICTIONARY.md`](docs/DATA_DICTIONARY.md).
+How to use the app day to day: [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md).
+New to web apps/APIs/databases/MCP? Start with [`docs/LEARNING_GUIDE.md`](docs/LEARNING_GUIDE.md).
+Connecting an MCP client: [`docs/MCP_SETUP.md`](docs/MCP_SETUP.md).
+
+## Quick start (Windows)
+
+```
+run_app.bat
+```
+
+## Quick start (macOS/Linux)
+
+```
+./run_app.sh
+```
+
+## Manual setup
+
+```bash
+python -m venv .venv
+# Windows: .venv\Scripts\activate    macOS/Linux: source .venv/bin/activate
+pip install -e ".[dev]"
+copy .env.example .env      # macOS/Linux: cp .env.example .env
+alembic upgrade head
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+Then open http://127.0.0.1:8000 in a browser.
+
+Optional synthetic demo data:
+
+```bash
+python scripts/seed_demo_data.py
+```
+
+## Tests and linting
+
+```bash
+pytest
+ruff check .
+```
+
+## MCP server
+
+```bash
+python -m mcp_server.server
+```
+
+See [`docs/MCP_SETUP.md`](docs/MCP_SETUP.md) for Codex and Claude Code configuration.
+
+## Project status
+
+This is an MVP pilot for drawer production only (no cabinet doors, no employee
+performance tracking, no production authentication — see `docs/PROJECT_SPEC.md`
+section 8 before any LAN or multi-user deployment).

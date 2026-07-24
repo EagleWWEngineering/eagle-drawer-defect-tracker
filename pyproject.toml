@@ -1,0 +1,45 @@
+[project]
+name = "eagle-drawer-defect-tracker"
+version = "0.1.0"
+description = "Local-first defect tracking system for Eagle Woodworking's drawer production pilot"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi==0.115.6",
+    "uvicorn[standard]==0.34.0",
+    "sqlalchemy==2.0.36",
+    "alembic==1.14.0",
+    "pydantic==2.10.4",
+    "jinja2==3.1.5",
+    "python-multipart==0.0.20",
+    "httpx==0.28.1",
+    "mcp==1.1.2",
+    "python-dateutil==2.9.0.post0",
+    "tzdata==2024.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.4",
+    "pytest-asyncio==0.25.0",
+    "ruff==0.8.4",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "B"]
+ignore = ["B008"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["app", "app.routers", "app.services", "mcp_server"]
