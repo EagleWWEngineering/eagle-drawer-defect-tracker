@@ -1,0 +1,279 @@
+{% extends "base.html" %}
+{% block title %}Reports - Eagle Drawer Defect Tracker{% endblock %}
+{% block page_name %}reports{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Reports</h1>
+
+<section class="card">
+  <form id="filter-form" class="filters">
+    <div class="field">
+      <label for="f-start-date">Start date</label>
+      <input type="date" id="f-start-date" name="start_date">
+    </div>
+    <div class="field">
+      <label for="f-end-date">End date</label>
+      <input type="date" id="f-end-date" name="end_date">
+    </div>
+    <div class="field">
+      <label for="f-work-order">Work order</label>
+      <input type="text" id="f-work-order" name="work_order_number">
+    </div>
+    <div class="field">
+      <label for="f-category">Category</label>
+      <select id="f-category" name="category_id"><option value="">All</option></select>
+    </div>
+    <div class="field">
+      <label for="f-found-station">Found station</label>
+      <select id="f-found-station" name="found_station_id"><option value="">All</option></select>
+    </div>
+    <div class="field">
+      <label for="f-source-station">Possible source station</label>
+      <select id="f-source-station" name="possible_source_station_id"><option value="">All</option></select>
+    </div>
+    <div class="field">
+      <label for="f-priority">Priority</label>
+      <select id="f-priority" name="priority"><option value="">All</option><option>Urgent</option><option>High</option><option>Normal</option></select>
+    </div>
+    <div class="field">
+      <label for="f-status">Status</label>
+      <select id="f-status" name="status"><option value="">All</option></select>
+    </div>
+    <div class="field">
+      <label for="f-disposition">Disposition</label>
+      <select id="f-disposition" name="disposition"><option value="">All</option></select>
+    </div>
+    <div class="field">
+      <button type="submit">Apply filters</button>
+    </div>
+    <div class="field">
+      <a id="csv-export-link" class="btn secondary" href="#">Export CSV</a>
+    </div>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Summary</h2>
+  <div id="summary-kpis" class="kpi-grid"></div>
+</section>
+
+<section class="card">
+  <div style="display:flex; gap:1rem; align-items:center; flex-wrap:wrap;">
+    <h2 style="margin:0;">Pareto</h2>
+    <label for="pareto-group-by" style="margin:0;">Group by</label>
+    <select id="pareto-group-by">
+      <option value="category">Defect category</option>
+      <option value="source_station">Possible source station (hypothesis, not root cause)</option>
+    </select>
+  </div>
+  <div class="chart-container"><canvas id="pareto-canvas" class="chart-canvas"></canvas></div>
+  <p class="hint">Click a row to filter the record table below to just that group.</p>
+  <div class="table-scroll">
+    <table id="pareto-table">
+      <thead><tr><th>Group</th><th>Defect events</th><th>Cumulative %</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<section class="card">
+  <div style="display:flex; gap:1rem; align-items:center;">
+    <h2 style="margin:0;">Trend</h2>
+    <select id="trend-group-by"><option value="day">Day</option><option value="week">Week</option></select>
+  </div>
+  <div class="chart-container"><canvas id="trend-canvas" class="chart-canvas"></canvas></div>
+</section>
+
+<section class="card">
+  <h2>Work order history</h2>
+  <div class="field" style="max-width: 320px;">
+    <label for="wo-search">Look up a work order</label>
+    <input type="text" id="wo-search" placeholder="e.g. WO-1024">
+  </div>
+  <button type="button" id="wo-search-btn" class="secondary">Search</button>
+  <div id="wo-history-result" class="table-scroll" style="margin-top:0.75rem;"></div>
+</section>
+
+<section class="card">
+  <h2>Filtered records</h2>
+  <div class="table-scroll">
+    <table id="records-table">
+      <thead>
+        <tr><th>Case</th><th>Date</th><th>Work order</th><th>Categories</th><th>Priority</th><th>Status</th><th>Disposition</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let currentDrilldownLabel = null;
+let currentGroupBy = "category";
+
+function currentFilters() {
+  const form = document.getElementById("filter-form");
+  const data = new FormData(form);
+  const params = {};
+  for (const [key, value] of data.entries()) if (value) params[key] = value;
+  return params;
+}
+
+function kpiTile(label, value) {
+  return `<div class="kpi-tile"><div class="kpi-label">${escapeHtml(label)}</div><div class="kpi-value">${value}</div></div>`;
+}
+
+async function populateMasterDataFilters() {
+  const md = await Api.getMasterData();
+  const catSelect = document.getElementById("f-category");
+  md.defect_categories.forEach((c) => catSelect.insertAdjacentHTML("beforeend", `<option value="${c.id}">${escapeHtml(c.name)}</option>`));
+  ["f-found-station", "f-source-station"].forEach((id) => {
+    const select = document.getElementById(id);
+    md.stations.forEach((s) => select.insertAdjacentHTML("beforeend", `<option value="${s.id}">${escapeHtml(s.name)}</option>`));
+  });
+  const statusSelect = document.getElementById("f-status");
+  md.statuses.forEach((s) => statusSelect.insertAdjacentHTML("beforeend", `<option>${escapeHtml(s)}</option>`));
+  const dispSelect = document.getElementById("f-disposition");
+  md.dispositions.forEach((d) => dispSelect.insertAdjacentHTML("beforeend", `<option>${escapeHtml(d)}</option>`));
+}
+
+async function loadSummary(params) {
+  const kpis = await Api.getSummary(params);
+  document.getElementById("summary-kpis").innerHTML = [
+    kpiTile("Drawers inspected", kpis.drawers_inspected),
+    kpiTile("Defect events", kpis.defect_events),
+    kpiTile("Unique drawers rejected", kpis.unique_drawers_rejected),
+    kpiTile("Defects / 100 drawers", formatRate(kpis.defects_per_100)),
+    kpiTile("Rejection rate", formatRate(kpis.rejection_rate)),
+    kpiTile("First pass yield", formatRate(kpis.first_pass_yield)),
+    kpiTile("Rework rate", formatRate(kpis.rework_rate)),
+    kpiTile("Scrap rate", formatRate(kpis.scrap_rate)),
+  ].join("");
+}
+
+async function loadPareto(params) {
+  currentGroupBy = document.getElementById("pareto-group-by").value;
+  const rows = await Api.getPareto({ ...params, group_by: currentGroupBy });
+  const tbody = document.querySelector("#pareto-table tbody");
+  tbody.innerHTML =
+    rows
+      .map(
+        (r) => `<tr class="clickable" data-label="${escapeHtml(r.label)}">
+          <td>${escapeHtml(r.label)}</td><td>${r.defect_events}</td><td>${formatRate(r.cumulative_pct)}</td>
+        </tr>`
+      )
+      .join("") || `<tr><td colspan="3">No defect events for this selection.</td></tr>`;
+  renderParetoChart(document.getElementById("pareto-canvas"), rows);
+
+  tbody.querySelectorAll("tr.clickable").forEach((tr) => {
+    tr.addEventListener("click", async () => {
+      currentDrilldownLabel = tr.dataset.label;
+      await loadRecords(currentFilters());
+    });
+  });
+}
+
+async function loadTrend(params) {
+  const groupBy = document.getElementById("trend-group-by").value;
+  const trend = await Api.getTrend({ start_date: params.start_date, end_date: params.end_date, group_by: groupBy });
+  renderTrendChart(document.getElementById("trend-canvas"), trend);
+}
+
+async function loadRecords(params) {
+  const effectiveParams = { ...params };
+  if (currentDrilldownLabel && currentGroupBy === "category") {
+    const md = await Api.getMasterData();
+    const match = md.defect_categories.find((c) => c.name === currentDrilldownLabel);
+    if (match) effectiveParams.category_id = match.id;
+  }
+  const result = await Api.listDefectCases({ ...effectiveParams, page_size: 200 });
+  const tbody = document.querySelector("#records-table tbody");
+  tbody.innerHTML =
+    result.cases
+      .map(
+        (c) => `<tr>
+          <td><a href="#" data-case="${c.id}">${escapeHtml(c.case_number)}</a></td>
+          <td>${c.production_date}</td>
+          <td>${escapeHtml(c.work_order_number)}</td>
+          <td>${c.items.map((i) => escapeHtml(i.defect_category_name)).join(", ")}</td>
+          <td>${priorityBadge(c.priority)}</td>
+          <td>${statusBadge(c.status)}</td>
+          <td>${escapeHtml(c.disposition || "")}</td>
+        </tr>`
+      )
+      .join("") || `<tr><td colspan="7">No records match these filters.</td></tr>`;
+}
+
+function updateCsvLink(params) {
+  document.getElementById("csv-export-link").href = Api.exportCsvUrl(params);
+}
+
+async function reloadAll() {
+  const params = currentFilters();
+  currentDrilldownLabel = null;
+  updateCsvLink(params);
+  await Promise.all([loadSummary(params), loadPareto(params), loadTrend(params), loadRecords(params)]);
+}
+
+function defaultDateRange() {
+  const end = new Date();
+  const start = new Date();
+  start.setDate(start.getDate() - 29);
+  document.getElementById("f-start-date").value = start.toISOString().slice(0, 10);
+  document.getElementById("f-end-date").value = end.toISOString().slice(0, 10);
+}
+
+document.addEventListener("DOMContentLoaded", async () => {
+  defaultDateRange();
+
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.get("work_order_number")) {
+    document.getElementById("f-work-order").value = urlParams.get("work_order_number");
+  }
+
+  try {
+    await populateMasterDataFilters();
+    await reloadAll();
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+
+  document.getElementById("filter-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try { await reloadAll(); } catch (err) { showToast(err.message, "error"); }
+  });
+  document.getElementById("pareto-group-by").addEventListener("change", async () => {
+    try { await loadPareto(currentFilters()); } catch (err) { showToast(err.message, "error"); }
+  });
+  document.getElementById("trend-group-by").addEventListener("change", async () => {
+    try { await loadTrend(currentFilters()); } catch (err) { showToast(err.message, "error"); }
+  });
+
+  document.getElementById("wo-search-btn").addEventListener("click", async () => {
+    const wo = document.getElementById("wo-search").value.trim();
+    if (!wo) return;
+    try {
+      const history = await Api.getWorkOrderHistory(wo);
+      const container = document.getElementById("wo-history-result");
+      if (!history.cases.length) {
+        container.innerHTML = `<p>No cases found for ${escapeHtml(wo)}.</p>`;
+        return;
+      }
+      container.innerHTML = `<p>${history.total_defect_events} total defect events across ${history.cases.length} case(s).</p>
+        <table><thead><tr><th>Case</th><th>Date</th><th>Categories</th><th>Status</th></tr></thead><tbody>
+        ${history.cases
+          .map(
+            (c) => `<tr><td>${escapeHtml(c.case_number)}</td><td>${c.production_date}</td>
+              <td>${c.items.map((i) => escapeHtml(i.defect_category_name)).join(", ")}</td>
+              <td>${statusBadge(c.status)}</td></tr>`
+          )
+          .join("")}
+        </tbody></table>`;
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  });
+});
+</script>
+{% endblock %}

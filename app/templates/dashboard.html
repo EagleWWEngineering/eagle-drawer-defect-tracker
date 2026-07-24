@@ -1,0 +1,211 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - Eagle Drawer Defect Tracker{% endblock %}
+{% block page_name %}dashboard{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Dashboard</h1>
+
+<section class="card">
+  <h2>Today</h2>
+  <div id="today-kpis" class="kpi-grid"><p>Loading...</p></div>
+</section>
+
+<section class="card">
+  <h2>Selected period</h2>
+  <form id="filter-form" class="filters">
+    <div class="field">
+      <label for="f-start-date">Start date</label>
+      <input type="date" id="f-start-date" name="start_date">
+    </div>
+    <div class="field">
+      <label for="f-end-date">End date</label>
+      <input type="date" id="f-end-date" name="end_date">
+    </div>
+    <div class="field">
+      <label for="f-work-order">Work order</label>
+      <input type="text" id="f-work-order" name="work_order_number" placeholder="e.g. WO-1024">
+    </div>
+    <div class="field">
+      <label for="f-category">Category</label>
+      <select id="f-category" name="category_id"><option value="">All</option></select>
+    </div>
+    <div class="field">
+      <label for="f-found-station">Found station</label>
+      <select id="f-found-station" name="found_station_id"><option value="">All</option></select>
+    </div>
+    <div class="field">
+      <label for="f-source-station">Possible source station</label>
+      <select id="f-source-station" name="possible_source_station_id"><option value="">All</option></select>
+    </div>
+    <div class="field">
+      <label for="f-priority">Priority</label>
+      <select id="f-priority" name="priority">
+        <option value="">All</option>
+        <option>Urgent</option><option>High</option><option>Normal</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="f-status">Status</label>
+      <select id="f-status" name="status"><option value="">All</option></select>
+    </div>
+    <div class="field">
+      <label for="f-disposition">Disposition</label>
+      <select id="f-disposition" name="disposition"><option value="">All</option></select>
+    </div>
+    <div class="field">
+      <button type="submit">Apply filters</button>
+    </div>
+  </form>
+
+  <div id="period-kpis" class="kpi-grid" style="margin-top: 1rem;"><p>Loading...</p></div>
+</section>
+
+<section class="card">
+  <h2>Pareto by defect category</h2>
+  <p class="hint">Bars = defect events. Line = cumulative percentage. Default measure is
+    Defect Events (not unique drawers), per the project's counting rules.</p>
+  <div class="chart-container"><canvas id="pareto-canvas" class="chart-canvas"></canvas></div>
+  <div class="table-scroll">
+    <table id="pareto-table">
+      <thead><tr><th>Category</th><th>Defect events</th><th>Cumulative %</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Trend</h2>
+  <div class="field" style="max-width: 220px;">
+    <label for="trend-group-by">Group by</label>
+    <select id="trend-group-by"><option value="day">Day</option><option value="week">Week</option></select>
+  </div>
+  <div class="chart-container"><canvas id="trend-canvas" class="chart-canvas"></canvas></div>
+</section>
+
+<section class="card">
+  <div style="display:flex; justify-content: space-between; align-items:center;">
+    <h2 style="margin:0;">Priority rework queue</h2>
+    <a class="btn secondary" href="/rework-queue">Open full queue</a>
+  </div>
+  <div class="table-scroll">
+    <table id="rework-preview-table">
+      <thead><tr><th>Case</th><th>Work order</th><th>Priority</th><th>Status</th><th>Age (hrs)</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+function kpiTile(label, value) {
+  return `<div class="kpi-tile"><div class="kpi-label">${escapeHtml(label)}</div><div class="kpi-value">${value}</div></div>`;
+}
+
+function renderKpis(container, kpis) {
+  container.innerHTML = [
+    kpiTile("Drawers inspected", kpis.drawers_inspected),
+    kpiTile("Defect events", kpis.defect_events),
+    kpiTile("Unique drawers rejected", kpis.unique_drawers_rejected),
+    kpiTile("Defects / 100 drawers", formatRate(kpis.defects_per_100)),
+    kpiTile("Rejection rate", formatRate(kpis.rejection_rate)),
+    kpiTile("First pass yield", formatRate(kpis.first_pass_yield)),
+    kpiTile("Rework rate", formatRate(kpis.rework_rate)),
+    kpiTile("Scrap rate", formatRate(kpis.scrap_rate)),
+  ].join("");
+}
+
+function currentFilters() {
+  const form = document.getElementById("filter-form");
+  const data = new FormData(form);
+  const params = {};
+  for (const [key, value] of data.entries()) params[key] = value;
+  return params;
+}
+
+async function loadToday() {
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const kpis = await Api.getSummary({ start_date: todayIso, end_date: todayIso });
+  renderKpis(document.getElementById("today-kpis"), kpis);
+}
+
+async function loadPeriod() {
+  const params = currentFilters();
+  const kpis = await Api.getSummary(params);
+  renderKpis(document.getElementById("period-kpis"), kpis);
+
+  const rows = await Api.getPareto(params);
+  const tbody = document.querySelector("#pareto-table tbody");
+  tbody.innerHTML = rows
+    .map((r) => `<tr><td>${escapeHtml(r.label)}</td><td>${r.defect_events}</td><td>${formatRate(r.cumulative_pct)}</td></tr>`)
+    .join("") || `<tr><td colspan="3">No defect events in this period.</td></tr>`;
+  renderParetoChart(document.getElementById("pareto-canvas"), rows);
+
+  const groupBy = document.getElementById("trend-group-by").value;
+  const trend = await Api.getTrend({ start_date: params.start_date, end_date: params.end_date, group_by: groupBy });
+  renderTrendChart(document.getElementById("trend-canvas"), trend);
+}
+
+async function loadReworkPreview() {
+  const rows = (await Api.getReworkQueue()).slice(0, 8);
+  const tbody = document.querySelector("#rework-preview-table tbody");
+  tbody.innerHTML = rows
+    .map(
+      (r) => `<tr>
+        <td><a href="/reports?work_order_number=${encodeURIComponent(r.work_order_number)}">${escapeHtml(r.case_number)}</a></td>
+        <td>${escapeHtml(r.work_order_number)}</td>
+        <td>${priorityBadge(r.priority)}</td>
+        <td>${statusBadge(r.status)}</td>
+        <td>${r.age_hours}</td>
+      </tr>`
+    )
+    .join("") || `<tr><td colspan="5">Nothing in the rework queue right now.</td></tr>`;
+}
+
+async function populateMasterDataFilters() {
+  const md = await Api.getMasterData();
+  const catSelect = document.getElementById("f-category");
+  md.defect_categories.forEach((c) => {
+    catSelect.insertAdjacentHTML("beforeend", `<option value="${c.id}">${escapeHtml(c.name)}</option>`);
+  });
+  ["f-found-station", "f-source-station"].forEach((id) => {
+    const select = document.getElementById(id);
+    md.stations.forEach((s) => {
+      select.insertAdjacentHTML("beforeend", `<option value="${s.id}">${escapeHtml(s.name)}</option>`);
+    });
+  });
+  const statusSelect = document.getElementById("f-status");
+  md.statuses.forEach((s) => statusSelect.insertAdjacentHTML("beforeend", `<option>${escapeHtml(s)}</option>`));
+  const dispSelect = document.getElementById("f-disposition");
+  md.dispositions.forEach((d) => dispSelect.insertAdjacentHTML("beforeend", `<option>${escapeHtml(d)}</option>`));
+}
+
+function defaultDateRange() {
+  const end = new Date();
+  const start = new Date();
+  start.setDate(start.getDate() - 6);
+  document.getElementById("f-start-date").value = start.toISOString().slice(0, 10);
+  document.getElementById("f-end-date").value = end.toISOString().slice(0, 10);
+}
+
+document.addEventListener("DOMContentLoaded", async () => {
+  defaultDateRange();
+  try {
+    await populateMasterDataFilters();
+    await loadToday();
+    await loadPeriod();
+    await loadReworkPreview();
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+
+  document.getElementById("filter-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try { await loadPeriod(); } catch (err) { showToast(err.message, "error"); }
+  });
+  document.getElementById("trend-group-by").addEventListener("change", async () => {
+    try { await loadPeriod(); } catch (err) { showToast(err.message, "error"); }
+  });
+});
+</script>
+{% endblock %}

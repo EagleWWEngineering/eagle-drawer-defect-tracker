@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}Rework Queue - Eagle Drawer Defect Tracker{% endblock %}
+{% block page_name %}rework_queue{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Rework Queue</h1>
+<p class="hint">Sorted Urgent first, then High, then Normal; oldest open item first within each priority.</p>
+
+<div class="card">
+  <div class="filters">
+    <div class="field">
+      <label for="f-priority">Priority</label>
+      <select id="f-priority"><option value="">All</option><option>Urgent</option><option>High</option><option>Normal</option></select>
+    </div>
+    <div class="field">
+      <label for="f-status">Status</label>
+      <select id="f-status"><option value="">All open statuses</option></select>
+    </div>
+  </div>
+</div>
+
+<div class="table-scroll">
+  <table id="queue-table">
+    <thead>
+      <tr>
+        <th>Case</th><th>Work order</th><th>Categories</th><th>Priority</th><th>Status</th>
+        <th>Found / Possible source</th><th>Age (hrs)</th><th>Update</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let masterData = null;
+
+function updateFormHtml(item) {
+  const statusOptions = [item.status, ...item.allowed_next_statuses]
+    .filter((v, i, arr) => arr.indexOf(v) === i)
+    .map((s) => `<option value="${escapeHtml(s)}" ${s === item.status ? "selected" : ""}>${escapeHtml(s)}</option>`)
+    .join("");
+  const dispositionOptions = ["", ...masterData.dispositions]
+    .map((d) => `<option value="${escapeHtml(d)}" ${d === (item.disposition || "") ? "selected" : ""}>${d || "-- none --"}</option>`)
+    .join("");
+  return `<form class="status-form" data-case-id="${item.id}">
+    <div class="field"><label>New status</label><select name="new_status">${statusOptions}</select></div>
+    <div class="field"><label>Disposition</label><select name="disposition">${dispositionOptions}</select></div>
+    <div class="field"><label>Note <span class="hint">(required to reopen a closed case)</span></label>
+      <input type="text" name="note" placeholder="Optional note"></div>
+    <button type="submit" class="secondary">Save</button>
+  </form>`;
+}
+
+function rowHtml(item) {
+  return `<tr>
+    <td><a href="/reports?work_order_number=${encodeURIComponent(item.work_order_number)}">${escapeHtml(item.case_number)}</a></td>
+    <td>${escapeHtml(item.work_order_number)}</td>
+    <td>${item.categories.map(escapeHtml).join(", ")}</td>
+    <td>${priorityBadge(item.priority)}</td>
+    <td>${statusBadge(item.status)}</td>
+    <td>${escapeHtml(item.found_station_name)} / ${escapeHtml(item.possible_source_station_name || "unknown")}</td>
+    <td>${item.age_hours}</td>
+    <td>${updateFormHtml(item)}</td>
+  </tr>`;
+}
+
+async function loadQueue() {
+  const priority = document.getElementById("f-priority").value;
+  const status = document.getElementById("f-status").value;
+  const rows = await Api.getReworkQueue({ priority: priority || undefined, status: status || undefined });
+  const tbody = document.querySelector("#queue-table tbody");
+  tbody.innerHTML = rows.map(rowHtml).join("") || `<tr><td colspan="8">Nothing in the queue.</td></tr>`;
+
+  tbody.querySelectorAll(".status-form").forEach((form) => {
+    const btn = form.querySelector("button");
+    form.addEventListener(
+      "submit",
+      guardDoubleSubmit(btn, async (e) => {
+        e.preventDefault();
+        const fd = new FormData(form);
+        const payload = {
+          new_status: fd.get("new_status"),
+          disposition: fd.get("disposition") || null,
+          note: fd.get("note") || null,
+        };
+        try {
+          await Api.changeStatus(form.dataset.caseId, payload);
+          showToast("Status updated.", "success");
+          await loadQueue();
+        } catch (err) {
+          showToast(err.message, "error");
+        }
+      })
+    );
+  });
+}
+
+document.addEventListener("DOMContentLoaded", async () => {
+  try {
+    masterData = await Api.getMasterData();
+    const statusSelect = document.getElementById("f-status");
+    ["Open", "In Rework", "Waiting", "Ready for QC Recheck"].forEach((s) =>
+      statusSelect.insertAdjacentHTML("beforeend", `<option>${s}</option>`)
+    );
+    await loadQueue();
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+  document.getElementById("f-priority").addEventListener("change", loadQueue);
+  document.getElementById("f-status").addEventListener("change", loadQueue);
+});
+</script>
+{% endblock %}

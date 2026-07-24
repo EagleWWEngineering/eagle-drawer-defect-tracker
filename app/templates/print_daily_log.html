@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Print Daily Log - Eagle Drawer Defect Tracker{% endblock %}
+{% block page_name %}print_daily_log{% endblock %}
+
+{% block content %}
+<div class="card no-print">
+  <p class="hint">This is a printable paper form for collecting defects on the floor
+    before they are typed into the New Defect screen later that day. It intentionally
+    has no operator-name column.</p>
+  <button type="button" id="print-btn">Print this form</button>
+</div>
+
+<div class="card print-card">
+  <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom: 0.75rem;">
+    <h1 style="margin:0;">Eagle Woodworking - Daily Defect Log</h1>
+    <div>
+      <label for="log-date" style="display:inline; font-weight:700;">Date:</label>
+      <input type="text" id="log-date" style="display:inline; width:160px; min-height:auto; padding:2px 6px;">
+    </div>
+  </div>
+
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:12%;">Work Order #</th>
+          <th style="width:16%;">Defect Category</th>
+          <th style="width:8%;">Qty (affected drawers)</th>
+          <th style="width:14%;">Found Station</th>
+          <th style="width:14%;">Possible Source Station</th>
+          <th style="width:8%;">Priority</th>
+          <th style="width:14%;">Disposition / Repair Action</th>
+          <th style="width:14%;">Notes</th>
+        </tr>
+      </thead>
+      <tbody id="log-rows"></tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("log-date").value = new Date().toISOString().slice(0, 10);
+
+  const rowCount = 30;
+  const tbody = document.getElementById("log-rows");
+  let rowsHtml = "";
+  for (let i = 0; i < rowCount; i++) {
+    rowsHtml += "<tr>" + "<td>&nbsp;</td>".repeat(8) + "</tr>";
+  }
+  tbody.innerHTML = rowsHtml;
+
+  document.getElementById("print-btn").addEventListener("click", () => window.print());
+});
+</script>
+{% endblock %}

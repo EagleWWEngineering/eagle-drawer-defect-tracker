@@ -1,0 +1,225 @@
+{% extends "base.html" %}
+{% block title %}New Defect - Eagle Drawer Defect Tracker{% endblock %}
+{% block page_name %}defect_entry{% endblock %}
+
+{% block content %}
+<h1 class="page-title">New Defect</h1>
+
+<div id="confirmation-card" class="card" style="display:none; border-color:#bfe6cd; background:#f3fbf5;">
+  <h2>Saved: <span id="confirmation-case-number"></span></h2>
+  <p>Case created successfully. You can attach an optional photo below, or start the next entry.</p>
+  <div class="field" style="max-width: 420px;">
+    <label for="photo-input">Optional photo</label>
+    <input type="file" id="photo-input" accept="image/jpeg,image/png,image/webp">
+  </div>
+  <div class="btn-row">
+    <button type="button" id="upload-photo-btn" class="secondary">Attach photo</button>
+    <button type="button" id="new-entry-btn">Enter another defect</button>
+  </div>
+</div>
+
+<form id="defect-form" class="card">
+  <div class="filters">
+    <div class="field">
+      <label for="production_date">Production date <span class="hint">(defaults to today; pick an earlier date for paper-log entry)</span></label>
+      <input type="date" id="production_date" name="production_date" required>
+    </div>
+    <div class="field">
+      <label for="detected_at">Detected date/time</label>
+      <input type="datetime-local" id="detected_at" name="detected_at" required>
+    </div>
+    <div class="field">
+      <label for="work_order_number">Work order number</label>
+      <input type="text" id="work_order_number" name="work_order_number" required autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="drawer_part_reference">Drawer / part reference <span class="hint">(optional)</span></label>
+      <input type="text" id="drawer_part_reference" name="drawer_part_reference">
+    </div>
+    <div class="field">
+      <label for="found_station_id">Found station</label>
+      <select id="found_station_id" name="found_station_id" required></select>
+    </div>
+    <div class="field">
+      <label for="possible_source_station_id">Possible source station <span class="hint">(a hypothesis, not confirmed root cause)</span></label>
+      <select id="possible_source_station_id" name="possible_source_station_id"><option value="">-- none --</option></select>
+    </div>
+    <div class="field">
+      <label for="priority">Priority</label>
+      <select id="priority" name="priority">
+        <option>Urgent</option><option>High</option><option selected>Normal</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="disposition">Disposition <span class="hint">(optional)</span></label>
+      <select id="disposition" name="disposition"><option value="">-- not decided yet --</option></select>
+    </div>
+  </div>
+
+  <div class="field">
+    <label>Defect categories <span class="hint">(one drawer with 3 sanding scratches = 1 Sanding event; add a row per category)</span></label>
+    <div id="category-rows"></div>
+    <button type="button" id="add-category-row" class="secondary">+ Add another category</button>
+  </div>
+
+  <div class="field">
+    <label for="repair_action">Repair action <span class="hint">(optional - what actually happened)</span></label>
+    <textarea id="repair_action" name="repair_action"></textarea>
+  </div>
+  <div class="field">
+    <label for="notes">Notes <span class="hint">(optional)</span></label>
+    <textarea id="notes" name="notes"></textarea>
+  </div>
+
+  <div class="btn-row">
+    <button type="submit" id="save-btn">Save defect</button>
+  </div>
+</form>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let masterData = null;
+let lastCreatedCaseId = null;
+
+function categoryRowHtml(index) {
+  return `<div class="category-row" data-row="${index}">
+    <div class="field">
+      <label for="cat-${index}">Category</label>
+      <select id="cat-${index}" class="category-select" required></select>
+    </div>
+    <div class="field">
+      <label for="qty-${index}">Affected drawer qty</label>
+      <input type="number" id="qty-${index}" class="qty-input" min="1" value="1" required>
+    </div>
+    <button type="button" class="secondary remove-row-btn" aria-label="Remove this category row">Remove</button>
+  </div>`;
+}
+
+function addCategoryRow() {
+  const container = document.getElementById("category-rows");
+  const index = container.children.length;
+  container.insertAdjacentHTML("beforeend", categoryRowHtml(index));
+  const select = container.lastElementChild.querySelector(".category-select");
+  masterData.defect_categories.forEach((c) => {
+    select.insertAdjacentHTML("beforeend", `<option value="${c.id}">${escapeHtml(c.name)}</option>`);
+  });
+  container.lastElementChild.querySelector(".remove-row-btn").addEventListener("click", (e) => {
+    if (container.children.length <= 1) {
+      showToast("At least one defect category is required.", "error");
+      return;
+    }
+    e.target.closest(".category-row").remove();
+  });
+}
+
+function localDatetimeNowValue() {
+  const now = new Date();
+  now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+  return now.toISOString().slice(0, 16);
+}
+
+function resetForm() {
+  const form = document.getElementById("defect-form");
+  clearFormErrors(form);
+  form.reset();
+  document.getElementById("production_date").value = new Date().toISOString().slice(0, 10);
+  document.getElementById("detected_at").value = localDatetimeNowValue();
+  document.getElementById("category-rows").innerHTML = "";
+  addCategoryRow();
+  document.getElementById("confirmation-card").style.display = "none";
+  form.style.display = "block";
+  document.getElementById("work_order_number").focus();
+}
+
+async function loadMasterDataIntoForm() {
+  masterData = await Api.getMasterData();
+  const foundSelect = document.getElementById("found_station_id");
+  const sourceSelect = document.getElementById("possible_source_station_id");
+  masterData.stations.forEach((s) => {
+    foundSelect.insertAdjacentHTML("beforeend", `<option value="${s.id}">${escapeHtml(s.name)}</option>`);
+    sourceSelect.insertAdjacentHTML("beforeend", `<option value="${s.id}">${escapeHtml(s.name)}</option>`);
+  });
+  const dispSelect = document.getElementById("disposition");
+  masterData.dispositions.forEach((d) => dispSelect.insertAdjacentHTML("beforeend", `<option>${escapeHtml(d)}</option>`));
+}
+
+function collectPayload() {
+  const form = document.getElementById("defect-form");
+  const fd = new FormData(form);
+  const items = Array.from(document.querySelectorAll(".category-row")).map((row) => ({
+    defect_category_id: Number(row.querySelector(".category-select").value),
+    affected_drawer_quantity: Number(row.querySelector(".qty-input").value) || 1,
+  }));
+
+  const detectedLocal = fd.get("detected_at");
+  return {
+    production_date: fd.get("production_date"),
+    detected_at: detectedLocal ? new Date(detectedLocal).toISOString() : null,
+    work_order_number: fd.get("work_order_number"),
+    drawer_part_reference: fd.get("drawer_part_reference") || null,
+    found_station_id: Number(fd.get("found_station_id")),
+    possible_source_station_id: fd.get("possible_source_station_id") ? Number(fd.get("possible_source_station_id")) : null,
+    priority: fd.get("priority"),
+    items,
+    disposition: fd.get("disposition") || null,
+    repair_action: fd.get("repair_action") || null,
+    notes: fd.get("notes") || null,
+  };
+}
+
+document.addEventListener("DOMContentLoaded", async () => {
+  try {
+    await loadMasterDataIntoForm();
+  } catch (err) {
+    showToast(err.message, "error");
+    return;
+  }
+  resetForm();
+
+  document.getElementById("add-category-row").addEventListener("click", addCategoryRow);
+
+  const form = document.getElementById("defect-form");
+  const saveBtn = document.getElementById("save-btn");
+  form.addEventListener(
+    "submit",
+    guardDoubleSubmit(saveBtn, async (e) => {
+      e.preventDefault();
+      clearFormErrors(form);
+      try {
+        const payload = collectPayload();
+        const created = await Api.createDefectCase(payload);
+        lastCreatedCaseId = created.id;
+        document.getElementById("confirmation-case-number").textContent = created.case_number;
+        form.style.display = "none";
+        document.getElementById("confirmation-card").style.display = "block";
+        showToast(`Saved ${created.case_number}`, "success");
+      } catch (err) {
+        if (err instanceof ApiError && err.field) {
+          showFieldError(form, err.field, err.message);
+        } else {
+          showToast(err.message, "error");
+        }
+      }
+    })
+  );
+
+  document.getElementById("new-entry-btn").addEventListener("click", resetForm);
+
+  document.getElementById("upload-photo-btn").addEventListener("click", async () => {
+    const input = document.getElementById("photo-input");
+    if (!input.files.length) {
+      showToast("Choose a photo file first.", "error");
+      return;
+    }
+    try {
+      await Api.uploadPhoto(lastCreatedCaseId, input.files[0]);
+      showToast("Photo attached.", "success");
+      input.value = "";
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  });
+});
+</script>
+{% endblock %}

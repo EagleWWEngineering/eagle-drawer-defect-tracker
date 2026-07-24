@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}Admin - Eagle Drawer Defect Tracker{% endblock %}
+{% block page_name %}admin{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Admin</h1>
+<p class="hint">Prototype-only role gating: this page is reachable by anyone in this local
+  single-user pilot. Records can be deactivated but are never deleted once referenced by
+  historical data.</p>
+
+<section class="card">
+  <h2>Stations</h2>
+  <div class="table-scroll">
+    <table id="stations-table">
+      <thead><tr><th>Order</th><th>Name</th><th>Active</th><th>Save</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <form id="add-station-form" class="btn-row" style="margin-top:0.75rem;">
+    <input type="text" name="name" placeholder="New station name" required style="max-width:280px;">
+    <input type="number" name="sort_order" placeholder="Order" value="99" style="max-width:100px;">
+    <button type="submit">Add station</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Defect categories</h2>
+  <div class="table-scroll">
+    <table id="categories-table">
+      <thead><tr><th>Order</th><th>Name</th><th>Active</th><th>Save</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <form id="add-category-form" class="btn-row" style="margin-top:0.75rem;">
+    <input type="text" name="name" placeholder="New category name" required style="max-width:280px;">
+    <input type="number" name="sort_order" placeholder="Order" value="99" style="max-width:100px;">
+    <button type="submit">Add category</button>
+  </form>
+</section>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+function rowHtml(kind, item) {
+  return `<tr data-id="${item.id}">
+    <td><input type="number" class="sort-order-input" value="${item.sort_order}" style="width:70px;"></td>
+    <td><input type="text" class="name-input" value="${escapeHtml(item.name)}"></td>
+    <td><label style="font-weight:400;"><input type="checkbox" class="active-input" ${item.active ? "checked" : ""}> Active</label></td>
+    <td><button type="button" class="secondary save-row-btn" data-kind="${kind}">Save</button></td>
+  </tr>`;
+}
+
+async function loadTables() {
+  const md = await Api.getMasterData();
+  document.querySelector("#stations-table tbody").innerHTML =
+    md.stations.map((s) => rowHtml("station", s)).join("");
+  document.querySelector("#categories-table tbody").innerHTML =
+    md.defect_categories.map((c) => rowHtml("category", c)).join("");
+
+  document.querySelectorAll(".save-row-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const row = btn.closest("tr");
+      const id = row.dataset.id;
+      const payload = {
+        name: row.querySelector(".name-input").value,
+        sort_order: Number(row.querySelector(".sort-order-input").value),
+        active: row.querySelector(".active-input").checked,
+      };
+      try {
+        if (btn.dataset.kind === "station") await Api.updateStation(id, payload);
+        else await Api.updateCategory(id, payload);
+        showToast("Saved.", "success");
+      } catch (err) {
+        showToast(err.message, "error");
+      }
+    });
+  });
+}
+
+document.addEventListener("DOMContentLoaded", async () => {
+  try {
+    await loadTables();
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+
+  document.getElementById("add-station-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    try {
+      await Api.createStation({ name: fd.get("name"), sort_order: Number(fd.get("sort_order")) });
+      e.target.reset();
+      await loadTables();
+      showToast("Station added.", "success");
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  });
+
+  document.getElementById("add-category-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    try {
+      await Api.createCategory({ name: fd.get("name"), sort_order: Number(fd.get("sort_order")) });
+      e.target.reset();
+      await loadTables();
+      showToast("Category added.", "success");
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  });
+});
+</script>
+{% endblock %}

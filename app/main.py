@@ -6,20 +6,25 @@ Run with: uvicorn app.main:app --host 127.0.0.1 --port 8000
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from sqlalchemy import text
 
 from app.config import get_settings
-from app.database import SessionLocal, engine
+from app.database import SessionLocal
+from app.dependencies import get_db
 from app.errors import InvalidTransitionError, NotFoundError, ServiceError, ValidationError
 from app.routers import daily_production, defect_cases, exports, master_data, reports
 from app.schemas import HealthOut
 from app.seed_data import seed_master_data
 
 settings = get_settings()
+APP_DIR = Path(__file__).resolve().parent
+templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
 
 
 @asynccontextmanager
@@ -46,7 +51,47 @@ app.include_router(reports.rework_router)
 app.include_router(master_data.router)
 app.include_router(exports.router)
 
-app.mount("/static", StaticFiles(directory="app/static"), name="static")
+app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
+
+
+# ---------------------------------------------------------------------------
+# HTML page routes (server-rendered shell; all data comes from the JSON API above)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/")
+def page_dashboard(request: Request):
+    return templates.TemplateResponse(request, "dashboard.html")
+
+
+@app.get("/defect-entry")
+def page_defect_entry(request: Request):
+    return templates.TemplateResponse(request, "defect_entry.html")
+
+
+@app.get("/daily-summary")
+def page_daily_summary(request: Request):
+    return templates.TemplateResponse(request, "daily_summary.html")
+
+
+@app.get("/rework-queue")
+def page_rework_queue(request: Request):
+    return templates.TemplateResponse(request, "rework_queue.html")
+
+
+@app.get("/reports")
+def page_reports(request: Request):
+    return templates.TemplateResponse(request, "reports.html")
+
+
+@app.get("/admin")
+def page_admin(request: Request):
+    return templates.TemplateResponse(request, "admin.html")
+
+
+@app.get("/print-daily-log")
+def page_print_daily_log(request: Request):
+    return templates.TemplateResponse(request, "print_daily_log.html")
 
 
 def _error_status_code(exc: ServiceError) -> int:
@@ -67,10 +112,11 @@ async def service_error_handler(_request: Request, exc: ServiceError) -> JSONRes
 
 
 @app.get("/api/v1/health", response_model=HealthOut)
-def health() -> HealthOut:
+def health(db=Depends(get_db)) -> HealthOut:
+    # Uses the injected session (not the raw engine) so tests that override get_db
+    # never touch the real data/defect_tracker.db file.
     try:
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
+        db.execute(text("SELECT 1"))
         db_status = "ok"
     except Exception:  # noqa: BLE001 - health check must never raise, just report status
         db_status = "unavailable"

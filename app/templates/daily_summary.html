@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}Daily Production Summary - Eagle Drawer Defect Tracker{% endblock %}
+{% block page_name %}daily_summary{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Daily Production Summary</h1>
+<p class="hint">One row per production date and shift. These counts are the denominator
+  for every rate on the Dashboard and Reports pages.</p>
+
+<form id="summary-form" class="card">
+  <div class="filters">
+    <div class="field">
+      <label for="production_date">Production date</label>
+      <input type="date" id="production_date" name="production_date" required>
+    </div>
+    <div class="field">
+      <label for="shift">Shift</label>
+      <input type="text" id="shift" name="shift" value="Day" required>
+    </div>
+    <div class="field">
+      <label for="drawers_inspected">Drawers inspected</label>
+      <input type="number" id="drawers_inspected" name="drawers_inspected" min="0" value="0" required>
+    </div>
+    <div class="field">
+      <label for="drawers_rejected_unique">Unique drawers rejected</label>
+      <input type="number" id="drawers_rejected_unique" name="drawers_rejected_unique" min="0" value="0" required>
+    </div>
+    <div class="field">
+      <label for="drawers_reworked">Drawers reworked</label>
+      <input type="number" id="drawers_reworked" name="drawers_reworked" min="0" value="0" required>
+    </div>
+    <div class="field">
+      <label for="drawers_scrapped">Drawers scrapped</label>
+      <input type="number" id="drawers_scrapped" name="drawers_scrapped" min="0" value="0" required>
+    </div>
+  </div>
+  <div class="field">
+    <label for="notes">Notes <span class="hint">(required if the counts look unusual, e.g. rework of a prior day's rejects)</span></label>
+    <textarea id="notes" name="notes"></textarea>
+  </div>
+
+  <div class="card" style="background:#f8f9fb;">
+    <h3>Calculated rates (preview before save)</h3>
+    <div id="rate-preview" class="kpi-grid"></div>
+  </div>
+
+  <div class="btn-row">
+    <button type="submit" id="save-btn">Save daily summary</button>
+  </div>
+</form>
+
+<section class="card">
+  <h2>Recent entries</h2>
+  <div class="table-scroll">
+    <table id="summary-table">
+      <thead><tr><th>Date</th><th>Shift</th><th>Inspected</th><th>Rejected (unique)</th><th>Reworked</th><th>Scrapped</th><th>Notes</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+function computeRatesLocally(form) {
+  const val = (name) => Number(form.querySelector(`[name="${name}"]`).value || 0);
+  const inspected = val("drawers_inspected");
+  const rejected = val("drawers_rejected_unique");
+  const reworked = val("drawers_reworked");
+  const scrapped = val("drawers_scrapped");
+  if (inspected === 0) {
+    return { defects_per_100: null, rejection_rate: null, first_pass_yield: null, rework_rate: null, scrap_rate: null };
+  }
+  return {
+    rejection_rate: (rejected / inspected) * 100,
+    first_pass_yield: ((inspected - rejected) / inspected) * 100,
+    rework_rate: (reworked / inspected) * 100,
+    scrap_rate: (scrapped / inspected) * 100,
+  };
+}
+
+function renderRatePreview() {
+  const form = document.getElementById("summary-form");
+  const rates = computeRatesLocally(form);
+  const container = document.getElementById("rate-preview");
+  container.innerHTML = [
+    ["Rejection rate", rates.rejection_rate],
+    ["First pass yield", rates.first_pass_yield],
+    ["Rework rate", rates.rework_rate],
+    ["Scrap rate", rates.scrap_rate],
+  ]
+    .map(([label, value]) => `<div class="kpi-tile"><div class="kpi-label">${label}</div><div class="kpi-value">${formatRate(value)}</div></div>`)
+    .join("");
+}
+
+async function loadRecentEntries() {
+  const rows = await Api.listDailySummaries();
+  const tbody = document.querySelector("#summary-table tbody");
+  tbody.innerHTML = rows
+    .map(
+      (r) => `<tr>
+        <td>${r.production_date}</td><td>${escapeHtml(r.shift)}</td>
+        <td>${r.drawers_inspected}</td><td>${r.drawers_rejected_unique}</td>
+        <td>${r.drawers_reworked}</td><td>${r.drawers_scrapped}</td>
+        <td>${escapeHtml(r.notes || "")}</td>
+      </tr>`
+    )
+    .join("") || `<tr><td colspan="7">No entries yet.</td></tr>`;
+}
+
+document.addEventListener("DOMContentLoaded", async () => {
+  document.getElementById("production_date").value = new Date().toISOString().slice(0, 10);
+  renderRatePreview();
+  try {
+    await loadRecentEntries();
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+
+  const form = document.getElementById("summary-form");
+  form.querySelectorAll("input[type=number]").forEach((el) => el.addEventListener("input", renderRatePreview));
+
+  const saveBtn = document.getElementById("save-btn");
+  form.addEventListener(
+    "submit",
+    guardDoubleSubmit(saveBtn, async (e) => {
+      e.preventDefault();
+      clearFormErrors(form);
+      const fd = new FormData(form);
+      const date = fd.get("production_date");
+      const payload = {
+        shift: fd.get("shift"),
+        drawers_inspected: Number(fd.get("drawers_inspected")),
+        drawers_rejected_unique: Number(fd.get("drawers_rejected_unique")),
+        drawers_reworked: Number(fd.get("drawers_reworked")),
+        drawers_scrapped: Number(fd.get("drawers_scrapped")),
+        notes: fd.get("notes") || null,
+      };
+      try {
+        const result = await Api.upsertDailySummary(date, payload);
+        showToast(`Saved ${date} (${payload.shift}).` + (result.warnings.length ? " " + result.warnings.join(" ") : ""), "success");
+        await loadRecentEntries();
+      } catch (err) {
+        if (err instanceof ApiError && err.field) {
+          showFieldError(form, err.field, err.message);
+        } else {
+          showToast(err.message, "error");
+        }
+      }
+    })
+  );
+});
+</script>
+{% endblock %}

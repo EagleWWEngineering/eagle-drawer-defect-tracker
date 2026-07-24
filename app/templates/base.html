@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Eagle Drawer Defect Tracker{% endblock %}</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+  {% block extra_head %}{% endblock %}
+</head>
+<body data-page="{% block page_name %}{% endblock %}">
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+
+  <header class="app-header no-print">
+    <a class="brand" href="/">Eagle Drawer Defect Tracker</a>
+    <nav class="app-nav" aria-label="Main navigation">
+      <a href="/">Dashboard</a>
+      <a href="/defect-entry">New Defect</a>
+      <a href="/daily-summary">Daily Summary</a>
+      <a href="/rework-queue">Rework Queue</a>
+      <a href="/reports">Reports</a>
+      <a href="/admin">Admin</a>
+      <a href="/print-daily-log">Print Log</a>
+    </nav>
+    <div class="role-selector">
+      <label for="actor-role-select">Role (prototype)</label>
+      <select id="actor-role-select">
+        <option value="QC">QC</option>
+        <option value="Manufacturing Engineer">Mfg. Engineer</option>
+        <option value="Admin">Admin</option>
+      </select>
+    </div>
+  </header>
+
+  <main id="main-content">
+    {% block content %}{% endblock %}
+  </main>
+
+  <div id="toast-region" role="status" aria-live="polite"></div>
+
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/charts.js"></script>
+  <script src="/static/js/app.js"></script>
+  {% block extra_scripts %}{% endblock %}
+</body>
+</html>

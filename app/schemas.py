@@ -8,6 +8,7 @@ import datetime as dt
 
 from pydantic import BaseModel, Field, computed_field, field_validator
 
+from app.services.defect_service import allowed_next_statuses
 from app.timezone_utils import to_display_string
 
 # ---------------------------------------------------------------------------
@@ -194,6 +195,18 @@ class DefectCaseOut(BaseModel):
     def closed_at_local(self) -> str | None:
         return to_display_string(self.closed_at)
 
+    @computed_field
+    @property
+    def allowed_next_statuses(self) -> list[str]:
+        """What the Rework Queue UI is allowed to offer next, straight from the one
+        transition map in app/services/defect_service.py — the UI never re-implements
+        this rule itself. Reopening a closed case to Open is always offered here too;
+        the service layer still enforces that reopen requires a note."""
+        options = sorted(allowed_next_statuses(self.status))
+        if self.status in {"Closed - Repaired", "Closed - Scrapped", "Closed - Use As Is"}:
+            options = ["Open", *options]
+        return options
+
     model_config = {"from_attributes": True}
 
 
@@ -319,6 +332,11 @@ class ReworkQueueItemOut(BaseModel):
     @property
     def detected_at_local(self) -> str | None:
         return to_display_string(self.detected_at)
+
+    @computed_field
+    @property
+    def allowed_next_statuses(self) -> list[str]:
+        return sorted(allowed_next_statuses(self.status))
 
 
 class WorkOrderHistoryOut(BaseModel):

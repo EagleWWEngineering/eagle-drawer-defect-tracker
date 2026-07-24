@@ -1,0 +1,413 @@
+/* Eagle Drawer Defect Tracker - shop-floor UI styles.
+   Design goals: large touch targets, high contrast, text + color together (never
+   color alone), usable on a phone/tablet in a woodshop as well as a desktop. */
+
+:root {
+  --color-bg: #f4f5f7;
+  --color-surface: #ffffff;
+  --color-text: #1a1d21;
+  --color-muted: #5b6472;
+  --color-border: #d4d8de;
+  --color-primary: #1d4ed8;
+  --color-primary-dark: #1e3a8a;
+  --color-success: #15803d;
+  --color-danger: #b91c1c;
+  --color-warning: #b45309;
+
+  --priority-urgent: #c0392b;
+  --priority-high: #b45309;
+  --priority-normal: #1d4ed8;
+
+  --radius: 10px;
+  --touch-min: 44px;
+  --font-size-base: 17px;
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: var(--font-size-base);
+  color: var(--color-text);
+  background: var(--color-bg);
+  line-height: 1.45;
+}
+
+a { color: var(--color-primary); }
+
+.skip-link {
+  position: absolute;
+  left: -999px;
+  top: 0;
+  background: #fff;
+  padding: 8px 12px;
+  z-index: 1000;
+}
+.skip-link:focus { left: 8px; top: 8px; }
+
+/* ---------------------------------------------------------------------- */
+/* Layout                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.app-header {
+  background: var(--color-primary-dark);
+  color: #fff;
+  padding: 0.5rem 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.app-header .brand {
+  font-weight: 700;
+  font-size: 1.15rem;
+  color: #fff;
+  text-decoration: none;
+}
+
+.app-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.app-nav a {
+  color: #e7ecff;
+  text-decoration: none;
+  padding: 0.6rem 0.8rem;
+  border-radius: var(--radius);
+  min-height: var(--touch-min);
+  display: flex;
+  align-items: center;
+  font-size: 0.95rem;
+}
+
+.app-nav a:hover, .app-nav a.active {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.role-selector {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: #cfd8ff;
+  font-size: 0.85rem;
+}
+
+.role-selector select {
+  min-height: 36px;
+  border-radius: 6px;
+  border: none;
+  padding: 0.2rem 0.4rem;
+}
+
+.role-note {
+  font-size: 0.72rem;
+  color: #b9c4ff;
+}
+
+main {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1rem;
+  padding-bottom: 3rem;
+}
+
+.page-title {
+  margin: 0.25rem 0 1rem;
+  font-size: 1.4rem;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Cards / panels                                                         */
+/* ---------------------------------------------------------------------- */
+
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.card h2, .card h3 { margin-top: 0; }
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.75rem;
+}
+
+.kpi-tile {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 0.85rem;
+  text-align: left;
+}
+
+.kpi-tile .kpi-label {
+  font-size: 0.78rem;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.kpi-tile .kpi-value {
+  font-size: 1.6rem;
+  font-weight: 700;
+  margin-top: 0.15rem;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Forms                                                                   */
+/* ---------------------------------------------------------------------- */
+
+form .field {
+  margin-bottom: 1rem;
+}
+
+label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.3rem;
+}
+
+.hint {
+  font-weight: 400;
+  color: var(--color-muted);
+  font-size: 0.85rem;
+}
+
+input[type="text"],
+input[type="number"],
+input[type="date"],
+input[type="datetime-local"],
+input[type="file"],
+select,
+textarea {
+  width: 100%;
+  min-height: var(--touch-min);
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  font-size: 1rem;
+  background: #fff;
+  color: var(--color-text);
+}
+
+textarea { min-height: 80px; }
+
+.field-error {
+  color: var(--color-danger);
+  font-size: 0.85rem;
+  margin-top: 0.3rem;
+}
+
+.field.has-error input,
+.field.has-error select,
+.field.has-error textarea {
+  border-color: var(--color-danger);
+  outline: 2px solid rgba(185, 28, 28, 0.15);
+}
+
+button, .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: var(--touch-min);
+  padding: 0.55rem 1.1rem;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--color-primary);
+  color: #fff;
+  text-decoration: none;
+}
+
+button:disabled, .btn[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+button.secondary, .btn.secondary {
+  background: #fff;
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+button.danger, .btn.danger {
+  background: var(--color-danger);
+}
+
+.btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+/* Category selection rows in the New Defect form */
+.category-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr auto;
+  gap: 0.5rem;
+  align-items: end;
+  margin-bottom: 0.5rem;
+  padding: 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+@media (max-width: 640px) {
+  .category-row { grid-template-columns: 1fr; }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Badges: priority / status always show text, never rely on color alone  */
+/* ---------------------------------------------------------------------- */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.badge::before {
+  content: "";
+  width: 0.55em;
+  height: 0.55em;
+  border-radius: 50%;
+  background: currentColor;
+  display: inline-block;
+}
+
+.badge-priority-urgent { color: var(--priority-urgent); background: #fdecea; border-color: #f3c6c1; }
+.badge-priority-high { color: var(--priority-high); background: #fdf3e3; border-color: #f0dcb0; }
+.badge-priority-normal { color: var(--priority-normal); background: #e7edfd; border-color: #bfcffb; }
+
+.badge-status { color: var(--color-text); background: #eef0f3; border-color: var(--color-border); }
+.badge-status-open { color: #92400e; background: #fef3c7; border-color: #fcd9a0; }
+.badge-status-in-rework { color: #1d4ed8; background: #e7edfd; border-color: #bfcffb; }
+.badge-status-waiting { color: #6b21a8; background: #f3e8ff; border-color: #e2c6fb; }
+.badge-status-ready-for-qc-recheck { color: #0f766e; background: #e6fbf8; border-color: #b9efe8; }
+.badge-status-closed-repaired,
+.badge-status-closed-use-as-is { color: var(--color-success); background: #e9f8ee; border-color: #bfe6cd; }
+.badge-status-closed-scrapped { color: var(--color-danger); background: #fdecea; border-color: #f3c6c1; }
+
+/* ---------------------------------------------------------------------- */
+/* Tables                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.table-scroll { overflow-x: auto; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--color-surface);
+  font-size: 0.92rem;
+}
+
+th, td {
+  text-align: left;
+  padding: 0.55rem 0.6rem;
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: top;
+}
+
+th { background: #f8f9fb; font-size: 0.78rem; text-transform: uppercase; color: var(--color-muted); }
+
+tr.clickable { cursor: pointer; }
+tr.clickable:hover { background: #f5f7ff; }
+
+/* ---------------------------------------------------------------------- */
+/* Filters                                                                 */
+/* ---------------------------------------------------------------------- */
+
+.filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.6rem;
+  align-items: end;
+}
+
+.filters .field { margin-bottom: 0; }
+
+/* ---------------------------------------------------------------------- */
+/* Toast / confirmation banner                                            */
+/* ---------------------------------------------------------------------- */
+
+#toast-region {
+  position: fixed;
+  bottom: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: min(92vw, 480px);
+}
+
+.toast {
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  font-weight: 600;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+}
+
+.toast-success { background: #e9f8ee; color: var(--color-success); border: 1px solid #bfe6cd; }
+.toast-error { background: #fdecea; color: var(--color-danger); border: 1px solid #f3c6c1; }
+.toast-info { background: #e7edfd; color: var(--color-primary); border: 1px solid #bfcffb; }
+
+/* ---------------------------------------------------------------------- */
+/* Chart canvas containers                                                */
+/* ---------------------------------------------------------------------- */
+
+.chart-container {
+  position: relative;
+  width: 100%;
+  overflow-x: auto;
+}
+
+canvas.chart-canvas {
+  display: block;
+  max-width: 100%;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Print daily log                                                        */
+/* ---------------------------------------------------------------------- */
+
+.print-only { display: none; }
+
+.print-card td { height: 34px; }
+
+@media print {
+  .app-header, .no-print { display: none !important; }
+  .print-only { display: block; }
+  main { max-width: none; padding: 0; }
+  body { background: #fff; }
+  table, th, td { border-color: #000; }
+  .print-card { border: none; }
+}
+
+@media (max-width: 480px) {
+  :root { --font-size-base: 16px; }
+  .app-header { padding: 0.5rem; }
+  main { padding: 0.6rem; }
+}
