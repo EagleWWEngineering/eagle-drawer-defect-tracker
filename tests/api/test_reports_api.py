@@ -3,10 +3,18 @@
 from __future__ import annotations
 
 
-def _create_case(client, master_data, category_name, wo="WO-9001", priority="Normal", qty=1):
+def _create_case(
+    client,
+    master_data,
+    category_name,
+    wo="WO-9001",
+    priority="Normal",
+    qty=1,
+    production_date="2026-07-24",
+):
     payload = {
-        "production_date": "2026-07-24",
-        "detected_at": "2026-07-24T14:30:00Z",
+        "production_date": production_date,
+        "detected_at": f"{production_date}T14:30:00Z",
         "work_order_number": wo,
         "found_station_id": master_data["stations"]["QC / Sorting / Shipping"],
         "priority": priority,
@@ -138,3 +146,51 @@ def test_rework_queue_excludes_closed_cases(client, master_data):
     resp = client.get("/api/v1/rework-queue")
     work_orders = [r["work_order_number"] for r in resp.json()]
     assert "WO-CLOSED" not in work_orders
+
+
+def test_trend_grouped_by_day_matches_pareto_and_summary_totals(client, master_data):
+    _create_case(
+        client, master_data, "Sanding / Surface", wo="WO-T1", qty=2, production_date="2026-07-20"
+    )
+    _create_case(
+        client, master_data, "Dado / Bottom Groove", wo="WO-T2", qty=1, production_date="2026-07-21"
+    )
+    _create_case(client, master_data, "Other", wo="WO-T3", qty=3, production_date="2026-07-21")
+
+    trend = client.get(
+        "/api/v1/reports/trend",
+        params={"start_date": "2026-07-20", "end_date": "2026-07-21", "group_by": "day"},
+    ).json()
+
+    by_period = {p["period"]: p for p in trend}
+    assert by_period["2026-07-20"]["defect_events"] == 2
+    assert by_period["2026-07-21"]["defect_events"] == 4
+
+    summary = client.get(
+        "/api/v1/reports/summary", params={"start_date": "2026-07-20", "end_date": "2026-07-21"}
+    ).json()
+    assert sum(p["defect_events"] for p in trend) == summary["defect_events"] == 6
+
+    pareto = client.get(
+        "/api/v1/reports/pareto", params={"start_date": "2026-07-20", "end_date": "2026-07-21"}
+    ).json()
+    assert sum(r["defect_events"] for r in pareto) == summary["defect_events"]
+
+
+def test_trend_grouped_by_week_buckets_into_iso_weeks(client, master_data):
+    # 2026-07-20 is a Monday (ISO week 30); 2026-07-21 is in the same ISO week.
+    _create_case(
+        client, master_data, "Sanding / Surface", wo="WO-W1", qty=1, production_date="2026-07-20"
+    )
+    _create_case(
+        client, master_data, "Dado / Bottom Groove", wo="WO-W2", qty=2, production_date="2026-07-21"
+    )
+
+    trend = client.get(
+        "/api/v1/reports/trend",
+        params={"start_date": "2026-07-20", "end_date": "2026-07-21", "group_by": "week"},
+    ).json()
+
+    assert len(trend) == 1
+    assert trend[0]["period"] == "2026-W30"
+    assert trend[0]["defect_events"] == 3
