@@ -134,6 +134,21 @@ def list_cases(
     return DefectCaseListOut(total=total, cases=[defect_case_to_out(c) for c in cases])
 
 
+@router.get("/by-number/{case_number}", response_model=DefectCaseOut)
+def get_case_by_number(case_number: str, db: Session = Depends(get_db)) -> DefectCaseOut:
+    """Look up a case by its human-readable case number (e.g. DF-20260724-0001).
+
+    Used by the MCP server's get_defect_case / update_defect_case_status tools, which
+    only know the case number, not the internal database id.
+    """
+    case = _case_query(db).filter(DefectCase.case_number == case_number).first()
+    if case is None or case.is_deleted:
+        from app.errors import NotFoundError
+
+        raise NotFoundError(f"Defect case {case_number} not found.")
+    return defect_case_to_out(case)
+
+
 @router.get("/{case_id}", response_model=DefectCaseOut)
 def get_case(case_id: int, db: Session = Depends(get_db)) -> DefectCaseOut:
     case = _case_query(db).filter(DefectCase.id == case_id).first()

@@ -41,6 +41,16 @@ def test_create_case_with_multiple_categories_and_retrieve(client, master_data):
     assert get_resp.json()["case_number"] == body["case_number"]
 
 
+def test_get_case_by_case_number(client, master_data):
+    created = _create_case(client, master_data).json()
+    resp = client.get(f"/api/v1/defect-cases/by-number/{created['case_number']}")
+    assert resp.status_code == 200
+    assert resp.json()["id"] == created["id"]
+
+    missing = client.get("/api/v1/defect-cases/by-number/DF-20990101-9999")
+    assert missing.status_code == 404
+
+
 def test_possible_source_station_is_never_labeled_root_cause(client, master_data):
     resp = _create_case(
         client,
