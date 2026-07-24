@@ -105,6 +105,12 @@ class DefectPhotoOut(BaseModel):
     original_filename: str
     content_type: str
     uploaded_at: dt.datetime
+    stored_filename: str
+
+    @computed_field
+    @property
+    def url(self) -> str:
+        return f"/uploads/{self.stored_filename}"
 
     model_config = {"from_attributes": True}
 

@@ -52,6 +52,8 @@ app.include_router(master_data.router)
 app.include_router(exports.router)
 
 app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
+settings.uploads_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=str(settings.uploads_dir)), name="uploads")
 
 
 # ---------------------------------------------------------------------------

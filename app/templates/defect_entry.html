@@ -12,6 +12,7 @@
     <label for="photo-input">Optional photo</label>
     <input type="file" id="photo-input" accept="image/jpeg,image/png,image/webp">
   </div>
+  <div id="attached-photos"></div>
   <div class="btn-row">
     <button type="button" id="upload-photo-btn" class="secondary">Attach photo</button>
     <button type="button" id="new-entry-btn">Enter another defect</button>
@@ -213,9 +214,13 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
     try {
-      await Api.uploadPhoto(lastCreatedCaseId, input.files[0]);
+      const photo = await Api.uploadPhoto(lastCreatedCaseId, input.files[0]);
       showToast("Photo attached.", "success");
       input.value = "";
+      document.getElementById("attached-photos").insertAdjacentHTML(
+        "beforeend",
+        `<p><a href="${photo.url}" target="_blank" rel="noopener">${escapeHtml(photo.original_filename)}</a></p>`
+      );
     } catch (err) {
       showToast(err.message, "error");
     }
