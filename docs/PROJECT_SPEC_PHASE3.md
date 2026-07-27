@@ -12,12 +12,14 @@ seed data.
 GET {PRODUCTION_BRIEF_URL}/api/quality-issues?since={date}&include_ignored=false&limit=500
 ```
 
-`PRODUCTION_BRIEF_URL` defaults to `http://20.62.194.32:8094` (env-configurable).
-**As of this writing, that address serves a static HTML "daily briefs" site
-(Python `http.server`), not the JSON API this spec describes** — `/api/quality-issues`
-currently 404s there. The sync code is fully built and tested (with mocked HTTP) and
-will start working the moment that endpoint is deployed; nothing here depends on it
-being live to be correct.
+`PRODUCTION_BRIEF_URL` is fully environment-configurable (`app/config.py`); no code
+anywhere hardcodes a specific address. It currently defaults to
+`http://127.0.0.1:8094`, a **temporary local test instance** used during
+development. The real production address (`http://20.62.194.32:8094`) — which, as
+of Phase 3's initial build, served only a static HTML "daily briefs" site rather
+than the `/api/quality-issues` JSON endpoint — will be set via `PRODUCTION_BRIEF_URL`
+in the real `.env` file once that instance is confirmed ready. The sync code itself
+never depends on which address is configured; it works identically against either.
 
 ## Deduplication
 

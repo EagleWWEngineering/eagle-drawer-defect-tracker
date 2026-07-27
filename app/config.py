@@ -30,8 +30,13 @@ class Settings:
         self.uploads_dir: Path = PROJECT_ROOT / "uploads"
         self.data_dir: Path = PROJECT_ROOT / "data"
         self.defect_api_url: str = os.getenv("DEFECT_API_URL", "http://127.0.0.1:8000")
+        # Temporary local-testing default while a local production brief instance is
+        # being used for development. The real production address
+        # (http://20.62.194.32:8094) will be set via PRODUCTION_BRIEF_URL in the real
+        # .env file later - nothing in this codebase should ever hardcode either
+        # address outside of this one default.
         self.production_brief_url: str = os.getenv(
-            "PRODUCTION_BRIEF_URL", "http://20.62.194.32:8094"
+            "PRODUCTION_BRIEF_URL", "http://127.0.0.1:8094"
         ).rstrip("/")
         self.sync_interval_minutes: int = int(os.getenv("SYNC_INTERVAL_MINUTES", "60"))
 
