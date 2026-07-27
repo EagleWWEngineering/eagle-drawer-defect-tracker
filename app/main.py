@@ -18,7 +18,14 @@ from app.config import get_settings
 from app.database import SessionLocal
 from app.dependencies import get_db
 from app.errors import InvalidTransitionError, NotFoundError, ServiceError, ValidationError
-from app.routers import daily_production, defect_cases, exports, master_data, reports
+from app.routers import (
+    customer_issues,
+    daily_production,
+    defect_cases,
+    exports,
+    master_data,
+    reports,
+)
 from app.schemas import HealthOut
 from app.seed_data import seed_master_data
 
@@ -50,6 +57,8 @@ app.include_router(reports.router)
 app.include_router(reports.rework_router)
 app.include_router(master_data.router)
 app.include_router(exports.router)
+app.include_router(customer_issues.router)
+app.include_router(customer_issues.export_router)
 
 app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
 settings.uploads_dir.mkdir(parents=True, exist_ok=True)
@@ -84,6 +93,11 @@ def page_rework_queue(request: Request):
 @app.get("/reports")
 def page_reports(request: Request):
     return templates.TemplateResponse(request, "reports.html")
+
+
+@app.get("/customer-issues")
+def page_customer_issues(request: Request):
+    return templates.TemplateResponse(request, "customer_issues.html")
 
 
 @app.get("/admin")

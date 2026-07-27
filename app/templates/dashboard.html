@@ -11,6 +11,14 @@
 </section>
 
 <section class="card">
+  <div style="display:flex; justify-content: space-between; align-items:center;">
+    <h2 style="margin:0;">Customer Issues</h2>
+    <a class="btn secondary" href="/customer-issues">Open full tab</a>
+  </div>
+  <div id="customer-issues-kpis" class="kpi-grid"><p>Loading...</p></div>
+</section>
+
+<section class="card">
   <h2>Selected period</h2>
   <form id="filter-form" class="filters">
     <div class="field">
@@ -129,6 +137,23 @@ async function loadToday() {
   renderKpis(document.getElementById("today-kpis"), kpis);
 }
 
+async function loadCustomerIssuesSummary() {
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const summary = await Api.get("/api/v1/customer-issues/summary", {
+    start_date: todayIso,
+    end_date: todayIso,
+  });
+  const cost = summary.total_estimated_cost.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  document.getElementById("customer-issues-kpis").innerHTML = [
+    kpiTile("Customer issues (today)", summary.total_issues),
+    kpiTile("Est. external rework cost", `$${cost}`),
+    kpiTile("Internal catch rate", formatRate(summary.internal_catch_rate)),
+  ].join("");
+}
+
 async function loadPeriod() {
   const params = currentFilters();
   const kpis = await Api.getSummary(params);
@@ -193,6 +218,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   try {
     await populateMasterDataFilters();
     await loadToday();
+    await loadCustomerIssuesSummary();
     await loadPeriod();
     await loadReworkPreview();
   } catch (err) {

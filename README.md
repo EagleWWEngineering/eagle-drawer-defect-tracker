@@ -5,7 +5,8 @@ a FastAPI + SQLite web app for QC and the Manufacturing Engineer, plus a stdio M
 server so Claude Code / Codex can query and (with confirmation) record data using the
 same rules as the UI.
 
-Full specification: [`docs/PROJECT_SPEC.md`](docs/PROJECT_SPEC.md).
+Full specification: [`docs/PROJECT_SPEC.md`](docs/PROJECT_SPEC.md)
+(Phase 2 Customer Issues addendum: [`docs/PROJECT_SPEC_PHASE2.md`](docs/PROJECT_SPEC_PHASE2.md)).
 Field reference: [`docs/DATA_DICTIONARY.md`](docs/DATA_DICTIONARY.md).
 How to use the app day to day: [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md).
 New to web apps/APIs/databases/MCP? Start with [`docs/LEARNING_GUIDE.md`](docs/LEARNING_GUIDE.md).
@@ -40,6 +41,7 @@ Optional synthetic demo data:
 
 ```bash
 python scripts/seed_demo_data.py
+python scripts/seed_customer_issues.py
 ```
 
 ## Tests and linting

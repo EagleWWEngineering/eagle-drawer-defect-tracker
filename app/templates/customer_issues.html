@@ -1,0 +1,339 @@
+{% extends "base.html" %}
+{% block title %}Customer Issues - Eagle Drawer Defect Tracker{% endblock %}
+{% block page_name %}customer_issues{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Customer Issues</h1>
+<p class="hint">Replicated locally from the daily production brief (MVP: seeded data).
+  Will connect directly to the real source once confirmed. This is separate from
+  internal QC defect cases, but an issue can be linked to one once QC confirms the
+  connection.</p>
+
+<section class="card">
+  <form id="filter-form" class="filters">
+    <div class="field">
+      <label for="f-start-date">Start date</label>
+      <input type="date" id="f-start-date" name="start_date">
+    </div>
+    <div class="field">
+      <label for="f-end-date">End date</label>
+      <input type="date" id="f-end-date" name="end_date">
+    </div>
+    <div class="field">
+      <label for="f-customer">Customer</label>
+      <input type="text" id="f-customer" name="customer_name" placeholder="e.g. Ellis">
+    </div>
+    <div class="field">
+      <label for="f-order">Order number</label>
+      <input type="text" id="f-order" name="order_number">
+    </div>
+    <div class="field">
+      <label for="f-category">Category</label>
+      <select id="f-category" name="category_id"><option value="">All</option></select>
+    </div>
+    <div class="field">
+      <label for="f-source-type">Source type</label>
+      <select id="f-source-type" name="source_type">
+        <option value="">All</option>
+        <option>Manufacturing</option>
+        <option>Shipping Damage</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="f-caught-at">Should've caught at</label>
+      <input type="text" id="f-caught-at" name="should_have_caught_at" list="caught-at-options" placeholder="e.g. QA/Final">
+      <datalist id="caught-at-options">
+        <option value="QA/Final"></option>
+        <option value="Assembly"></option>
+        <option value="Finish"></option>
+      </datalist>
+    </div>
+    <div class="field">
+      <label for="f-status">Status</label>
+      <select id="f-status" name="status">
+        <option value="">All</option>
+        <option>Open</option><option>Linked</option><option>Ignored</option>
+      </select>
+    </div>
+    <div class="field">
+      <button type="submit">Apply filters</button>
+    </div>
+    <div class="field">
+      <a id="csv-export-link" class="btn secondary" href="#">Export CSV</a>
+    </div>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Summary</h2>
+  <div id="summary-kpis" class="kpi-grid"></div>
+</section>
+
+<section class="card">
+  <h2>Pareto by category</h2>
+  <div class="chart-container"><canvas id="pareto-category-canvas" class="chart-canvas"></canvas></div>
+  <div class="table-scroll">
+    <table id="pareto-category-table">
+      <thead><tr><th>Category</th><th>Issues</th><th>Cumulative %</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Pareto by should-have-caught station</h2>
+  <p class="hint">Shows where Eagle's internal QC is failing to catch problems before shipment.</p>
+  <div class="chart-container"><canvas id="pareto-caught-canvas" class="chart-canvas"></canvas></div>
+  <div class="table-scroll">
+    <table id="pareto-caught-table">
+      <thead><tr><th>Should've caught at</th><th>Issues</th><th>Cumulative %</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Issues</h2>
+  <div class="table-scroll">
+    <table id="issues-table">
+      <thead>
+        <tr>
+          <th>Issue #</th><th>Date</th><th>Customer</th><th>Order #</th><th>Category</th>
+          <th>Source</th><th>Should've caught</th><th>Pieces</th><th>Est. cost</th><th>Status</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let masterCategories = [];
+let defectCaseOptions = [];
+
+function currentFilters() {
+  const form = document.getElementById("filter-form");
+  const data = new FormData(form);
+  const params = {};
+  for (const [key, value] of data.entries()) if (value) params[key] = value;
+  return params;
+}
+
+function kpiTile(label, value) {
+  return `<div class="kpi-tile"><div class="kpi-label">${escapeHtml(label)}</div><div class="kpi-value">${value}</div></div>`;
+}
+
+function formatCurrency(value) {
+  return `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+async function loadSummary(params) {
+  const summary = await Api.get("/api/v1/customer-issues/summary", params);
+  document.getElementById("summary-kpis").innerHTML = [
+    kpiTile("Customer issues", summary.total_issues),
+    kpiTile("Pieces affected", summary.total_pieces_affected),
+    kpiTile("Est. rework cost", formatCurrency(summary.total_estimated_cost)),
+    kpiTile("Escape rate", formatRate(summary.escape_rate)),
+    kpiTile("Internal catch rate", formatRate(summary.internal_catch_rate)),
+  ].join("");
+}
+
+async function loadParetoByCategory(params) {
+  const rows = await Api.get("/api/v1/customer-issues/pareto", { ...params, group_by: "category" });
+  const tbody = document.querySelector("#pareto-category-table tbody");
+  tbody.innerHTML =
+    rows
+      .map((r) => `<tr><td>${escapeHtml(r.label)}</td><td>${r.issue_count}</td><td>${formatRate(r.cumulative_pct)}</td></tr>`)
+      .join("") || `<tr><td colspan="3">No customer issues for this selection.</td></tr>`;
+  const chartRows = rows.map((r) => ({ label: r.label, defect_events: r.issue_count, cumulative_pct: r.cumulative_pct }));
+  renderParetoChart(document.getElementById("pareto-category-canvas"), chartRows);
+}
+
+async function loadParetoByCaughtAt(params) {
+  const rows = await Api.get("/api/v1/customer-issues/pareto", { ...params, group_by: "should_have_caught_at" });
+  const tbody = document.querySelector("#pareto-caught-table tbody");
+  tbody.innerHTML =
+    rows
+      .map((r) => `<tr><td>${escapeHtml(r.label)}</td><td>${r.issue_count}</td><td>${formatRate(r.cumulative_pct)}</td></tr>`)
+      .join("") || `<tr><td colspan="3">No customer issues for this selection.</td></tr>`;
+  const chartRows = rows.map((r) => ({ label: r.label, defect_events: r.issue_count, cumulative_pct: r.cumulative_pct }));
+  renderParetoChart(document.getElementById("pareto-caught-canvas"), chartRows);
+}
+
+function detailRowHtml(issue) {
+  const caseOptions = ["<option value=''>-- select a defect case --</option>"]
+    .concat(defectCaseOptions.map((c) => `<option value="${c.id}" ${issue.linked_defect_case_id === c.id ? "selected" : ""}>${escapeHtml(c.case_number)} (${escapeHtml(c.work_order_number)})</option>`))
+    .join("");
+
+  return `<tr class="detail-row" data-detail-for="${issue.id}">
+    <td colspan="10">
+      <div class="card" style="margin:0;">
+        <p><strong>Description:</strong> ${escapeHtml(issue.description)}</p>
+        ${issue.photo_urls ? `<p><strong>Photos:</strong> ${escapeHtml(issue.photo_urls)}</p>` : ""}
+        ${issue.linked_defect_case_number ? `<p><strong>Linked case:</strong> ${escapeHtml(issue.linked_defect_case_number)}</p>` : ""}
+        <form class="issue-action-form filters" data-issue-id="${issue.id}">
+          <div class="field">
+            <label>Link to internal case</label>
+            <select name="link_defect_case_id">${caseOptions}</select>
+          </div>
+          <div class="field">
+            <label>Order number</label>
+            <input type="text" name="order_number" value="${escapeHtml(issue.order_number || "")}" placeholder="Resolve order number">
+          </div>
+          <div class="field">
+            <label>Notes</label>
+            <input type="text" name="notes" value="${escapeHtml(issue.notes || "")}">
+          </div>
+          <div class="field">
+            <button type="submit" class="secondary">Save</button>
+          </div>
+          <div class="field">
+            <button type="button" class="danger ignore-btn">Ignore</button>
+          </div>
+        </form>
+      </div>
+    </td>
+  </tr>`;
+}
+
+function rowHtml(issue) {
+  const orderCell = issue.order_number_missing
+    ? `<span class="badge badge-status-closed-scrapped">Order not identified</span>`
+    : escapeHtml(issue.order_number);
+  return `<tr class="clickable" data-issue-id="${issue.id}">
+    <td>${escapeHtml(issue.issue_number)}</td>
+    <td>${issue.reported_date}</td>
+    <td>${escapeHtml(issue.customer_name)}</td>
+    <td>${orderCell}</td>
+    <td>${escapeHtml(issue.issue_category_name)}</td>
+    <td>${escapeHtml(issue.source_type)}</td>
+    <td>${escapeHtml(issue.should_have_caught_at || "")}</td>
+    <td>${issue.piece_count}</td>
+    <td>${issue.estimated_rework_cost !== null ? formatCurrency(issue.estimated_rework_cost) : ""}</td>
+    <td>${statusBadge(issue.status)}</td>
+  </tr>`;
+}
+
+async function loadDefectCaseOptions() {
+  const result = await Api.listDefectCases({ page_size: 200 });
+  defectCaseOptions = result.cases;
+}
+
+async function loadIssues(params) {
+  const result = await Api.get("/api/v1/customer-issues", { ...params, page_size: 200 });
+  const tbody = document.querySelector("#issues-table tbody");
+  tbody.innerHTML = "";
+  if (!result.issues.length) {
+    tbody.innerHTML = `<tr><td colspan="10">No customer issues match these filters.</td></tr>`;
+    return;
+  }
+  result.issues.forEach((issue) => {
+    tbody.insertAdjacentHTML("beforeend", rowHtml(issue));
+  });
+
+  tbody.querySelectorAll("tr.clickable").forEach((tr) => {
+    tr.addEventListener("click", () => {
+      const issueId = tr.dataset.issueId;
+      const existing = tbody.querySelector(`tr.detail-row[data-detail-for="${issueId}"]`);
+      if (existing) {
+        existing.remove();
+        return;
+      }
+      tbody.querySelectorAll("tr.detail-row").forEach((r) => r.remove());
+      const issue = result.issues.find((i) => String(i.id) === issueId);
+      tr.insertAdjacentHTML("afterend", detailRowHtml(issue));
+      wireDetailForm(issueId);
+    });
+  });
+}
+
+function wireDetailForm(issueId) {
+  const form = document.querySelector(`.issue-action-form[data-issue-id="${issueId}"]`);
+  if (!form) return;
+  const btn = form.querySelector("button[type=submit]");
+  form.addEventListener(
+    "submit",
+    guardDoubleSubmit(btn, async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const payload = {};
+      const orderNumber = fd.get("order_number");
+      const notes = fd.get("notes");
+      const linkId = fd.get("link_defect_case_id");
+      if (orderNumber) payload.order_number = orderNumber;
+      if (notes) payload.notes = notes;
+      if (linkId) payload.link_defect_case_id = Number(linkId);
+      try {
+        await Api.patch(`/api/v1/customer-issues/${issueId}`, payload);
+        showToast("Saved.", "success");
+        await reloadAll();
+      } catch (err) {
+        showToast(err.message, "error");
+      }
+    })
+  );
+
+  form.querySelector(".ignore-btn").addEventListener("click", async () => {
+    if (!confirm("Mark this customer issue as Ignored?")) return;
+    try {
+      await Api.patch(`/api/v1/customer-issues/${issueId}`, { status: "Ignored" });
+      showToast("Issue ignored.", "success");
+      await reloadAll();
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  });
+}
+
+async function populateCategoryFilter() {
+  masterCategories = await Api.get("/api/v1/customer-issues/categories");
+  const select = document.getElementById("f-category");
+  masterCategories.forEach((c) => {
+    select.insertAdjacentHTML("beforeend", `<option value="${c.id}">${escapeHtml(c.name)}</option>`);
+  });
+}
+
+function updateCsvLink(params) {
+  const query = new URLSearchParams(params).toString();
+  document.getElementById("csv-export-link").href =
+    "/api/v1/exports/customer-issues.csv" + (query ? `?${query}` : "");
+}
+
+async function reloadAll() {
+  const params = currentFilters();
+  updateCsvLink(params);
+  await Promise.all([
+    loadSummary(params),
+    loadParetoByCategory(params),
+    loadParetoByCaughtAt(params),
+    loadIssues(params),
+  ]);
+}
+
+function defaultDateRange() {
+  const end = new Date();
+  const start = new Date();
+  start.setDate(start.getDate() - 6);
+  document.getElementById("f-start-date").value = start.toISOString().slice(0, 10);
+  document.getElementById("f-end-date").value = end.toISOString().slice(0, 10);
+}
+
+document.addEventListener("DOMContentLoaded", async () => {
+  defaultDateRange();
+  try {
+    await populateCategoryFilter();
+    await loadDefectCaseOptions();
+    await reloadAll();
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+
+  document.getElementById("filter-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try { await reloadAll(); } catch (err) { showToast(err.message, "error"); }
+  });
+});
+</script>
+{% endblock %}

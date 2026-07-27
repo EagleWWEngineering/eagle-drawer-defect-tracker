@@ -8,6 +8,7 @@ implementation of the business logic (see AGENTS.md / CLAUDE.md).
 from __future__ import annotations
 
 import datetime as dt
+import decimal
 
 from sqlalchemy import (
     Boolean,
@@ -15,6 +16,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -209,3 +211,78 @@ class AuditLog(Base):
     after_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     success: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class CustomerIssueCategory(Base):
+    """A customer-complaint classification, e.g. 'Wrong Size' or 'Finish Quality'.
+
+    Deliberately a separate table from DefectCategory (PROJECT_SPEC_PHASE2.md) - a
+    customer complaint category is not the same vocabulary as an internal QC defect
+    category, even though a customer issue can later be linked to an internal case.
+    """
+
+    __tablename__ = "customer_issue_categories"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class CustomerIssue(Base):
+    """A customer-reported quality complaint, replicated locally from the daily
+    production brief until that system is wired up directly (see PROJECT_SPEC_PHASE2.md).
+
+    Kept entirely separate from DefectCase: a customer issue may optionally be
+    *linked* to an internal defect case (linked_defect_case_id) once QC confirms the
+    connection, but it is never merged into DefectCase/DefectItem rows - the counting
+    rules for internal defect events (PROJECT_SPEC.md section 2) are unaffected by
+    customer issues existing.
+    """
+
+    __tablename__ = "customer_issues"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    issue_number: Mapped[str] = mapped_column(String(30), unique=True, nullable=False, index=True)
+    reported_date: Mapped[dt.date] = mapped_column(nullable=False, index=True)
+    customer_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    order_number: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    issue_category_id: Mapped[int] = mapped_column(
+        ForeignKey("customer_issue_categories.id"), nullable=False
+    )
+    source_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    should_have_caught_at: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    piece_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    estimated_rework_cost: Mapped[decimal.Decimal | None] = mapped_column(
+        Numeric(10, 2), nullable=True
+    )
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    photo_urls: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="Open")
+    linked_defect_case_id: Mapped[int | None] = mapped_column(
+        ForeignKey("defect_cases.id"), nullable=True
+    )
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+    is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    __table_args__ = (
+        CheckConstraint("piece_count >= 1", name="ck_customer_issue_piece_count_at_least_1"),
+        CheckConstraint(
+            "source_type IN ('Manufacturing', 'Shipping Damage')",
+            name="ck_customer_issue_source_type",
+        ),
+        CheckConstraint("status IN ('Open', 'Ignored', 'Linked')", name="ck_customer_issue_status"),
+    )
+
+    issue_category: Mapped[CustomerIssueCategory] = relationship()
+    linked_defect_case: Mapped[DefectCase | None] = relationship(
+        foreign_keys=[linked_defect_case_id]
+    )

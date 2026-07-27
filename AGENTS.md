@@ -1,8 +1,14 @@
 # AGENTS.md — Eagle Drawer Defect Tracker
 
 Full specification: `docs/PROJECT_SPEC.md` (business rules, data model, counting
-definitions, phases). Field-level detail: `docs/DATA_DICTIONARY.md`. This file is the
-short version for coding agents working in this repo.
+definitions, phases). Phase 2 addendum (Customer Issues tab):
+`docs/PROJECT_SPEC_PHASE2.md`. Field-level detail: `docs/DATA_DICTIONARY.md`. This
+file is the short version for coding agents working in this repo.
+
+Customer Issues (`CustomerIssue`/`CustomerIssueCategory`,
+`app/services/customer_issue_service.py`, `/api/v1/customer-issues`) is a separate
+data type from internal defect cases — see `docs/PROJECT_SPEC_PHASE2.md` before
+changing it, and never merge its rules into `defect_service.py`.
 
 ## What this is
 

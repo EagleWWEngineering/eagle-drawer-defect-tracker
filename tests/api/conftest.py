@@ -64,3 +64,10 @@ def master_data(client):
     stations = {s["name"]: s["id"] for s in data["stations"]}
     categories = {c["name"]: c["id"] for c in data["defect_categories"]}
     return {"stations": stations, "categories": categories}
+
+
+@pytest.fixture()
+def customer_categories(client):
+    resp = client.get("/api/v1/customer-issues/categories")
+    assert resp.status_code == 200
+    return {c["name"]: c["id"] for c in resp.json()}

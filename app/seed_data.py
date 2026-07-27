@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from app.models import DefectCategory, Station
+from app.models import CustomerIssueCategory, DefectCategory, Station
 
 STATIONS: list[str] = [
     "Ripping & Picking",
@@ -67,6 +67,24 @@ STATUSES: list[str] = [
 
 DISPOSITIONS: list[str] = ["Rework", "Scrap", "Use As Is", "Hold"]
 
+# Phase 2: customer-reported issue categories (kept separate from internal
+# DEFECT_CATEGORIES - see PROJECT_SPEC_PHASE2.md).
+CUSTOMER_ISSUE_CATEGORIES: list[str] = [
+    "Wrong Size",
+    "Wrong Spec",
+    "Joinery",
+    "Finish Quality",
+    "Missing Parts",
+    "Shipping Damage / Crushed Box",
+    "Corner Impact",
+    "Warp or Crack",
+    "Hinge Holes",
+    "Other",
+]
+
+CUSTOMER_ISSUE_SOURCE_TYPES: list[str] = ["Manufacturing", "Shipping Damage"]
+CUSTOMER_ISSUE_STATUSES: list[str] = ["Open", "Ignored", "Linked"]
+
 
 def seed_master_data(db: Session) -> None:
     """Insert baseline stations/categories if they don't already exist (idempotent)."""
@@ -79,5 +97,10 @@ def seed_master_data(db: Session) -> None:
     for order, name in enumerate(DEFECT_CATEGORIES, start=1):
         if name not in existing_categories:
             db.add(DefectCategory(name=name, active=True, sort_order=order))
+
+    existing_customer_categories = {c.name for c in db.query(CustomerIssueCategory).all()}
+    for order, name in enumerate(CUSTOMER_ISSUE_CATEGORIES, start=1):
+        if name not in existing_customer_categories:
+            db.add(CustomerIssueCategory(name=name, active=True, sort_order=order))
 
     db.commit()

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base
-from app.models import DefectCategory, Station
+from app.models import CustomerIssueCategory, DefectCategory, Station
 from app.seed_data import seed_master_data
 
 
@@ -47,6 +47,11 @@ def stations(db_session):
 @pytest.fixture()
 def categories(db_session):
     return {c.name: c for c in db_session.query(DefectCategory).all()}
+
+
+@pytest.fixture()
+def customer_categories(db_session):
+    return {c.name: c for c in db_session.query(CustomerIssueCategory).all()}
 
 
 @pytest.fixture()

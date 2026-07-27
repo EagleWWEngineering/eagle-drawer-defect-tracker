@@ -142,3 +142,43 @@ behavior mirror the REST API exactly — read tools
 `get_work_order_defect_history`, `get_defect_case`) are read-only; write tools
 (`record_defect_case`, `record_daily_production`, `update_defect_case_status`) call
 the same REST endpoints as the browser UI and are fully audited.
+
+## Phase 2: Customer Issues
+
+Full addendum: [`PROJECT_SPEC_PHASE2.md`](PROJECT_SPEC_PHASE2.md). Summary:
+
+### CustomerIssueCategory (`customer_issue_categories`)
+Same shape as `DefectCategory`: id, name (unique), active, sort_order.
+
+### CustomerIssue (`customer_issues`)
+| Field | Type | Notes |
+|---|---|---|
+| id | int | primary key |
+| issue_number | string, unique | `CI-YYYYMMDD-NNNN`, sequence resets per reported_date |
+| reported_date | date | indexed |
+| customer_name | string | required |
+| order_number | string, optional | null = "order not identified" (a normal state) |
+| issue_category_id | FK -> customer_issue_categories.id | |
+| source_type | enum | `Manufacturing` or `Shipping Damage` |
+| should_have_caught_at | string, optional | free text, e.g. "QA/Final" |
+| piece_count | int >= 1, default 1 | |
+| estimated_rework_cost | numeric(10,2), optional | auto = `piece_count * $100` if omitted |
+| description | text | required |
+| photo_urls | text, optional | comma-separated, for now |
+| status | enum | `Open`, `Ignored`, `Linked` |
+| linked_defect_case_id | FK -> defect_cases.id, optional | set when status = `Linked` |
+| notes | text, optional | |
+| is_deleted | bool | soft delete only |
+
+### API (`/api/v1/customer-issues`)
+`GET /categories` (order-sensitive: registered before `/{issue_id}`) ·
+`POST ""` · `GET ""` (filters: date range, customer, order number, category, source
+type, should_have_caught_at, status) · `GET /summary` (counts, cost totals, Escape
+Rate, Internal Catch Rate) · `GET /pareto` (`group_by=category` or
+`should_have_caught_at`) · `GET /{issue_id}` · `PATCH /{issue_id}` (status, notes,
+order number resolution, `link_defect_case_id`) · `DELETE /{issue_id}` (soft delete) ·
+`GET /api/v1/exports/customer-issues.csv`.
+
+KPI formulas (Escape Rate, Internal Catch Rate) are in
+`PROJECT_SPEC_PHASE2.md` — same zero-denominator-returns-null discipline as every
+other rate in this app.

@@ -352,6 +352,123 @@ class WorkOrderHistoryOut(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Customer issues (Phase 2) — kept separate from internal DefectCase schemas
+# ---------------------------------------------------------------------------
+
+
+class CustomerIssueCategoryOut(BaseModel):
+    id: int
+    name: str
+    active: bool
+    sort_order: int
+
+    model_config = {"from_attributes": True}
+
+
+class CustomerIssueCreate(BaseModel):
+    reported_date: dt.date
+    customer_name: str = Field(min_length=1, max_length=120)
+    order_number: str | None = Field(default=None, max_length=60)
+    issue_category_id: int
+    source_type: str
+    should_have_caught_at: str | None = Field(default=None, max_length=120)
+    piece_count: int = Field(default=1, ge=1)
+    estimated_rework_cost: float | None = None
+    description: str = Field(min_length=1)
+    photo_urls: str | None = None
+    notes: str | None = None
+
+
+class CustomerIssueUpdate(BaseModel):
+    """Partial edit: resolve order number, change status, add notes, or link a case."""
+
+    order_number: str | None = None
+    status: str | None = None
+    notes: str | None = None
+    should_have_caught_at: str | None = None
+    estimated_rework_cost: float | None = None
+    piece_count: int | None = Field(default=None, ge=1)
+    link_defect_case_id: int | None = None
+
+
+class CustomerIssueOut(BaseModel):
+    id: int
+    issue_number: str
+    reported_date: dt.date
+    customer_name: str
+    order_number: str | None
+    issue_category_id: int
+    issue_category_name: str
+    source_type: str
+    should_have_caught_at: str | None
+    piece_count: int
+    estimated_rework_cost: float | None
+    description: str
+    photo_urls: str | None
+    status: str
+    linked_defect_case_id: int | None
+    linked_defect_case_number: str | None
+    notes: str | None
+    created_at: dt.datetime
+    updated_at: dt.datetime
+
+    @computed_field
+    @property
+    def order_number_missing(self) -> bool:
+        """UI hook to highlight "order not identified" rows (PROJECT_SPEC_PHASE2.md)."""
+        return not self.order_number
+
+    model_config = {"from_attributes": True}
+
+
+def customer_issue_to_out(issue) -> CustomerIssueOut:
+    return CustomerIssueOut(
+        id=issue.id,
+        issue_number=issue.issue_number,
+        reported_date=issue.reported_date,
+        customer_name=issue.customer_name,
+        order_number=issue.order_number,
+        issue_category_id=issue.issue_category_id,
+        issue_category_name=issue.issue_category.name,
+        source_type=issue.source_type,
+        should_have_caught_at=issue.should_have_caught_at,
+        piece_count=issue.piece_count,
+        estimated_rework_cost=(
+            float(issue.estimated_rework_cost) if issue.estimated_rework_cost is not None else None
+        ),
+        description=issue.description,
+        photo_urls=issue.photo_urls,
+        status=issue.status,
+        linked_defect_case_id=issue.linked_defect_case_id,
+        linked_defect_case_number=(
+            issue.linked_defect_case.case_number if issue.linked_defect_case else None
+        ),
+        notes=issue.notes,
+        created_at=issue.created_at,
+        updated_at=issue.updated_at,
+    )
+
+
+class CustomerIssueListOut(BaseModel):
+    total: int
+    issues: list[CustomerIssueOut]
+
+
+class CustomerIssueSummaryOut(BaseModel):
+    total_issues: int
+    total_pieces_affected: int
+    total_estimated_cost: float
+    escape_rate: float | None
+    internal_catch_rate: float | None
+
+
+class CustomerIssueParetoRowOut(BaseModel):
+    label: str
+    issue_count: int
+    cumulative_pct: float | None
+
+
+# ---------------------------------------------------------------------------
 # Generic API envelopes
 # ---------------------------------------------------------------------------
 
