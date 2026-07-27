@@ -118,8 +118,17 @@ def _parse_piece_count(cost_note: str | None) -> int:
     return parsed if parsed >= 1 else 1
 
 
+def _normalize_subcategory(subcategory: str | None) -> str:
+    """The real production brief uses hyphens ("wrong-size", "finish-quality");
+    SUBCATEGORY_TO_CATEGORY_NAME's keys are space-separated - normalize both
+    hyphens and underscores to spaces before matching so real data maps
+    correctly instead of silently falling through to "Other" (found via a real
+    sync against real data - see docs/PROJECT_SPEC_PHASE3.md)."""
+    return (subcategory or "").strip().lower().replace("-", " ").replace("_", " ")
+
+
 def _map_category_id(db: Session, subcategory: str | None) -> int:
-    name = SUBCATEGORY_TO_CATEGORY_NAME.get((subcategory or "").strip().lower(), "Other")
+    name = SUBCATEGORY_TO_CATEGORY_NAME.get(_normalize_subcategory(subcategory), "Other")
     category = db.query(CustomerIssueCategory).filter(CustomerIssueCategory.name == name).first()
     if category is None:
         # "Other" itself is always seeded (app/seed_data.py), but fall back

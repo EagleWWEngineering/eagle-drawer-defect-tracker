@@ -155,6 +155,16 @@ def test_parse_piece_count(cost_note, expected):
         ("hinge holes", "Hinge Holes"),
         ("something totally unrecognized", "Other"),
         (None, "Other"),
+        # Real production brief data uses hyphens, not spaces (found via a real
+        # sync against real seeded data - see docs/PROJECT_SPEC_PHASE3.md).
+        ("wrong-size", "Wrong Size"),
+        ("finish-quality", "Finish Quality"),
+        ("wrong-spec", "Wrong Spec"),
+        ("missing-parts", "Missing Parts"),
+        ("crushed-box", "Shipping Damage / Crushed Box"),
+        ("corner-impact", "Corner Impact"),
+        ("other-transit", "Other"),
+        ("out_of_square", "Joinery"),
     ],
 )
 def test_map_issue_fields_category_mapping(
