@@ -5,6 +5,8 @@ Run with: uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -25,9 +27,11 @@ from app.routers import (
     exports,
     master_data,
     reports,
+    sync,
 )
 from app.schemas import HealthOut
 from app.seed_data import seed_master_data
+from app.services import sync_service
 
 settings = get_settings()
 APP_DIR = Path(__file__).resolve().parent
@@ -41,7 +45,18 @@ async def lifespan(_app: FastAPI):
         seed_master_data(db)
     finally:
         db.close()
-    yield
+
+    # Phase 3: pull Customer Issues from the production brief on startup, then every
+    # SYNC_INTERVAL_MINUTES. Cancelled cleanly on shutdown. run_sync() never raises
+    # (see sync_service.py), so an unreachable production brief just gets logged and
+    # retried on the next interval - it never prevents the app from serving requests.
+    sync_task = asyncio.create_task(sync_service.run_periodic_sync(settings.sync_interval_minutes))
+    try:
+        yield
+    finally:
+        sync_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await sync_task
 
 
 app = FastAPI(
@@ -59,6 +74,7 @@ app.include_router(master_data.router)
 app.include_router(exports.router)
 app.include_router(customer_issues.router)
 app.include_router(customer_issues.export_router)
+app.include_router(sync.router)
 
 app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
 settings.uploads_dir.mkdir(parents=True, exist_ok=True)

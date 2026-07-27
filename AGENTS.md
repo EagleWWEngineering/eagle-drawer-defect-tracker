@@ -2,13 +2,20 @@
 
 Full specification: `docs/PROJECT_SPEC.md` (business rules, data model, counting
 definitions, phases). Phase 2 addendum (Customer Issues tab):
-`docs/PROJECT_SPEC_PHASE2.md`. Field-level detail: `docs/DATA_DICTIONARY.md`. This
+`docs/PROJECT_SPEC_PHASE2.md`. Phase 3 addendum (production brief sync):
+`docs/PROJECT_SPEC_PHASE3.md`. Field-level detail: `docs/DATA_DICTIONARY.md`. This
 file is the short version for coding agents working in this repo.
 
 Customer Issues (`CustomerIssue`/`CustomerIssueCategory`,
 `app/services/customer_issue_service.py`, `/api/v1/customer-issues`) is a separate
 data type from internal defect cases — see `docs/PROJECT_SPEC_PHASE2.md` before
 changing it, and never merge its rules into `defect_service.py`.
+
+Customer Issues are synced hourly from the production brief
+(`app/services/sync_service.py`, `/api/v1/sync/*`) — see `docs/PROJECT_SPEC_PHASE3.md`
+before changing dedup/mapping logic. `source_thread_id` null = manual entry, never
+touched by sync. A synced issue's `linked_defect_case_id` and any status past `Open`
+are local staff decisions and must never be overwritten by a later sync.
 
 ## What this is
 

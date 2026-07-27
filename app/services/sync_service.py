@@ -1,0 +1,330 @@
+"""Sync Customer Issues from the Eagle production brief's JSON API (Phase 3).
+
+See docs/PROJECT_SPEC_PHASE3.md. This is the only place that talks to the
+production brief - the REST API, UI, and MCP server never call it directly, and the
+production brief never touches our database directly either. Deduplication key is
+CustomerIssue.source_thread_id (the brief's thread_id).
+
+CRITICAL: sync failures must never crash the app. run_sync() always returns a
+SyncLog (status "success" or "failed") instead of raising, so both the hourly
+background task and the "Sync Now" API route can treat every outcome uniformly.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import datetime as dt
+import decimal
+import logging
+import re
+from typing import Any
+
+import httpx
+from sqlalchemy.orm import Session
+
+from app.config import get_settings
+from app.database import SessionLocal
+from app.models import CustomerIssue, CustomerIssueCategory, SyncLog
+from app.services import customer_issue_service
+
+logger = logging.getLogger("sync_service")
+
+QUALITY_ISSUES_PATH = "/api/quality-issues"
+
+# Spec-defined subcategory -> CustomerIssueCategory.name mapping. Anything not
+# listed here falls back to "Other" (see _map_category).
+SUBCATEGORY_TO_CATEGORY_NAME: dict[str, str] = {
+    "wrong size": "Wrong Size",
+    "wrong spec": "Wrong Spec",
+    "joinery": "Joinery",
+    "out of square": "Joinery",
+    "finish quality": "Finish Quality",
+    "finish": "Finish Quality",
+    "missing parts": "Missing Parts",
+    "crushed box": "Shipping Damage / Crushed Box",
+    "shipping damage": "Shipping Damage / Crushed Box",
+    "corner impact": "Corner Impact",
+    "warp or crack": "Warp or Crack",
+    "warp": "Warp or Crack",
+    "crack": "Warp or Crack",
+    "hinge": "Hinge Holes",
+    "hinge holes": "Hinge Holes",
+}
+
+# Spec-defined production-brief "category" -> CustomerIssue.source_type. Anything
+# unrecognized defaults to "Manufacturing" (the more common source type in practice).
+BRIEF_CATEGORY_TO_SOURCE_TYPE: dict[str, str] = {
+    "manufacturing": "Manufacturing",
+    "shipping-damage": "Shipping Damage",
+}
+
+NEEDS_REVIEW_NOTE = "⚠ Low confidence classification — needs review."
+
+_PIECE_COUNT_RE = re.compile(r"(\d+)\s*pc", re.IGNORECASE)
+
+
+class ProductionBriefError(RuntimeError):
+    """Raised for any failure calling/parsing the production brief's API."""
+
+
+def _build_client() -> httpx.AsyncClient:
+    """Separate factory so tests can monkeypatch this to inject a MockTransport
+    instead of hitting the real network (see tests/unit/test_sync_service.py)."""
+    settings = get_settings()
+    return httpx.AsyncClient(base_url=settings.production_brief_url, timeout=30.0)
+
+
+async def fetch_issues(since: dt.date, *, client: httpx.AsyncClient) -> dict[str, Any]:
+    """GET /api/quality-issues?since=...&include_ignored=false&limit=500."""
+    try:
+        response = await client.get(
+            QUALITY_ISSUES_PATH,
+            params={"since": since.isoformat(), "include_ignored": "false", "limit": 500},
+        )
+    except httpx.ConnectError as exc:
+        raise ProductionBriefError(
+            f"Could not reach the production brief at {client.base_url}."
+        ) from exc
+    except httpx.TimeoutException as exc:
+        raise ProductionBriefError(
+            f"Timed out waiting for the production brief at {client.base_url}."
+        ) from exc
+
+    if response.status_code != 200:
+        raise ProductionBriefError(
+            f"Production brief returned HTTP {response.status_code} for {QUALITY_ISSUES_PATH}."
+        )
+
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise ProductionBriefError("Production brief returned malformed JSON.") from exc
+
+    if not isinstance(data, dict) or "issues" not in data:
+        raise ProductionBriefError(
+            "Production brief response is missing the expected 'issues' field."
+        )
+
+    return data
+
+
+def _parse_piece_count(cost_note: str | None) -> int:
+    if not cost_note:
+        return 1
+    match = _PIECE_COUNT_RE.search(cost_note)
+    if not match:
+        return 1
+    parsed = int(match.group(1))
+    return parsed if parsed >= 1 else 1
+
+
+def _map_category_id(db: Session, subcategory: str | None) -> int:
+    name = SUBCATEGORY_TO_CATEGORY_NAME.get((subcategory or "").strip().lower(), "Other")
+    category = db.query(CustomerIssueCategory).filter(CustomerIssueCategory.name == name).first()
+    if category is None:
+        # "Other" itself is always seeded (app/seed_data.py), but fall back
+        # defensively in case master data was edited unexpectedly.
+        category = db.query(CustomerIssueCategory).order_by(CustomerIssueCategory.id).first()
+    if category is None:
+        raise ProductionBriefError(
+            "No CustomerIssueCategory rows exist - run seed_master_data first."
+        )
+    return category.id
+
+
+def map_issue_fields(db: Session, raw: dict[str, Any]) -> dict[str, Any]:
+    """Translate one production-brief issue dict into CustomerIssue field values."""
+    thread_id = raw.get("thread_id")
+    if not thread_id:
+        raise ProductionBriefError("Issue is missing required 'thread_id'.")
+
+    day = raw.get("day")
+    if not day:
+        raise ProductionBriefError(f"Issue {thread_id} is missing required 'day'.")
+    reported_date = dt.date.fromisoformat(day)
+
+    piece_count = _parse_piece_count(raw.get("cost_note"))
+    rework_cost = raw.get("rework_cost")
+    estimated_rework_cost = (
+        decimal.Decimal(str(rework_cost))
+        if rework_cost is not None
+        else customer_issue_service.BASE_REWORK_COST_PER_PIECE * piece_count
+    )
+
+    source_type = BRIEF_CATEGORY_TO_SOURCE_TYPE.get(
+        (raw.get("category") or "").strip().lower(), "Manufacturing"
+    )
+
+    return {
+        "source_thread_id": thread_id,
+        "reported_date": reported_date,
+        "customer_name": (raw.get("customer") or "Unknown customer").strip(),
+        "order_number": raw.get("order_no"),
+        "issue_category_id": _map_category_id(db, raw.get("subcategory")),
+        "source_type": source_type,
+        "should_have_caught_at": raw.get("station"),
+        "piece_count": piece_count,
+        "estimated_rework_cost": estimated_rework_cost,
+        "description": raw.get("summary") or "",
+        "photo_urls": raw.get("photos_json"),
+        "status": "Ignored" if raw.get("ignored") else "Open",
+        "needs_review_note": NEEDS_REVIEW_NOTE if raw.get("needs_review") else None,
+    }
+
+
+def _apply_fields_to_new_issue(issue: CustomerIssue, fields: dict[str, Any]) -> None:
+    issue.source_thread_id = fields["source_thread_id"]
+    issue.reported_date = fields["reported_date"]
+    issue.customer_name = fields["customer_name"]
+    issue.order_number = fields["order_number"]
+    issue.issue_category_id = fields["issue_category_id"]
+    issue.source_type = fields["source_type"]
+    issue.should_have_caught_at = fields["should_have_caught_at"]
+    issue.piece_count = fields["piece_count"]
+    issue.estimated_rework_cost = fields["estimated_rework_cost"]
+    issue.description = fields["description"]
+    issue.photo_urls = fields["photo_urls"]
+    issue.status = fields["status"]
+    if fields["needs_review_note"]:
+        issue.notes = fields["needs_review_note"]
+
+
+def _apply_fields_to_existing_issue(issue: CustomerIssue, fields: dict[str, Any]) -> None:
+    """Update a previously-synced issue with fresh data from the brief, while
+    preserving anything staff did locally: linked_defect_case_id, a status that has
+    already moved past "Open" (e.g. staff linked it, or a prior sync/UI action
+    ignored it), and any notes staff typed in.
+    """
+    issue.reported_date = fields["reported_date"]
+    issue.customer_name = fields["customer_name"]
+    issue.order_number = fields["order_number"]
+    issue.issue_category_id = fields["issue_category_id"]
+    issue.source_type = fields["source_type"]
+    issue.should_have_caught_at = fields["should_have_caught_at"]
+    issue.piece_count = fields["piece_count"]
+    issue.estimated_rework_cost = fields["estimated_rework_cost"]
+    issue.description = fields["description"]
+    issue.photo_urls = fields["photo_urls"]
+
+    # Only let the brief move a still-untouched "Open" issue to "Ignored" - never
+    # downgrade a status staff has already acted on (Linked, or a prior Ignored).
+    if issue.status == "Open":
+        issue.status = fields["status"]
+
+    note = fields["needs_review_note"]
+    if note and (not issue.notes or note not in issue.notes):
+        issue.notes = f"{note} {issue.notes}" if issue.notes else note
+
+
+def _default_since(db: Session) -> dt.date:
+    last_success = (
+        db.query(SyncLog)
+        .filter(SyncLog.status == "success")
+        .order_by(SyncLog.sync_completed_at.desc())
+        .first()
+    )
+    if last_success is not None and last_success.sync_completed_at is not None:
+        return last_success.sync_completed_at.date()
+    # First-ever sync: bootstrap with a generous window rather than "today only".
+    return dt.date.today() - dt.timedelta(days=90)
+
+
+async def run_sync(db: Session, *, since: dt.date | None = None) -> SyncLog:
+    """Pull issues since the last successful sync (or a 90-day bootstrap window),
+    upsert them by source_thread_id, and record the outcome as a SyncLog row.
+
+    Never raises - a failure to reach the production brief is recorded in the
+    returned SyncLog (status="failed", errors=<message>) so callers (the hourly
+    background task, the "Sync Now" API route) can treat every outcome uniformly.
+    """
+    settings = get_settings()
+    source_url = f"{settings.production_brief_url}{QUALITY_ISSUES_PATH}"
+    effective_since = since if since is not None else _default_since(db)
+
+    log = SyncLog(
+        sync_started_at=dt.datetime.now(dt.timezone.utc),
+        source_url=source_url,
+        status="failed",
+    )
+
+    try:
+        async with _build_client() as client:
+            data = await fetch_issues(effective_since, client=client)
+    except ProductionBriefError as exc:
+        logger.error("Customer issue sync failed: %s", exc)
+        log.errors = str(exc)
+        log.sync_completed_at = dt.datetime.now(dt.timezone.utc)
+        db.add(log)
+        db.commit()
+        db.refresh(log)
+        return log
+
+    issues = data.get("issues") or []
+    created = updated = skipped = 0
+    error_messages: list[str] = []
+
+    for raw in issues:
+        try:
+            fields = map_issue_fields(db, raw)
+        except Exception as exc:  # noqa: BLE001 - one bad record must not abort the batch
+            skipped += 1
+            error_messages.append(f"{raw.get('thread_id', '?')}: {exc}")
+            logger.warning("Skipped a production brief issue: %s", exc)
+            continue
+
+        existing = (
+            db.query(CustomerIssue)
+            .filter(CustomerIssue.source_thread_id == fields["source_thread_id"])
+            .first()
+        )
+        if existing is not None:
+            _apply_fields_to_existing_issue(existing, fields)
+            updated += 1
+        else:
+            issue = CustomerIssue(
+                issue_number=customer_issue_service.generate_issue_number(
+                    db, fields["reported_date"]
+                )
+            )
+            _apply_fields_to_new_issue(issue, fields)
+            db.add(issue)
+            db.flush()  # so the next generate_issue_number() sees this row
+            created += 1
+
+    log.records_fetched = len(issues)
+    log.records_created = created
+    log.records_updated = updated
+    log.records_skipped = skipped
+    log.errors = "; ".join(error_messages) or None
+    log.status = "success"
+    log.sync_completed_at = dt.datetime.now(dt.timezone.utc)
+    db.add(log)
+    db.commit()
+    db.refresh(log)
+    logger.info(
+        "Customer issue sync complete: %d fetched, %d created, %d updated, %d skipped",
+        log.records_fetched,
+        created,
+        updated,
+        skipped,
+    )
+    return log
+
+
+async def run_periodic_sync(interval_minutes: int, session_factory=None) -> None:
+    """Runs one sync immediately, then repeats every interval_minutes, forever.
+    Intended to be wrapped in asyncio.create_task() from app.main's lifespan and
+    cancelled on shutdown. Never raises - errors are logged and the loop continues
+    (matching the spec: "If the production brief is unreachable, log the error and
+    retry on the next interval").
+    """
+    factory = session_factory or SessionLocal
+    while True:
+        db = factory()
+        try:
+            await run_sync(db)
+        except Exception:  # noqa: BLE001 - the loop must survive any unexpected error
+            logger.exception("Unexpected error during periodic customer issue sync")
+        finally:
+            db.close()
+        await asyncio.sleep(interval_minutes * 60)

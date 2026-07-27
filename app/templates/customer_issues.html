@@ -3,11 +3,19 @@
 {% block page_name %}customer_issues{% endblock %}
 
 {% block content %}
-<h1 class="page-title">Customer Issues</h1>
-<p class="hint">Replicated locally from the daily production brief (MVP: seeded data).
-  Will connect directly to the real source once confirmed. This is separate from
-  internal QC defect cases, but an issue can be linked to one once QC confirms the
-  connection.</p>
+<div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:0.75rem;">
+  <div>
+    <h1 class="page-title" style="margin-bottom:0.25rem;">Customer Issues</h1>
+    <p class="hint" style="margin-top:0;">Synced hourly from the production brief. This
+      is separate from internal QC defect cases, but an issue can be linked to one
+      once QC confirms the connection. Manual entries (phone/walk-in reports) are
+      never touched by sync.</p>
+  </div>
+  <div style="text-align:right;">
+    <button type="button" id="sync-now-btn" class="secondary">Sync now</button>
+    <p id="sync-status-line" class="hint" style="margin:0.4rem 0 0;">Checking sync status...</p>
+  </div>
+</div>
 
 <section class="card">
   <form id="filter-form" class="filters">
@@ -202,8 +210,11 @@ function rowHtml(issue) {
   const orderCell = issue.order_number_missing
     ? `<span class="badge badge-status-closed-scrapped">Order not identified</span>`
     : escapeHtml(issue.order_number);
+  const syncBadge = issue.is_synced
+    ? `<span class="badge badge-status" title="Auto-synced from the production brief">auto</span>`
+    : `<span class="badge badge-status" title="Entered manually (phone/walk-in)">manual</span>`;
   return `<tr class="clickable" data-issue-id="${issue.id}">
-    <td>${escapeHtml(issue.issue_number)}</td>
+    <td>${escapeHtml(issue.issue_number)} ${syncBadge}</td>
     <td>${issue.reported_date}</td>
     <td>${escapeHtml(issue.customer_name)}</td>
     <td>${orderCell}</td>
@@ -320,12 +331,33 @@ function defaultDateRange() {
   document.getElementById("f-end-date").value = end.toISOString().slice(0, 10);
 }
 
+async function loadSyncStatus() {
+  const line = document.getElementById("sync-status-line");
+  try {
+    const log = await Api.get("/api/v1/sync/status");
+    if (!log) {
+      line.textContent = "Never synced yet.";
+      return;
+    }
+    if (log.status === "success") {
+      line.textContent = `Last synced: ${timeAgo(log.sync_completed_at)} — ${log.records_fetched} issues (${log.records_created} new, ${log.records_updated} updated)`;
+      line.style.color = "";
+    } else {
+      line.textContent = `Sync failed ${timeAgo(log.sync_started_at)} — ${log.errors || "source unreachable"}`;
+      line.style.color = "var(--color-danger)";
+    }
+  } catch (err) {
+    line.textContent = "Could not check sync status.";
+  }
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   defaultDateRange();
   try {
     await populateCategoryFilter();
     await loadDefectCaseOptions();
     await reloadAll();
+    await loadSyncStatus();
   } catch (err) {
     showToast(err.message, "error");
   }
@@ -334,6 +366,29 @@ document.addEventListener("DOMContentLoaded", async () => {
     e.preventDefault();
     try { await reloadAll(); } catch (err) { showToast(err.message, "error"); }
   });
+
+  const syncBtn = document.getElementById("sync-now-btn");
+  syncBtn.addEventListener(
+    "click",
+    guardDoubleSubmit(syncBtn, async () => {
+      const line = document.getElementById("sync-status-line");
+      line.textContent = "Syncing...";
+      try {
+        const log = await Api.post("/api/v1/sync/customer-issues");
+        if (log.status === "success") {
+          showToast(`Sync complete: ${log.records_created} new, ${log.records_updated} updated.`, "success");
+        } else {
+          showToast(`Sync failed: ${log.errors || "source unreachable"}`, "error");
+        }
+        await loadSyncStatus();
+        await reloadAll();
+        await loadDefectCaseOptions();
+      } catch (err) {
+        showToast(err.message, "error");
+        await loadSyncStatus();
+      }
+    })
+  );
 });
 </script>
 {% endblock %}

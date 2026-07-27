@@ -234,8 +234,12 @@ class CustomerIssueCategory(Base):
 
 
 class CustomerIssue(Base):
-    """A customer-reported quality complaint, replicated locally from the daily
-    production brief until that system is wired up directly (see PROJECT_SPEC_PHASE2.md).
+    """A customer-reported quality complaint, synced hourly from the production
+    brief's JSON API (see docs/PROJECT_SPEC_PHASE3.md and app/services/sync_service.py).
+
+    source_thread_id is the dedup key: rows with it set were created/updated by the
+    sync; rows with it null were entered manually through the UI (phone/walk-in
+    reports) and are never touched by sync.
 
     Kept entirely separate from DefectCase: a customer issue may optionally be
     *linked* to an internal defect case (linked_defect_case_id) once QC confirms the
@@ -248,6 +252,9 @@ class CustomerIssue(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     issue_number: Mapped[str] = mapped_column(String(30), unique=True, nullable=False, index=True)
+    source_thread_id: Mapped[str | None] = mapped_column(
+        String(64), unique=True, nullable=True, index=True
+    )
     reported_date: Mapped[dt.date] = mapped_column(nullable=False, index=True)
     customer_name: Mapped[str] = mapped_column(String(120), nullable=False)
     order_number: Mapped[str | None] = mapped_column(String(60), nullable=True)
@@ -286,3 +293,27 @@ class CustomerIssue(Base):
     linked_defect_case: Mapped[DefectCase | None] = relationship(
         foreign_keys=[linked_defect_case_id]
     )
+
+
+class SyncLog(Base):
+    """One row per production-brief sync attempt (app/services/sync_service.py).
+
+    This is the audit trail for the sync feature specifically - separate from
+    AuditLog, which covers user/MCP-driven writes. Every sync attempt gets a row,
+    whether it succeeds or fails, so Admin can see a history of what happened.
+    """
+
+    __tablename__ = "sync_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    sync_started_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    sync_completed_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    source_url: Mapped[str] = mapped_column(String(255), nullable=False)
+    records_fetched: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    records_created: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    records_updated: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    records_skipped: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    errors: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="failed")

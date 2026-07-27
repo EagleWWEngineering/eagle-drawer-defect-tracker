@@ -182,3 +182,26 @@ order number resolution, `link_defect_case_id`) · `DELETE /{issue_id}` (soft de
 KPI formulas (Escape Rate, Internal Catch Rate) are in
 `PROJECT_SPEC_PHASE2.md` — same zero-denominator-returns-null discipline as every
 other rate in this app.
+
+## Phase 3: Production Brief Sync
+
+Full addendum: [`PROJECT_SPEC_PHASE3.md`](PROJECT_SPEC_PHASE3.md).
+
+### CustomerIssue additions
+| Field | Type | Notes |
+|---|---|---|
+| source_thread_id | string, unique, optional | production brief's `thread_id`; null = manually entered, never touched by sync |
+
+### SyncLog (`sync_logs`)
+id, sync_started_at, sync_completed_at, source_url, records_fetched,
+records_created, records_updated, records_skipped, errors (text, optional), status
+(`success` or `failed`). One row per sync attempt, whether it succeeds or fails.
+
+### API (`/api/v1/sync`)
+`POST /customer-issues` (trigger an immediate sync — the "Sync Now" button) ·
+`GET /status` (most recent attempt, `null` if never run) ·
+`GET /logs?limit=20` (recent attempts, for the Admin screen).
+
+### Configuration
+`PRODUCTION_BRIEF_URL` (default `http://20.62.194.32:8094`),
+`SYNC_INTERVAL_MINUTES` (default `60`) — see `.env.example`.

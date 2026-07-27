@@ -30,6 +30,10 @@ class Settings:
         self.uploads_dir: Path = PROJECT_ROOT / "uploads"
         self.data_dir: Path = PROJECT_ROOT / "data"
         self.defect_api_url: str = os.getenv("DEFECT_API_URL", "http://127.0.0.1:8000")
+        self.production_brief_url: str = os.getenv(
+            "PRODUCTION_BRIEF_URL", "http://20.62.194.32:8094"
+        ).rstrip("/")
+        self.sync_interval_minutes: int = int(os.getenv("SYNC_INTERVAL_MINUTES", "60"))
 
     @property
     def max_upload_bytes(self) -> int:

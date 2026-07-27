@@ -25,7 +25,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.database import SessionLocal  # noqa: E402
-from app.models import CustomerIssueCategory, DefectCase  # noqa: E402
+from app.models import CustomerIssue, CustomerIssueCategory, DefectCase  # noqa: E402
 from app.seed_data import seed_master_data  # noqa: E402
 from app.services import customer_issue_service  # noqa: E402
 
@@ -90,6 +90,19 @@ def seed_customer_issues(count: int, days: int, seed: int) -> None:
     db = SessionLocal()
     try:
         seed_master_data(db)
+
+        synced_count = (
+            db.query(CustomerIssue).filter(CustomerIssue.source_thread_id.isnot(None)).count()
+        )
+        if synced_count > 0:
+            print(
+                f"Found {synced_count} customer issue(s) already synced from the production "
+                "brief (source_thread_id is set) - skipping demo seed so it doesn't mix "
+                "fictional data with real data. Delete the synced rows first if you really "
+                "want demo data instead."
+            )
+            return
+
         categories = (
             db.query(CustomerIssueCategory).filter(CustomerIssueCategory.active.is_(True)).all()
         )

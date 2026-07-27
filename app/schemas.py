@@ -409,6 +409,7 @@ class CustomerIssueOut(BaseModel):
     linked_defect_case_id: int | None
     linked_defect_case_number: str | None
     notes: str | None
+    source_thread_id: str | None
     created_at: dt.datetime
     updated_at: dt.datetime
 
@@ -417,6 +418,13 @@ class CustomerIssueOut(BaseModel):
     def order_number_missing(self) -> bool:
         """UI hook to highlight "order not identified" rows (PROJECT_SPEC_PHASE2.md)."""
         return not self.order_number
+
+    @computed_field
+    @property
+    def is_synced(self) -> bool:
+        """True if this row came from the production brief sync (PROJECT_SPEC_PHASE3.md),
+        false if it was entered manually through the UI (phone/walk-in reports)."""
+        return self.source_thread_id is not None
 
     model_config = {"from_attributes": True}
 
@@ -444,6 +452,7 @@ def customer_issue_to_out(issue) -> CustomerIssueOut:
             issue.linked_defect_case.case_number if issue.linked_defect_case else None
         ),
         notes=issue.notes,
+        source_thread_id=issue.source_thread_id,
         created_at=issue.created_at,
         updated_at=issue.updated_at,
     )
@@ -466,6 +475,36 @@ class CustomerIssueParetoRowOut(BaseModel):
     label: str
     issue_count: int
     cumulative_pct: float | None
+
+
+# ---------------------------------------------------------------------------
+# Production brief sync (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+class SyncLogOut(BaseModel):
+    id: int
+    sync_started_at: dt.datetime
+    sync_completed_at: dt.datetime | None
+    source_url: str
+    records_fetched: int
+    records_created: int
+    records_updated: int
+    records_skipped: int
+    errors: str | None
+    status: str
+
+    @computed_field
+    @property
+    def sync_started_at_local(self) -> str | None:
+        return to_display_string(self.sync_started_at)
+
+    @computed_field
+    @property
+    def sync_completed_at_local(self) -> str | None:
+        return to_display_string(self.sync_completed_at)
+
+    model_config = {"from_attributes": True}
 
 
 # ---------------------------------------------------------------------------

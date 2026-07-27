@@ -37,6 +37,22 @@
     <button type="submit">Add category</button>
   </form>
 </section>
+
+<section class="card">
+  <div style="display:flex; justify-content:space-between; align-items:center;">
+    <h2 style="margin:0;">Sync Log</h2>
+    <a class="btn secondary" href="/customer-issues">Go to Customer Issues</a>
+  </div>
+  <p class="hint">Last 20 production-brief sync attempts (hourly, plus any manual "Sync now" runs).</p>
+  <div class="table-scroll">
+    <table id="sync-log-table">
+      <thead>
+        <tr><th>Started</th><th>Status</th><th>Fetched</th><th>Created</th><th>Updated</th><th>Skipped</th><th>Errors</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
 {% endblock %}
 
 {% block extra_scripts %}
@@ -77,9 +93,33 @@ async function loadTables() {
   });
 }
 
+function syncLogStatusBadge(status) {
+  const cssStatus = status === "success" ? "closed-repaired" : "closed-scrapped";
+  return `<span class="badge badge-status badge-status-${cssStatus}">${escapeHtml(status)}</span>`;
+}
+
+function syncLogRowHtml(log) {
+  return `<tr>
+    <td>${escapeHtml(log.sync_started_at_local || log.sync_started_at)}</td>
+    <td>${syncLogStatusBadge(log.status)}</td>
+    <td>${log.records_fetched}</td>
+    <td>${log.records_created}</td>
+    <td>${log.records_updated}</td>
+    <td>${log.records_skipped}</td>
+    <td>${escapeHtml(log.errors || "")}</td>
+  </tr>`;
+}
+
+async function loadSyncLog() {
+  const logs = await Api.get("/api/v1/sync/logs", { limit: 20 });
+  const tbody = document.querySelector("#sync-log-table tbody");
+  tbody.innerHTML = logs.map(syncLogRowHtml).join("") || `<tr><td colspan="7">No syncs have run yet.</td></tr>`;
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   try {
     await loadTables();
+    await loadSyncLog();
   } catch (err) {
     showToast(err.message, "error");
   }
