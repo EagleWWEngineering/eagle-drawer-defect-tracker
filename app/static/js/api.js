@@ -104,6 +104,11 @@ const Api = {
   updateCategory: (id, payload) =>
     request("PATCH", `/api/v1/master-data/defect-categories/${id}`, { body: payload }),
 
+  // Cost settings (Phase 4)
+  getCostPerDrawer: () => request("GET", "/api/v1/settings/cost-per-drawer"),
+  updateCostPerDrawer: (costPerDrawer) =>
+    request("PUT", "/api/v1/settings/cost-per-drawer", { body: { cost_per_drawer: costPerDrawer } }),
+
   // Defect cases
   createDefectCase: (payload) => request("POST", "/api/v1/defect-cases", { body: payload }),
   listDefectCases: (params) => request("GET", "/api/v1/defect-cases", { params }),

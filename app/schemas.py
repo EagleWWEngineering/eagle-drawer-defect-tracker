@@ -285,7 +285,25 @@ class DailyProductionSummaryOut(BaseModel):
     drawers_reworked: int
     drawers_scrapped: int
     notes: str | None
+    cost_per_drawer_at_time: float | None
     warnings: list[str] = []
+
+    @computed_field
+    @property
+    def internal_rework_cost(self) -> float | None:
+        """Phase 4: null (not zero) when this row predates cost tracking and was
+        never re-saved since - a real $0 rework cost is indistinguishable from
+        "unknown rate" otherwise. See docs/PROJECT_SPEC_PHASE4.md."""
+        if self.cost_per_drawer_at_time is None:
+            return None
+        return round(self.drawers_reworked * self.cost_per_drawer_at_time, 2)
+
+    @computed_field
+    @property
+    def internal_scrap_cost(self) -> float | None:
+        if self.cost_per_drawer_at_time is None:
+            return None
+        return round(self.drawers_scrapped * self.cost_per_drawer_at_time, 2)
 
     model_config = {"from_attributes": True}
 
@@ -306,6 +324,10 @@ class KpiOut(BaseModel):
     first_pass_yield: float | None
     rework_rate: float | None
     scrap_rate: float | None
+    internal_rework_cost: float
+    internal_scrap_cost: float
+    total_internal_quality_cost: float
+    quality_cost_per_drawer_inspected: float | None
 
 
 class ParetoRowOut(BaseModel):
@@ -319,6 +341,8 @@ class TrendPointOut(BaseModel):
     defect_events: int
     drawers_inspected: int
     unique_drawers_rejected: int
+    internal_rework_cost: float = 0.0
+    internal_scrap_cost: float = 0.0
 
 
 class ReworkQueueItemOut(BaseModel):
@@ -475,6 +499,19 @@ class CustomerIssueParetoRowOut(BaseModel):
     label: str
     issue_count: int
     cumulative_pct: float | None
+
+
+# ---------------------------------------------------------------------------
+# Cost settings (Phase 4)
+# ---------------------------------------------------------------------------
+
+
+class CostSettingsOut(BaseModel):
+    cost_per_drawer: float
+
+
+class CostSettingsUpdate(BaseModel):
+    cost_per_drawer: float = Field(gt=0)
 
 
 # ---------------------------------------------------------------------------

@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import datetime as dt
+import decimal
+
 import pytest
 
 from app.errors import ValidationError
+from app.services import settings_service
 from app.services.defect_service import upsert_daily_summary
 
 
@@ -92,3 +96,53 @@ def test_upsert_updates_existing_row_for_same_date_and_shift(db_session, today):
     all_rows = db_session.query(DailyProductionSummary).all()
     assert len(all_rows) == 1, "same production_date+shift must update, not duplicate"
     assert row.drawers_inspected == 120
+
+
+def test_upsert_stamps_current_rate_at_save_time(db_session, today):
+    row, _ = upsert_daily_summary(
+        db_session,
+        production_date=today,
+        shift="Day",
+        drawers_inspected=100,
+        drawers_rejected_unique=10,
+        drawers_reworked=5,
+        drawers_scrapped=2,
+        notes=None,
+    )
+    assert row.cost_per_drawer_at_time == decimal.Decimal("35.00")  # seeded default
+
+
+def test_changing_rate_does_not_alter_already_saved_historical_summary(db_session, today):
+    """PROJECT_SPEC section on cost tracking: historical data keeps the rate that
+    was active at the time - it must never change when the Admin rate changes."""
+    yesterday = today - dt.timedelta(days=1)
+    old_row, _ = upsert_daily_summary(
+        db_session,
+        production_date=yesterday,
+        shift="Day",
+        drawers_inspected=100,
+        drawers_rejected_unique=10,
+        drawers_reworked=5,
+        drawers_scrapped=2,
+        notes=None,
+    )
+    assert old_row.cost_per_drawer_at_time == decimal.Decimal("35.00")
+
+    settings_service.set_cost_per_drawer(db_session, decimal.Decimal("50.00"))
+
+    new_row, _ = upsert_daily_summary(
+        db_session,
+        production_date=today,
+        shift="Day",
+        drawers_inspected=80,
+        drawers_rejected_unique=8,
+        drawers_reworked=4,
+        drawers_scrapped=1,
+        notes=None,
+    )
+    assert new_row.cost_per_drawer_at_time == decimal.Decimal("50.00")
+
+    db_session.refresh(old_row)
+    assert old_row.cost_per_drawer_at_time == decimal.Decimal(
+        "35.00"
+    ), "yesterday's summary must keep its original rate after the rate changes"

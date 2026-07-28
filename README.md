@@ -7,7 +7,8 @@ same rules as the UI.
 
 Full specification: [`docs/PROJECT_SPEC.md`](docs/PROJECT_SPEC.md)
 (Phase 2 Customer Issues addendum: [`docs/PROJECT_SPEC_PHASE2.md`](docs/PROJECT_SPEC_PHASE2.md);
-Phase 3 production brief sync addendum: [`docs/PROJECT_SPEC_PHASE3.md`](docs/PROJECT_SPEC_PHASE3.md)).
+Phase 3 production brief sync addendum: [`docs/PROJECT_SPEC_PHASE3.md`](docs/PROJECT_SPEC_PHASE3.md);
+Phase 4 internal cost tracking addendum: [`docs/PROJECT_SPEC_PHASE4.md`](docs/PROJECT_SPEC_PHASE4.md)).
 Field reference: [`docs/DATA_DICTIONARY.md`](docs/DATA_DICTIONARY.md).
 How to use the app day to day: [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md).
 New to web apps/APIs/databases/MCP? Start with [`docs/LEARNING_GUIDE.md`](docs/LEARNING_GUIDE.md).

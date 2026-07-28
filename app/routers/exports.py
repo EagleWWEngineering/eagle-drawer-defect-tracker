@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import datetime as dt
+from collections import defaultdict
 
 from fastapi import APIRouter, Depends, Response
 from sqlalchemy.orm import Session, selectinload
 
 from app.dependencies import get_actor_role, get_db
-from app.models import DefectCase, DefectItem
-from app.services import audit_service, export_service, metrics_service
+from app.models import DailyProductionSummary, DefectCase, DefectItem
+from app.services import audit_service, export_service, metrics_service, settings_service
 
 router = APIRouter(prefix="/api/v1/exports", tags=["exports"])
 
@@ -45,7 +46,45 @@ def export_defects_csv(
         selectinload(DefectItem.defect_category),
     )
     rows = query.all()
-    csv_text = export_service.build_defect_items_csv(rows)
+
+    involved_dates = {case.production_date for _item, case in rows}
+    daily_cost_by_date: dict = {}
+    if involved_dates:
+        summary_rows = (
+            db.query(DailyProductionSummary)
+            .filter(DailyProductionSummary.production_date.in_(involved_dates))
+            .all()
+        )
+        # A date can have more than one shift saved; sum their costs together
+        # rather than picking just one row.
+        rows_by_date: dict = defaultdict(list)
+        for summary_row in summary_rows:
+            rows_by_date[summary_row.production_date].append(summary_row)
+
+        fallback_rate = settings_service.get_cost_per_drawer(db)
+        for production_date, date_rows in rows_by_date.items():
+            rework_cost, scrap_cost = metrics_service.sum_internal_quality_costs(
+                [
+                    (r.drawers_reworked, r.drawers_scrapped, r.cost_per_drawer_at_time)
+                    for r in date_rows
+                ],
+                fallback_rate=fallback_rate,
+            )
+            representative_rate = next(
+                (
+                    r.cost_per_drawer_at_time
+                    for r in date_rows
+                    if r.cost_per_drawer_at_time is not None
+                ),
+                fallback_rate,
+            )
+            daily_cost_by_date[production_date] = {
+                "rate": representative_rate,
+                "rework_cost": rework_cost,
+                "scrap_cost": scrap_cost,
+            }
+
+    csv_text = export_service.build_defect_items_csv(rows, daily_cost_by_date=daily_cost_by_date)
 
     audit_service.record(
         db,

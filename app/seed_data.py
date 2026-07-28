@@ -9,7 +9,11 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from app.models import CustomerIssueCategory, DefectCategory, Station
+from app.config import get_settings
+from app.models import AppSetting, CustomerIssueCategory, DefectCategory, Station
+
+# Phase 4: cost tracking settings (app_settings key-value table).
+COST_PER_DRAWER_SETTING_KEY = "cost_per_drawer"
 
 STATIONS: list[str] = [
     "Ripping & Picking",
@@ -102,5 +106,13 @@ def seed_master_data(db: Session) -> None:
     for order, name in enumerate(CUSTOMER_ISSUE_CATEGORIES, start=1):
         if name not in existing_customer_categories:
             db.add(CustomerIssueCategory(name=name, active=True, sort_order=order))
+
+    if db.get(AppSetting, COST_PER_DRAWER_SETTING_KEY) is None:
+        db.add(
+            AppSetting(
+                key=COST_PER_DRAWER_SETTING_KEY,
+                value=str(get_settings().default_cost_per_drawer),
+            )
+        )
 
     db.commit()

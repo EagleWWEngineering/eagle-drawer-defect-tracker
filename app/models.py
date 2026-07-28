@@ -83,6 +83,13 @@ class DailyProductionSummary(Base):
     drawers_reworked: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     drawers_scrapped: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Snapshot of the active cost_per_drawer AppSetting at save time (Phase 4 cost
+    # tracking). Nullable because rows created before this feature existed have no
+    # snapshot - see app/services/metrics_service.py for how that's handled in
+    # cost calculations. Never recomputed retroactively when the rate changes later.
+    cost_per_drawer_at_time: Mapped[decimal.Decimal | None] = mapped_column(
+        Numeric(10, 2), nullable=True
+    )
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
@@ -317,3 +324,21 @@ class SyncLog(Base):
     records_skipped: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     errors: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="failed")
+
+
+class AppSetting(Base):
+    """Generic key-value application settings (Phase 4), editable on the Admin
+    screen. Starts with just "cost_per_drawer" but is intentionally generic so a
+    future setting doesn't need its own table/migration.
+
+    Values are stored as strings and parsed by the reading service
+    (app/services/settings_service.py) - keeps this table dead simple.
+    """
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(60), primary_key=True)
+    value: Mapped[str] = mapped_column(String(255), nullable=False)
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )

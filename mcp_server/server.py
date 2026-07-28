@@ -198,7 +198,10 @@ async def get_defect_summary(
 ) -> dict[str, Any]:
     """Get KPI totals for a date range: drawers inspected, defect events, unique
     drawers rejected, defects per 100 drawers, rejection rate, first pass yield,
-    rework rate, and scrap rate. Rates are null/None when drawers_inspected is 0.
+    rework rate, scrap rate, and internal quality cost (internal_rework_cost,
+    internal_scrap_cost, total_internal_quality_cost, and
+    quality_cost_per_drawer_inspected, using the cost-per-drawer rate configured in
+    Admin). Rates and per-drawer cost are null/None when drawers_inspected is 0.
 
     Dates are "YYYY-MM-DD". filters is optional and may include any of:
     work_order_number, category (defect category name), found_station (station name),

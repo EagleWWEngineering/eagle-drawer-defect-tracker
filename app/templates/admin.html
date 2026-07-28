@@ -39,6 +39,22 @@
 </section>
 
 <section class="card">
+  <h2>Cost Settings</h2>
+  <form id="cost-settings-form" class="filters">
+    <div class="field">
+      <label for="cost-per-drawer-input">Current cost per drawer</label>
+      <input type="number" id="cost-per-drawer-input" name="cost_per_drawer" min="0.01" step="0.01" required>
+    </div>
+    <div class="field">
+      <button type="submit">Save</button>
+    </div>
+  </form>
+  <p class="hint">This rate is used for future calculations. Historical data keeps
+    the rate that was active at the time - changing it here never rewrites past
+    Daily Production Summaries.</p>
+</section>
+
+<section class="card">
   <div style="display:flex; justify-content:space-between; align-items:center;">
     <h2 style="margin:0;">Sync Log</h2>
     <a class="btn secondary" href="/customer-issues">Go to Customer Issues</a>
@@ -116,13 +132,30 @@ async function loadSyncLog() {
   tbody.innerHTML = logs.map(syncLogRowHtml).join("") || `<tr><td colspan="7">No syncs have run yet.</td></tr>`;
 }
 
+async function loadCostSettings() {
+  const settings = await Api.getCostPerDrawer();
+  document.getElementById("cost-per-drawer-input").value = settings.cost_per_drawer;
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   try {
     await loadTables();
     await loadSyncLog();
+    await loadCostSettings();
   } catch (err) {
     showToast(err.message, "error");
   }
+
+  document.getElementById("cost-settings-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const value = Number(document.getElementById("cost-per-drawer-input").value);
+    try {
+      const updated = await Api.updateCostPerDrawer(value);
+      showToast(`Saved: $${updated.cost_per_drawer.toFixed(2)}/drawer.`, "success");
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  });
 
   document.getElementById("add-station-form").addEventListener("submit", async (e) => {
     e.preventDefault();

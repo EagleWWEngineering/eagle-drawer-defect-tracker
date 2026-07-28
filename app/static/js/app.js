@@ -47,6 +47,13 @@ function formatRate(value) {
   return value === null || value === undefined ? "N/A" : `${value.toFixed(1)}%`;
 }
 
+/** "$1,234.56". Returns "N/A" for null/undefined (e.g. cost on a row that predates
+ * cost tracking and was never re-saved) so it's never confused with a real $0. */
+function formatCurrency(value) {
+  if (value === null || value === undefined) return "N/A";
+  return `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
 /** "5 minutes ago", "2 hours ago", "3 days ago" - for sync-status style displays. */
 function timeAgo(isoString) {
   if (!isoString) return "never";

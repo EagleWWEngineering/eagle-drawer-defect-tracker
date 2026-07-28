@@ -21,19 +21,24 @@ from app.schemas import (
     WorkOrderHistoryOut,
     defect_case_to_out,
 )
-from app.services import metrics_service
+from app.services import metrics_service, settings_service
 
 router = APIRouter(prefix="/api/v1/reports", tags=["reports"])
 rework_router = APIRouter(prefix="/api/v1", tags=["rework-queue"])
 
 
-def _daily_totals(db: Session, start_date: dt.date | None, end_date: dt.date | None) -> dict:
+def _daily_summary_rows(
+    db: Session, start_date: dt.date | None, end_date: dt.date | None
+) -> list[DailyProductionSummary]:
     query = db.query(DailyProductionSummary)
     if start_date is not None:
         query = query.filter(DailyProductionSummary.production_date >= start_date)
     if end_date is not None:
         query = query.filter(DailyProductionSummary.production_date <= end_date)
-    rows = query.all()
+    return query.all()
+
+
+def _daily_totals(rows: list[DailyProductionSummary]) -> dict:
     return {
         "drawers_inspected": sum(r.drawers_inspected for r in rows),
         "drawers_rejected_unique": sum(r.drawers_rejected_unique for r in rows),
@@ -68,7 +73,14 @@ def get_summary(
         disposition=disposition,
     )
     defect_events = sum(item.affected_drawer_quantity for item, _case in items_query.all())
-    totals = _daily_totals(db, start_date, end_date)
+    summary_rows = _daily_summary_rows(db, start_date, end_date)
+    totals = _daily_totals(summary_rows)
+
+    fallback_rate = settings_service.get_cost_per_drawer(db)
+    internal_rework_cost, internal_scrap_cost = metrics_service.sum_internal_quality_costs(
+        [(r.drawers_reworked, r.drawers_scrapped, r.cost_per_drawer_at_time) for r in summary_rows],
+        fallback_rate=fallback_rate,
+    )
 
     kpis = metrics_service.compute_kpis(
         drawers_inspected=totals["drawers_inspected"],
@@ -76,6 +88,8 @@ def get_summary(
         unique_drawers_rejected=totals["drawers_rejected_unique"],
         drawers_reworked=totals["drawers_reworked"],
         drawers_scrapped=totals["drawers_scrapped"],
+        internal_rework_cost=internal_rework_cost,
+        internal_scrap_cost=internal_scrap_cost,
     )
     return KpiOut(**kpis.to_dict())
 
@@ -138,18 +152,23 @@ def get_trend(
         label = metrics_service.trend_bucket_label(case.production_date, group_by)
         events_by_bucket[label] = events_by_bucket.get(label, 0) + item.affected_drawer_quantity
 
-    summary_query = db.query(DailyProductionSummary)
-    if start_date is not None:
-        summary_query = summary_query.filter(DailyProductionSummary.production_date >= start_date)
-    if end_date is not None:
-        summary_query = summary_query.filter(DailyProductionSummary.production_date <= end_date)
+    summary_rows = _daily_summary_rows(db, start_date, end_date)
+    fallback_rate = settings_service.get_cost_per_drawer(db)
 
     inspected_by_bucket: dict[str, int] = {}
     rejected_by_bucket: dict[str, int] = {}
-    for row in summary_query.all():
+    rework_cost_by_bucket: dict[str, float] = {}
+    scrap_cost_by_bucket: dict[str, float] = {}
+    for row in summary_rows:
         label = metrics_service.trend_bucket_label(row.production_date, group_by)
         inspected_by_bucket[label] = inspected_by_bucket.get(label, 0) + row.drawers_inspected
         rejected_by_bucket[label] = rejected_by_bucket.get(label, 0) + row.drawers_rejected_unique
+        rework_cost, scrap_cost = metrics_service.sum_internal_quality_costs(
+            [(row.drawers_reworked, row.drawers_scrapped, row.cost_per_drawer_at_time)],
+            fallback_rate=fallback_rate,
+        )
+        rework_cost_by_bucket[label] = rework_cost_by_bucket.get(label, 0.0) + rework_cost
+        scrap_cost_by_bucket[label] = scrap_cost_by_bucket.get(label, 0.0) + scrap_cost
 
     all_labels = sorted(set(events_by_bucket) | set(inspected_by_bucket))
     return [
@@ -158,6 +177,8 @@ def get_trend(
             defect_events=events_by_bucket.get(label, 0),
             drawers_inspected=inspected_by_bucket.get(label, 0),
             unique_drawers_rejected=rejected_by_bucket.get(label, 0),
+            internal_rework_cost=round(rework_cost_by_bucket.get(label, 0.0), 2),
+            internal_scrap_cost=round(scrap_cost_by_bucket.get(label, 0.0), 2),
         )
         for label in all_labels
     ]

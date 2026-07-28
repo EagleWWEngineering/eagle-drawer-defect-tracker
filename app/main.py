@@ -29,6 +29,7 @@ from app.routers import (
     reports,
     sync,
 )
+from app.routers import settings as settings_router
 from app.schemas import HealthOut
 from app.seed_data import seed_master_data
 from app.services import sync_service
@@ -75,6 +76,7 @@ app.include_router(exports.router)
 app.include_router(customer_issues.router)
 app.include_router(customer_issues.export_router)
 app.include_router(sync.router)
+app.include_router(settings_router.router)
 
 app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
 settings.uploads_dir.mkdir(parents=True, exist_ok=True)

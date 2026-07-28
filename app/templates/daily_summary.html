@@ -8,6 +8,7 @@
   for every rate on the Dashboard and Reports pages.</p>
 
 <form id="summary-form" class="card">
+  <p id="current-rate-line" class="hint">Current rate: loading...</p>
   <div class="filters">
     <div class="field">
       <label for="production_date">Production date</label>
@@ -47,13 +48,18 @@
   <div class="btn-row">
     <button type="submit" id="save-btn">Save daily summary</button>
   </div>
+
+  <div id="post-save-cost" class="card" style="display:none; background:#f3fbf5; border-color:#bfe6cd; margin-top:1rem;">
+    <h3 style="margin-top:0;">Cost for this entry</h3>
+    <div id="post-save-cost-kpis" class="kpi-grid"></div>
+  </div>
 </form>
 
 <section class="card">
   <h2>Recent entries</h2>
   <div class="table-scroll">
     <table id="summary-table">
-      <thead><tr><th>Date</th><th>Shift</th><th>Inspected</th><th>Rejected (unique)</th><th>Reworked</th><th>Scrapped</th><th>Notes</th></tr></thead>
+      <thead><tr><th>Date</th><th>Shift</th><th>Inspected</th><th>Rejected (unique)</th><th>Reworked</th><th>Scrapped</th><th>Rework cost</th><th>Scrap cost</th><th>Notes</th></tr></thead>
       <tbody></tbody>
     </table>
   </div>
@@ -93,6 +99,12 @@ function renderRatePreview() {
     .join("");
 }
 
+async function loadCurrentRate() {
+  const settings = await Api.getCostPerDrawer();
+  document.getElementById("current-rate-line").textContent =
+    `Current rate: ${formatCurrency(settings.cost_per_drawer)}/drawer`;
+}
+
 async function loadRecentEntries() {
   const rows = await Api.listDailySummaries();
   const tbody = document.querySelector("#summary-table tbody");
@@ -102,16 +114,19 @@ async function loadRecentEntries() {
         <td>${r.production_date}</td><td>${escapeHtml(r.shift)}</td>
         <td>${r.drawers_inspected}</td><td>${r.drawers_rejected_unique}</td>
         <td>${r.drawers_reworked}</td><td>${r.drawers_scrapped}</td>
+        <td>${formatCurrency(r.internal_rework_cost)}</td>
+        <td>${formatCurrency(r.internal_scrap_cost)}</td>
         <td>${escapeHtml(r.notes || "")}</td>
       </tr>`
     )
-    .join("") || `<tr><td colspan="7">No entries yet.</td></tr>`;
+    .join("") || `<tr><td colspan="9">No entries yet.</td></tr>`;
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("production_date").value = new Date().toISOString().slice(0, 10);
   renderRatePreview();
   try {
+    await loadCurrentRate();
     await loadRecentEntries();
   } catch (err) {
     showToast(err.message, "error");
@@ -139,6 +154,16 @@ document.addEventListener("DOMContentLoaded", async () => {
       try {
         const result = await Api.upsertDailySummary(date, payload);
         showToast(`Saved ${date} (${payload.shift}).` + (result.warnings.length ? " " + result.warnings.join(" ") : ""), "success");
+
+        document.getElementById("post-save-cost").style.display = "block";
+        document.getElementById("post-save-cost-kpis").innerHTML = [
+          ["Rework cost", formatCurrency(result.internal_rework_cost)],
+          ["Scrap cost", formatCurrency(result.internal_scrap_cost)],
+          ["Rate used", formatCurrency(result.cost_per_drawer_at_time) + "/drawer"],
+        ]
+          .map(([label, value]) => `<div class="kpi-tile"><div class="kpi-label">${label}</div><div class="kpi-value">${value}</div></div>`)
+          .join("");
+
         await loadRecentEntries();
       } catch (err) {
         if (err instanceof ApiError && err.field) {

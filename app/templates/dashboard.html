@@ -19,6 +19,11 @@
 </section>
 
 <section class="card">
+  <h2>Quality Cost (today)</h2>
+  <div id="quality-cost-kpis" class="kpi-grid"><p>Loading...</p></div>
+</section>
+
+<section class="card">
   <h2>Selected period</h2>
   <form id="filter-form" class="filters">
     <div class="field">
@@ -154,6 +159,21 @@ async function loadCustomerIssuesSummary() {
   ].join("");
 }
 
+async function loadQualityCost() {
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const [internal, external] = await Promise.all([
+    Api.getSummary({ start_date: todayIso, end_date: todayIso }),
+    Api.get("/api/v1/customer-issues/summary", { start_date: todayIso, end_date: todayIso }),
+  ]);
+  const combinedTotal = internal.total_internal_quality_cost + external.total_estimated_cost;
+  document.getElementById("quality-cost-kpis").innerHTML = [
+    kpiTile("Internal rework cost", formatCurrency(internal.internal_rework_cost)),
+    kpiTile("Internal scrap cost", formatCurrency(internal.internal_scrap_cost)),
+    kpiTile("Total internal quality cost", formatCurrency(internal.total_internal_quality_cost)),
+    kpiTile("Total quality cost (internal + external)", formatCurrency(combinedTotal)),
+  ].join("");
+}
+
 async function loadPeriod() {
   const params = currentFilters();
   const kpis = await Api.getSummary(params);
@@ -219,6 +239,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     await populateMasterDataFilters();
     await loadToday();
     await loadCustomerIssuesSummary();
+    await loadQualityCost();
     await loadPeriod();
     await loadReworkPreview();
   } catch (err) {

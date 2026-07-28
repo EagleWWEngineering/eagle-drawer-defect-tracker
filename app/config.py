@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import decimal
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -39,6 +40,13 @@ class Settings:
             "PRODUCTION_BRIEF_URL", "http://127.0.0.1:8094"
         ).rstrip("/")
         self.sync_interval_minutes: int = int(os.getenv("SYNC_INTERVAL_MINUTES", "60"))
+        # Seed value only (app/seed_data.py writes this into the app_settings table
+        # once, on first run). After that, the DB row is authoritative and editable
+        # via Admin - see app/services/settings_service.py. Changing this env var
+        # later has no effect on an already-seeded database.
+        self.default_cost_per_drawer: decimal.Decimal = decimal.Decimal(
+            os.getenv("DEFAULT_COST_PER_DRAWER", "35.00")
+        )
 
     @property
     def max_upload_bytes(self) -> int:

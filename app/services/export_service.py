@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import datetime as dt
 import io
 
 from app.models import CustomerIssue, DefectCase, DefectItem
@@ -24,14 +25,37 @@ CSV_COLUMNS = [
     "root_cause",
     "corrective_action",
     "notes",
+    # Phase 4: same-day cost context, joined by production_date. Blank if that
+    # date has no Daily Production Summary saved.
+    "day_cost_per_drawer",
+    "day_internal_rework_cost",
+    "day_internal_scrap_cost",
 ]
 
 
-def build_defect_items_csv(rows: list[tuple[DefectItem, DefectCase]]) -> str:
+def build_defect_items_csv(
+    rows: list[tuple[DefectItem, DefectCase]],
+    *,
+    daily_cost_by_date: dict[dt.date, dict] | None = None,
+) -> str:
+    """daily_cost_by_date: production_date -> {"rate": Decimal|float, "rework_cost":
+    float, "scrap_cost": float}, one entry per date (already summed across shifts
+    if a date has more than one). Missing/empty for a date with no Daily Production
+    Summary saved yet - those context columns are left blank, not zero.
+    """
+    daily_cost_by_date = daily_cost_by_date or {}
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow(CSV_COLUMNS)
     for item, case in rows:
+        day_cost = daily_cost_by_date.get(case.production_date)
+        if day_cost is not None:
+            day_cost_per_drawer = str(day_cost["rate"])
+            day_internal_rework_cost = str(day_cost["rework_cost"])
+            day_internal_scrap_cost = str(day_cost["scrap_cost"])
+        else:
+            day_cost_per_drawer = day_internal_rework_cost = day_internal_scrap_cost = ""
+
         writer.writerow(
             [
                 case.case_number,
@@ -50,6 +74,9 @@ def build_defect_items_csv(rows: list[tuple[DefectItem, DefectCase]]) -> str:
                 case.root_cause or "",
                 case.corrective_action or "",
                 (case.notes or "").replace("\n", " "),
+                day_cost_per_drawer,
+                day_internal_rework_cost,
+                day_internal_scrap_cost,
             ]
         )
     return buffer.getvalue()

@@ -27,12 +27,22 @@ async def trigger_sync(db: Session = Depends(get_db)) -> SyncLogOut:
 def get_sync_status(db: Session = Depends(get_db)) -> SyncLogOut | None:
     """The single most recent sync attempt, for the Customer Issues tab's status
     line. Returns null if a sync has never run."""
-    log = db.query(SyncLog).order_by(SyncLog.sync_started_at.desc()).first()
+    log = db.query(SyncLog).order_by(SyncLog.sync_started_at.desc(), SyncLog.id.desc()).first()
     return SyncLogOut.model_validate(log) if log else None
 
 
 @router.get("/logs", response_model=list[SyncLogOut])
 def list_sync_logs(db: Session = Depends(get_db), limit: int = 20) -> list[SyncLogOut]:
-    """The last `limit` sync attempts, for the Admin screen's Sync Log section."""
-    logs = db.query(SyncLog).order_by(SyncLog.sync_started_at.desc()).limit(limit).all()
+    """The last `limit` sync attempts, for the Admin screen's Sync Log section.
+
+    Ordered by (sync_started_at, id) both descending - id is the tiebreaker for
+    successive syncs whose wall-clock timestamps tie (real risk: two "Sync Now"
+    clicks in quick succession, or a fast test loop).
+    """
+    logs = (
+        db.query(SyncLog)
+        .order_by(SyncLog.sync_started_at.desc(), SyncLog.id.desc())
+        .limit(limit)
+        .all()
+    )
     return [SyncLogOut.model_validate(log) for log in logs]

@@ -23,6 +23,7 @@ from app.models import (
     Station,
     StatusHistory,
 )
+from app.services import settings_service
 
 VALID_PRIORITIES: list[str] = ["Urgent", "High", "Normal"]
 
@@ -432,6 +433,9 @@ def upsert_daily_summary(
     row.drawers_reworked = drawers_reworked
     row.drawers_scrapped = drawers_scrapped
     row.notes = notes
+    # Phase 4: snapshot the rate active right now. Never recomputed later even if
+    # the Admin rate changes - see app/services/settings_service.py.
+    row.cost_per_drawer_at_time = settings_service.get_cost_per_drawer(db)
 
     db.commit()
     db.refresh(row)

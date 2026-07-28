@@ -133,10 +133,6 @@ function kpiTile(label, value) {
   return `<div class="kpi-tile"><div class="kpi-label">${escapeHtml(label)}</div><div class="kpi-value">${value}</div></div>`;
 }
 
-function formatCurrency(value) {
-  return `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
 async function loadSummary(params) {
   const summary = await Api.get("/api/v1/customer-issues/summary", params);
   document.getElementById("summary-kpis").innerHTML = [

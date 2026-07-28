@@ -29,6 +29,7 @@ Same shape as Station: id, name (unique), active, sort_order.
 | drawers_reworked | int >= 0 | soft rule (see PROJECT_SPEC.md 2.3) |
 | drawers_scrapped | int >= 0 | soft rule (see PROJECT_SPEC.md 2.3) |
 | notes | string, optional | required if a soft-rule warning is triggered |
+| cost_per_drawer_at_time | decimal(10,2), optional | Phase 4 — rate snapshot at save time, see below |
 
 Unique constraint: (production_date, shift).
 
@@ -205,3 +206,34 @@ records_created, records_updated, records_skipped, errors (text, optional), stat
 ### Configuration
 `PRODUCTION_BRIEF_URL` (default `http://20.62.194.32:8094`),
 `SYNC_INTERVAL_MINUTES` (default `60`) — see `.env.example`.
+
+## Phase 4: Internal Cost Tracking
+
+Full addendum: [`PROJECT_SPEC_PHASE4.md`](PROJECT_SPEC_PHASE4.md).
+
+### AppSetting (`app_settings`)
+| Field | Type | Notes |
+|---|---|---|
+| key | string | primary key, e.g. `"cost_per_drawer"` |
+| value | string | |
+| updated_at | datetime (UTC) | |
+
+Generic key-value settings store; not cost-specific by design.
+
+### DailyProductionSummary additions
+| Field | Type | Notes |
+|---|---|---|
+| cost_per_drawer_at_time | decimal(10,2), optional | snapshot of the configured rate at save time; `null` only for rows saved before Phase 4 and never re-saved since |
+
+### KPI fields added to `/api/v1/reports/summary` and `/api/v1/reports/trend`
+`internal_rework_cost`, `internal_scrap_cost`, `total_internal_quality_cost`,
+`quality_cost_per_drawer_inspected` (`null` when `drawers_inspected` is 0 for the
+period). See `PROJECT_SPEC_PHASE4.md` for the exact formulas and the
+missing-snapshot fallback-rate rule.
+
+### API (`/api/v1/settings`)
+`GET /cost-per-drawer` · `PUT /cost-per-drawer` (`> 0`, audited).
+
+### Configuration
+`DEFAULT_COST_PER_DRAWER` (default `35.00`) — see `.env.example`. Seed-only; the
+`app_settings` row is authoritative after first run.

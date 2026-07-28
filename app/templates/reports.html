@@ -85,6 +85,13 @@
 </section>
 
 <section class="card">
+  <h2>Internal quality cost trend</h2>
+  <p class="hint">Rework and scrap cost by period, using each day's own rate at the
+    time it was saved (historical rate changes are never applied retroactively).</p>
+  <div class="chart-container"><canvas id="cost-trend-canvas" class="chart-canvas"></canvas></div>
+</section>
+
+<section class="card">
   <h2>Work order history</h2>
   <div class="field" style="max-width: 320px;">
     <label for="wo-search">Look up a work order</label>
@@ -149,6 +156,9 @@ async function loadSummary(params) {
     kpiTile("First pass yield", formatRate(kpis.first_pass_yield)),
     kpiTile("Rework rate", formatRate(kpis.rework_rate)),
     kpiTile("Scrap rate", formatRate(kpis.scrap_rate)),
+    kpiTile("Rework cost", formatCurrency(kpis.internal_rework_cost)),
+    kpiTile("Scrap cost", formatCurrency(kpis.internal_scrap_cost)),
+    kpiTile("Total internal quality cost", formatCurrency(kpis.total_internal_quality_cost)),
   ].join("");
 }
 
@@ -178,6 +188,7 @@ async function loadTrend(params) {
   const groupBy = document.getElementById("trend-group-by").value;
   const trend = await Api.getTrend({ start_date: params.start_date, end_date: params.end_date, group_by: groupBy });
   renderTrendChart(document.getElementById("trend-canvas"), trend);
+  renderCostTrendChart(document.getElementById("cost-trend-canvas"), trend);
 }
 
 async function loadRecords(params) {

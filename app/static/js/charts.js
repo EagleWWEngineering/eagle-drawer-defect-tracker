@@ -101,8 +101,11 @@ function renderParetoChart(canvas, rows) {
   ctx.fillText("Line = cumulative % (right axis, 0-100)", padding.left + 230, 14);
 }
 
-/** points: [{period, defect_events, drawers_inspected, unique_drawers_rejected}] */
-function renderTrendChart(canvas, points) {
+/** Shared multi-series line chart renderer used by renderTrendChart and
+ * renderCostTrendChart. series: [{key, label, color}]. valueFormatter formats
+ * each point label under the x-axis stays the same ("period" field); values are
+ * read from point[series.key]. */
+function _renderLineChart(canvas, points, series, { emptyMessage = "No data in the selected date range." } = {}) {
   const width = Math.max(canvas.parentElement.clientWidth, points.length * 60);
   const height = 300;
   const ctx = _setupCanvas(canvas, width, height);
@@ -114,15 +117,10 @@ function renderTrendChart(canvas, points) {
   if (points.length === 0) {
     ctx.fillStyle = "#5b6472";
     ctx.font = "14px sans-serif";
-    ctx.fillText("No data in the selected date range.", padding.left, padding.top + 20);
+    ctx.fillText(emptyMessage, padding.left, padding.top + 20);
     return;
   }
 
-  const series = [
-    { key: "defect_events", label: "Defect events", color: CHART_COLORS[0] },
-    { key: "drawers_inspected", label: "Drawers inspected", color: CHART_COLORS[1] },
-    { key: "unique_drawers_rejected", label: "Unique drawers rejected", color: CHART_COLORS[4] },
-  ];
   const maxVal = Math.max(1, ...points.flatMap((p) => series.map((s) => p[s.key])));
 
   ctx.strokeStyle = "#d4d8de";
@@ -173,5 +171,28 @@ function renderTrendChart(canvas, points) {
   });
 }
 
+/** points: [{period, defect_events, drawers_inspected, unique_drawers_rejected}] */
+function renderTrendChart(canvas, points) {
+  _renderLineChart(canvas, points, [
+    { key: "defect_events", label: "Defect events", color: CHART_COLORS[0] },
+    { key: "drawers_inspected", label: "Drawers inspected", color: CHART_COLORS[1] },
+    { key: "unique_drawers_rejected", label: "Unique drawers rejected", color: CHART_COLORS[4] },
+  ]);
+}
+
+/** points: [{period, internal_rework_cost, internal_scrap_cost}] (Phase 4) */
+function renderCostTrendChart(canvas, points) {
+  _renderLineChart(
+    canvas,
+    points,
+    [
+      { key: "internal_rework_cost", label: "Rework cost ($)", color: CHART_COLORS[2] },
+      { key: "internal_scrap_cost", label: "Scrap cost ($)", color: CHART_COLORS[4] },
+    ],
+    { emptyMessage: "No cost data in the selected date range." }
+  );
+}
+
 window.renderParetoChart = renderParetoChart;
 window.renderTrendChart = renderTrendChart;
+window.renderCostTrendChart = renderCostTrendChart;

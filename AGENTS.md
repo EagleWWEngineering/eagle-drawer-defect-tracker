@@ -3,8 +3,16 @@
 Full specification: `docs/PROJECT_SPEC.md` (business rules, data model, counting
 definitions, phases). Phase 2 addendum (Customer Issues tab):
 `docs/PROJECT_SPEC_PHASE2.md`. Phase 3 addendum (production brief sync):
-`docs/PROJECT_SPEC_PHASE3.md`. Field-level detail: `docs/DATA_DICTIONARY.md`. This
+`docs/PROJECT_SPEC_PHASE3.md`. Phase 4 addendum (internal defect cost tracking):
+`docs/PROJECT_SPEC_PHASE4.md`. Field-level detail: `docs/DATA_DICTIONARY.md`. This
 file is the short version for coding agents working in this repo.
+
+Internal quality cost (`AppSetting`/`cost_per_drawer`,
+`app/services/settings_service.py`, `/api/v1/settings/cost-per-drawer`) is a flat
+admin-editable rate multiplied against `drawers_reworked`/`drawers_scrapped` on
+`DailyProductionSummary`. See `docs/PROJECT_SPEC_PHASE4.md` before changing it.
+It is a completely separate number from Phase 2's `estimated_rework_cost`
+(`piece_count * $100`) — never conflate the two rates or their tables.
 
 Customer Issues (`CustomerIssue`/`CustomerIssueCategory`,
 `app/services/customer_issue_service.py`, `/api/v1/customer-issues`) is a separate
