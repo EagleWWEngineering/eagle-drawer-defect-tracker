@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Eagle Drawer Defect Tracker{% endblock %}</title>
-  <link rel="stylesheet" href="/static/css/app.css">
+  <link rel="stylesheet" href="/static/css/app.css?v={{ static_version('css/app.css') }}">
   {% block extra_head %}{% endblock %}
 </head>
 <body data-page="{% block page_name %}{% endblock %}">
@@ -38,9 +38,9 @@
 
   <div id="toast-region" role="status" aria-live="polite"></div>
 
-  <script src="/static/js/api.js"></script>
-  <script src="/static/js/charts.js"></script>
-  <script src="/static/js/app.js"></script>
+  <script src="/static/js/api.js?v={{ static_version('js/api.js') }}"></script>
+  <script src="/static/js/charts.js?v={{ static_version('js/charts.js') }}"></script>
+  <script src="/static/js/app.js?v={{ static_version('js/app.js') }}"></script>
   {% block extra_scripts %}{% endblock %}
 </body>
 </html>

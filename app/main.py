@@ -39,6 +39,15 @@ APP_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
 
 
+def static_version(relative_path: str) -> int:
+    """File mtime as a cache-busting query param, so an updated static/js/*.js
+    file is never served stale from a browser's cache after a code change."""
+    return int((APP_DIR / "static" / relative_path).stat().st_mtime)
+
+
+templates.env.globals["static_version"] = static_version
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     db = SessionLocal()

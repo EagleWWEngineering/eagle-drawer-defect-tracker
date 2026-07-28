@@ -94,9 +94,11 @@ directly via the API below).
 
 ## UI
 
-- **Dashboard**: a "Quality Cost (today)" card showing Internal Rework Cost,
-  Internal Scrap Cost, Total Internal Quality Cost, and Total Quality Cost
-  (Internal + External).
+- **Dashboard**: a "Quality Cost" card showing Internal Rework Cost, Internal
+  Scrap Cost, Total Internal Quality Cost, and Total Quality Cost (Internal +
+  External), scoped to whatever date range is selected in the dashboard's date
+  range filter (Start/End date fields, quick-select buttons for Today/This
+  Week/This Month/Last 30 Days, default last 7 days).
 - **Daily Production Summary**: the current rate is shown as a read-only
   reference line above the form (`Current rate: $X.XX/drawer`) so staff know
   what will be applied *before* they save; after a successful save, a
