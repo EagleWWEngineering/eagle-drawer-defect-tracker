@@ -9,7 +9,13 @@ import pytest
 
 from app.errors import ValidationError
 from app.services import settings_service
-from app.services.defect_service import upsert_daily_summary
+from app.services.defect_service import (
+    create_defect_case,
+    get_daily_summary,
+    suggested_daily_counts,
+    update_case_status,
+    upsert_daily_summary,
+)
 
 
 def test_rejected_exceeding_inspected_is_a_hard_block(db_session, today):
@@ -146,3 +152,250 @@ def test_changing_rate_does_not_alter_already_saved_historical_summary(db_sessio
     assert old_row.cost_per_drawer_at_time == decimal.Decimal(
         "35.00"
     ), "yesterday's summary must keep its original rate after the rate changes"
+
+
+# ---------------------------------------------------------------------------
+# Scrap removal (docs/PROJECT_SPEC_PHASE4.md): drawers_scrapped is no longer a
+# Daily Summary form field. Omitting it (None) must never silently zero out an
+# already-saved legacy value.
+# ---------------------------------------------------------------------------
+
+
+def test_omitting_scrapped_defaults_a_new_row_to_zero(db_session, today):
+    row, _ = upsert_daily_summary(
+        db_session,
+        production_date=today,
+        shift="Day",
+        drawers_inspected=100,
+        drawers_rejected_unique=10,
+        drawers_reworked=5,
+        drawers_scrapped=None,
+        notes=None,
+    )
+    assert row.drawers_scrapped == 0
+
+
+def test_omitting_scrapped_on_resave_preserves_existing_value(db_session, today):
+    upsert_daily_summary(
+        db_session,
+        production_date=today,
+        shift="Day",
+        drawers_inspected=100,
+        drawers_rejected_unique=10,
+        drawers_reworked=5,
+        drawers_scrapped=3,
+        notes=None,
+    )
+    # The (new) Daily Summary form re-saves this date/shift without ever sending a
+    # scrapped value at all - the historical 3 must survive, not become 0.
+    row, _ = upsert_daily_summary(
+        db_session,
+        production_date=today,
+        shift="Day",
+        drawers_inspected=120,
+        drawers_rejected_unique=12,
+        drawers_reworked=6,
+        drawers_scrapped=None,
+        notes=None,
+    )
+    assert row.drawers_scrapped == 3
+
+
+# ---------------------------------------------------------------------------
+# Auto-calculation of Rejected/Reworked from real DefectCase data
+# (docs/PROJECT_SPEC_PHASE4.md "Scrap removal" / auto-calculation).
+# ---------------------------------------------------------------------------
+
+
+def _detected_at(today: dt.date) -> dt.datetime:
+    return dt.datetime(today.year, today.month, today.day, 9, 0, tzinfo=dt.timezone.utc)
+
+
+def test_get_daily_summary_returns_none_when_nothing_saved(db_session, today):
+    assert get_daily_summary(db_session, today, "Day") is None
+
+
+def test_get_daily_summary_returns_the_saved_row(db_session, today):
+    upsert_daily_summary(
+        db_session,
+        production_date=today,
+        shift="Day",
+        drawers_inspected=10,
+        drawers_rejected_unique=1,
+        drawers_reworked=0,
+        drawers_scrapped=None,
+        notes=None,
+    )
+    row = get_daily_summary(db_session, today, "Day")
+    assert row is not None
+    assert row.drawers_inspected == 10
+
+
+def test_suggested_counts_are_zero_with_no_defect_cases(db_session, today):
+    suggestion = suggested_daily_counts(db_session, today)
+    assert suggestion["suggested_drawers_rejected_unique"] == 0
+    assert suggestion["suggested_drawers_reworked"] == 0
+    assert suggestion["defect_case_count"] == 0
+
+
+def test_suggested_rejected_counts_distinct_cases_regardless_of_disposition(
+    db_session, stations, categories, today
+):
+    # One case still open (no disposition yet)...
+    create_defect_case(
+        db_session,
+        production_date=today,
+        detected_at=_detected_at(today),
+        work_order_number="WO-A",
+        drawer_part_reference=None,
+        found_station_id=stations["QC / Sorting / Shipping"].id,
+        possible_source_station_id=None,
+        priority="Normal",
+        items=[{"defect_category_id": categories["Sanding / Surface"].id}],
+    )
+    # ...another resolved on the spot as Use As Is (never reworked).
+    create_defect_case(
+        db_session,
+        production_date=today,
+        detected_at=_detected_at(today),
+        work_order_number="WO-B",
+        drawer_part_reference=None,
+        found_station_id=stations["QC / Sorting / Shipping"].id,
+        possible_source_station_id=None,
+        priority="Normal",
+        items=[{"defect_category_id": categories["Sanding / Surface"].id}],
+        disposition="Use As Is",
+        resolved_on_the_spot=True,
+        repair_action="Buyer accepted as-is",
+    )
+
+    suggestion = suggested_daily_counts(db_session, today)
+    assert suggestion["suggested_drawers_rejected_unique"] == 2
+    assert suggestion["defect_case_count"] == 2
+    assert suggestion["suggested_drawers_reworked"] == 0
+
+
+def test_suggested_reworked_counts_only_closed_repaired_rework_cases(
+    db_session, stations, categories, today
+):
+    # Resolved-on-the-spot Rework -> Closed - Repaired: counts as reworked.
+    create_defect_case(
+        db_session,
+        production_date=today,
+        detected_at=_detected_at(today),
+        work_order_number="WO-REWORK-1",
+        drawer_part_reference=None,
+        found_station_id=stations["QC / Sorting / Shipping"].id,
+        possible_source_station_id=None,
+        priority="Normal",
+        items=[{"defect_category_id": categories["Sanding / Surface"].id}],
+        disposition="Rework",
+        resolved_on_the_spot=True,
+        repair_action="Resanded",
+    )
+    # Rework disposition that's still queued (In Rework, not yet closed) - must NOT
+    # count as reworked yet.
+    create_defect_case(
+        db_session,
+        production_date=today,
+        detected_at=_detected_at(today),
+        work_order_number="WO-REWORK-2",
+        drawer_part_reference=None,
+        found_station_id=stations["QC / Sorting / Shipping"].id,
+        possible_source_station_id=None,
+        priority="Normal",
+        items=[{"defect_category_id": categories["Sanding / Surface"].id}],
+        disposition="Rework",
+    )
+
+    suggestion = suggested_daily_counts(db_session, today)
+    assert suggestion["suggested_drawers_rejected_unique"] == 2
+    assert suggestion["suggested_drawers_reworked"] == 1
+
+
+def test_suggested_reworked_via_close_directly_from_queue_also_counts(
+    db_session, stations, categories, today
+):
+    """A case that started queued (In Rework) and was later closed via "Close
+    Directly" must count the same as one resolved on the spot at entry."""
+    case = create_defect_case(
+        db_session,
+        production_date=today,
+        detected_at=_detected_at(today),
+        work_order_number="WO-REWORK-3",
+        drawer_part_reference=None,
+        found_station_id=stations["QC / Sorting / Shipping"].id,
+        possible_source_station_id=None,
+        priority="Normal",
+        items=[{"defect_category_id": categories["Sanding / Surface"].id}],
+        disposition="Rework",
+    )
+    update_case_status(db_session, case, new_status="Closed - Repaired", disposition="Rework")
+
+    suggestion = suggested_daily_counts(db_session, today)
+    assert suggestion["suggested_drawers_reworked"] == 1
+
+
+def test_suggested_rejected_dedups_two_categories_on_one_case_as_one_drawer(
+    db_session, stations, categories, today
+):
+    """PROJECT_SPEC.md section 2: two categories on one drawer is still one
+    defective drawer - the suggestion must not double-count it."""
+    create_defect_case(
+        db_session,
+        production_date=today,
+        detected_at=_detected_at(today),
+        work_order_number="WO-TWO-CAT",
+        drawer_part_reference=None,
+        found_station_id=stations["QC / Sorting / Shipping"].id,
+        possible_source_station_id=None,
+        priority="Normal",
+        items=[
+            {"defect_category_id": categories["Sanding / Surface"].id},
+            {"defect_category_id": categories["Dado / Bottom Groove"].id},
+        ],
+    )
+
+    suggestion = suggested_daily_counts(db_session, today)
+    assert suggestion["suggested_drawers_rejected_unique"] == 1
+    assert suggestion["defect_case_count"] == 1
+
+
+def test_suggested_counts_ignore_soft_deleted_cases(db_session, stations, categories, today):
+    from app.services.defect_service import soft_delete_case
+
+    case = create_defect_case(
+        db_session,
+        production_date=today,
+        detected_at=_detected_at(today),
+        work_order_number="WO-DELETED",
+        drawer_part_reference=None,
+        found_station_id=stations["QC / Sorting / Shipping"].id,
+        possible_source_station_id=None,
+        priority="Normal",
+        items=[{"defect_category_id": categories["Sanding / Surface"].id}],
+    )
+    soft_delete_case(db_session, case)
+
+    suggestion = suggested_daily_counts(db_session, today)
+    assert suggestion["suggested_drawers_rejected_unique"] == 0
+
+
+def test_suggested_counts_only_include_the_given_production_date(
+    db_session, stations, categories, today
+):
+    other_day = today - dt.timedelta(days=1)
+    create_defect_case(
+        db_session,
+        production_date=other_day,
+        detected_at=_detected_at(other_day),
+        work_order_number="WO-YESTERDAY",
+        drawer_part_reference=None,
+        found_station_id=stations["QC / Sorting / Shipping"].id,
+        possible_source_station_id=None,
+        priority="Normal",
+        items=[{"defect_category_id": categories["Sanding / Surface"].id}],
+    )
+
+    suggestion = suggested_daily_counts(db_session, today)
+    assert suggestion["suggested_drawers_rejected_unique"] == 0

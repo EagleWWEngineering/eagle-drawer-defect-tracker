@@ -66,11 +66,12 @@ def test_csv_export_includes_same_day_cost_columns(client, master_data):
     header, data_rows = rows[0], rows[1:]
     assert "day_cost_per_drawer" in header
     assert "day_internal_rework_cost" in header
-    assert "day_internal_scrap_cost" in header
+    # Scrap cost was dropped from this app entirely (docs/PROJECT_SPEC_PHASE4.md
+    # "Scrap removal") - no scrap column in the CSV export.
+    assert "day_internal_scrap_cost" not in header
     row = data_rows[0]
     assert row[header.index("day_cost_per_drawer")] == "35.00"
     assert row[header.index("day_internal_rework_cost")] == "175.0"  # 5 * 35.00
-    assert row[header.index("day_internal_scrap_cost")] == "70.0"  # 2 * 35.00
 
 
 def test_csv_export_cost_columns_blank_when_no_daily_summary(client, master_data):

@@ -16,11 +16,13 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import text
 
+from app.auth_middleware import LoginRequiredMiddleware
 from app.config import get_settings
 from app.database import SessionLocal
 from app.dependencies import get_db
 from app.errors import InvalidTransitionError, NotFoundError, ServiceError, ValidationError
 from app.routers import (
+    auth,
     customer_issues,
     daily_production,
     defect_cases,
@@ -76,6 +78,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(LoginRequiredMiddleware)
+
+app.include_router(auth.router)
 app.include_router(defect_cases.router)
 app.include_router(daily_production.router)
 app.include_router(reports.router)
@@ -135,6 +140,20 @@ def page_admin(request: Request):
 @app.get("/print-daily-log")
 def page_print_daily_log(request: Request):
     return templates.TemplateResponse(request, "print_daily_log.html")
+
+
+@app.get("/settings")
+def page_settings(request: Request):
+    """Behind the login like every other page (LoginRequiredMiddleware) - holds the
+    "Log out" / "Log out everywhere" actions (Phase 2)."""
+    return templates.TemplateResponse(request, "settings.html")
+
+
+@app.get("/login")
+def page_login(request: Request):
+    """Public (see app/auth_middleware.py PUBLIC_EXACT_PATHS) - the one page
+    reachable with no session at all, other than the health check."""
+    return templates.TemplateResponse(request, "login.html")
 
 
 def _error_status_code(exc: ServiceError) -> int:

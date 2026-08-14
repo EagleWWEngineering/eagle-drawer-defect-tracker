@@ -43,8 +43,9 @@ async def test_get_defect_summary_matches_direct_api_call(mcp_env):
     assert tool_result == direct
     assert tool_result["defect_events"] == 2
     # Cost fields (Phase 4) pass through as part of the same summary payload.
+    # Scrap cost was dropped entirely (docs/PROJECT_SPEC_PHASE4.md "Scrap removal").
     assert "internal_rework_cost" in tool_result
-    assert "internal_scrap_cost" in tool_result
+    assert "internal_scrap_cost" not in tool_result
     assert "total_internal_quality_cost" in tool_result
     assert "quality_cost_per_drawer_inspected" in tool_result
 

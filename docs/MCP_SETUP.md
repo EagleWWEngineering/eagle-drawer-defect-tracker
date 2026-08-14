@@ -16,6 +16,14 @@ The MCP server reads `DEFECT_API_URL` from its environment (default
 `http://127.0.0.1:8000`), so it only needs to know where the FastAPI app is running —
 it does not need its own copy of `.env` or database credentials.
 
+**Phase 2 login:** the REST API now sits behind the app's single shared login (see
+`docs/PROJECT_SPEC.md` Phase 2 addendum). Set `DEFECT_API_USERNAME` and
+`DEFECT_API_PASSWORD` (the plaintext password, not a hash) in the MCP server's own
+environment/config — it logs in once on the first request that gets a 401 and
+reuses the resulting never-expiring session cookie for every call after that. If
+these aren't set, write tools/read tools will fail with a clear "Login required"
+error instead of a raw 401.
+
 Replace `<PROJECT_ROOT>` below with the absolute path to this project on your machine,
 and `<PYTHON>` with the absolute path to the project's virtual environment Python
 (see the platform-specific commands below to find it).

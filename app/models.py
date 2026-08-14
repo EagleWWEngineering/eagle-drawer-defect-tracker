@@ -336,6 +336,25 @@ class SyncLog(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="failed")
 
 
+class AuthSession(Base):
+    """A server-side login session (Phase 2 - single shared login).
+
+    Deliberately has no `expires_at`/TTL column: sessions never expire on their own
+    (see app/services/auth_service.py) - a row here is valid for as long as it
+    exists, however old `created_at` gets. The ONLY ways a row disappears are an
+    explicit "Log out" (deletes just this row) or "Log out everywhere" (deletes
+    every row). There is no separate `User` table because this app has exactly one
+    shared username/password for the whole app, not per-user accounts - the cookie
+    just proves "this browser knows the one shared password", nothing more.
+    """
+
+    __tablename__ = "auth_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    token: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class AppSetting(Base):
     """Generic key-value application settings (Phase 4), editable on the Admin
     screen. Starts with just "cost_per_drawer" but is intentionally generic so a

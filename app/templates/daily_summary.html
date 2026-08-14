@@ -5,7 +5,9 @@
 {% block content %}
 <h1 class="page-title">Daily Production Summary</h1>
 <p class="hint">One row per production date and shift. These counts are the denominator
-  for every rate on the Dashboard and Reports pages.</p>
+  for every rate on the Dashboard and Reports pages. Rejected/Reworked are
+  pre-filled from real defect cases logged that date — check the suggestion and
+  adjust it if it's not quite right.</p>
 
 <form id="summary-form" class="card">
   <p id="current-rate-line" class="hint">Current rate: loading...</p>
@@ -25,15 +27,16 @@
     <div class="field">
       <label for="drawers_rejected_unique">Unique drawers rejected</label>
       <input type="number" id="drawers_rejected_unique" name="drawers_rejected_unique" min="0" value="0" required>
+      <p id="rejected-suggestion" class="hint"></p>
     </div>
     <div class="field">
       <label for="drawers_reworked">Drawers reworked</label>
       <input type="number" id="drawers_reworked" name="drawers_reworked" min="0" value="0" required>
+      <p id="reworked-suggestion" class="hint"></p>
     </div>
-    <div class="field">
-      <label for="drawers_scrapped">Drawers scrapped</label>
-      <input type="number" id="drawers_scrapped" name="drawers_scrapped" min="0" value="0" required>
-    </div>
+  </div>
+  <div class="btn-row">
+    <button type="button" id="recalculate-btn" class="secondary">Recalculate from defect cases</button>
   </div>
   <div class="field">
     <label for="notes">Notes <span class="hint">(required if the counts look unusual, e.g. rework of a prior day's rejects)</span></label>
@@ -59,7 +62,7 @@
   <h2>Recent entries</h2>
   <div class="table-scroll">
     <table id="summary-table">
-      <thead><tr><th>Date</th><th>Shift</th><th>Inspected</th><th>Rejected (unique)</th><th>Reworked</th><th>Scrapped</th><th>Rework cost</th><th>Scrap cost</th><th>Notes</th></tr></thead>
+      <thead><tr><th>Date</th><th>Shift</th><th>Inspected</th><th>Rejected (unique)</th><th>Reworked</th><th>Rework cost</th><th>Notes</th></tr></thead>
       <tbody></tbody>
     </table>
   </div>
@@ -68,20 +71,23 @@
 
 {% block extra_scripts %}
 <script>
+// Whether the currently-displayed production_date+shift already has a saved row -
+// auto-fill only ever applies to a brand-new entry (or an explicit "Recalculate"
+// click), never overwriting an already-saved summary just by opening the page.
+let currentRowIsSaved = false;
+
 function computeRatesLocally(form) {
   const val = (name) => Number(form.querySelector(`[name="${name}"]`).value || 0);
   const inspected = val("drawers_inspected");
   const rejected = val("drawers_rejected_unique");
   const reworked = val("drawers_reworked");
-  const scrapped = val("drawers_scrapped");
   if (inspected === 0) {
-    return { defects_per_100: null, rejection_rate: null, first_pass_yield: null, rework_rate: null, scrap_rate: null };
+    return { rejection_rate: null, first_pass_yield: null, rework_rate: null };
   }
   return {
     rejection_rate: (rejected / inspected) * 100,
     first_pass_yield: ((inspected - rejected) / inspected) * 100,
     rework_rate: (reworked / inspected) * 100,
-    scrap_rate: (scrapped / inspected) * 100,
   };
 }
 
@@ -93,7 +99,6 @@ function renderRatePreview() {
     ["Rejection rate", rates.rejection_rate],
     ["First pass yield", rates.first_pass_yield],
     ["Rework rate", rates.rework_rate],
-    ["Scrap rate", rates.scrap_rate],
   ]
     .map(([label, value]) => `<div class="kpi-tile"><div class="kpi-label">${label}</div><div class="kpi-value">${formatRate(value)}</div></div>`)
     .join("");
@@ -113,13 +118,62 @@ async function loadRecentEntries() {
       (r) => `<tr>
         <td>${r.production_date}</td><td>${escapeHtml(r.shift)}</td>
         <td>${r.drawers_inspected}</td><td>${r.drawers_rejected_unique}</td>
-        <td>${r.drawers_reworked}</td><td>${r.drawers_scrapped}</td>
+        <td>${r.drawers_reworked}</td>
         <td>${formatCurrency(r.internal_rework_cost)}</td>
-        <td>${formatCurrency(r.internal_scrap_cost)}</td>
         <td>${escapeHtml(r.notes || "")}</td>
       </tr>`
     )
-    .join("") || `<tr><td colspan="9">No entries yet.</td></tr>`;
+    .join("") || `<tr><td colspan="7">No entries yet.</td></tr>`;
+}
+
+/** Apply a suggestion to the Rejected/Reworked inputs and show the "Suggested: N
+ * (from N defect cases logged today)" labels next to each field. */
+function applySuggestion(suggestion) {
+  document.getElementById("drawers_rejected_unique").value = suggestion.suggested_drawers_rejected_unique;
+  document.getElementById("drawers_reworked").value = suggestion.suggested_drawers_reworked;
+  document.getElementById("rejected-suggestion").textContent =
+    `Suggested: ${suggestion.suggested_drawers_rejected_unique} (from ${suggestion.defect_case_count} defect case${suggestion.defect_case_count === 1 ? "" : "s"} logged that date)`;
+  document.getElementById("reworked-suggestion").textContent =
+    `Suggested: ${suggestion.suggested_drawers_reworked} (Rework cases closed as repaired that date)`;
+  renderRatePreview();
+}
+
+async function loadSuggestionForCurrentDate() {
+  const date = document.getElementById("production_date").value;
+  if (!date) return;
+  try {
+    const suggestion = await Api.get(`/api/v1/daily-production/${date}/suggested-counts`);
+    applySuggestion(suggestion);
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+}
+
+/** Load whatever's already true for the selected production date/shift: if a
+ * summary is already saved, show it as-is (auto-fill must NEVER silently
+ * overwrite a saved entry); otherwise pre-fill from the suggestion for a brand
+ * new entry. */
+async function loadForCurrentDateAndShift() {
+  const date = document.getElementById("production_date").value;
+  const shift = document.getElementById("shift").value;
+  document.getElementById("post-save-cost").style.display = "none";
+  const rows = await Api.listDailySummaries({ start_date: date, end_date: date });
+  const existing = rows.find((r) => r.shift === shift);
+  if (existing) {
+    currentRowIsSaved = true;
+    document.getElementById("drawers_inspected").value = existing.drawers_inspected;
+    document.getElementById("drawers_rejected_unique").value = existing.drawers_rejected_unique;
+    document.getElementById("drawers_reworked").value = existing.drawers_reworked;
+    document.getElementById("notes").value = existing.notes || "";
+    document.getElementById("rejected-suggestion").textContent = "Already saved for this date/shift - use \"Recalculate\" to refresh the suggestion.";
+    document.getElementById("reworked-suggestion").textContent = "";
+    renderRatePreview();
+  } else {
+    currentRowIsSaved = false;
+    document.getElementById("drawers_inspected").value = 0;
+    document.getElementById("notes").value = "";
+    await loadSuggestionForCurrentDate();
+  }
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -128,12 +182,22 @@ document.addEventListener("DOMContentLoaded", async () => {
   try {
     await loadCurrentRate();
     await loadRecentEntries();
+    await loadForCurrentDateAndShift();
   } catch (err) {
     showToast(err.message, "error");
   }
 
   const form = document.getElementById("summary-form");
   form.querySelectorAll("input[type=number]").forEach((el) => el.addEventListener("input", renderRatePreview));
+  document.getElementById("production_date").addEventListener("change", loadForCurrentDateAndShift);
+  document.getElementById("shift").addEventListener("change", loadForCurrentDateAndShift);
+
+  document.getElementById("recalculate-btn").addEventListener("click", async () => {
+    // Explicit recalculation is always allowed, even for an already-saved entry -
+    // it only refreshes the on-screen suggestion, it does not save anything.
+    await loadSuggestionForCurrentDate();
+    showToast("Suggestion refreshed from current defect cases.", "success");
+  });
 
   const saveBtn = document.getElementById("save-btn");
   form.addEventListener(
@@ -148,17 +212,16 @@ document.addEventListener("DOMContentLoaded", async () => {
         drawers_inspected: Number(fd.get("drawers_inspected")),
         drawers_rejected_unique: Number(fd.get("drawers_rejected_unique")),
         drawers_reworked: Number(fd.get("drawers_reworked")),
-        drawers_scrapped: Number(fd.get("drawers_scrapped")),
         notes: fd.get("notes") || null,
       };
       try {
         const result = await Api.upsertDailySummary(date, payload);
+        currentRowIsSaved = true;
         showToast(`Saved ${date} (${payload.shift}).` + (result.warnings.length ? " " + result.warnings.join(" ") : ""), "success");
 
         document.getElementById("post-save-cost").style.display = "block";
         document.getElementById("post-save-cost-kpis").innerHTML = [
           ["Rework cost", formatCurrency(result.internal_rework_cost)],
-          ["Scrap cost", formatCurrency(result.internal_scrap_cost)],
           ["Rate used", formatCurrency(result.cost_per_drawer_at_time) + "/drawer"],
         ]
           .map(([label, value]) => `<div class="kpi-tile"><div class="kpi-label">${label}</div><div class="kpi-value">${value}</div></div>`)

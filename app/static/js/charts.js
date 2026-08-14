@@ -180,15 +180,13 @@ function renderTrendChart(canvas, points) {
   ]);
 }
 
-/** points: [{period, internal_rework_cost, internal_scrap_cost}] (Phase 4) */
+/** points: [{period, internal_rework_cost}] (Phase 4). Scrap cost was dropped from
+ * this app entirely - see docs/PROJECT_SPEC_PHASE4.md "Scrap removal". */
 function renderCostTrendChart(canvas, points) {
   _renderLineChart(
     canvas,
     points,
-    [
-      { key: "internal_rework_cost", label: "Rework cost ($)", color: CHART_COLORS[2] },
-      { key: "internal_scrap_cost", label: "Scrap cost ($)", color: CHART_COLORS[4] },
-    ],
+    [{ key: "internal_rework_cost", label: "Rework cost ($)", color: CHART_COLORS[2] }],
     { emptyMessage: "No cost data in the selected date range." }
   );
 }

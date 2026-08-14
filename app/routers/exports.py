@@ -63,11 +63,8 @@ def export_defects_csv(
 
         fallback_rate = settings_service.get_cost_per_drawer(db)
         for production_date, date_rows in rows_by_date.items():
-            rework_cost, scrap_cost = metrics_service.sum_internal_quality_costs(
-                [
-                    (r.drawers_reworked, r.drawers_scrapped, r.cost_per_drawer_at_time)
-                    for r in date_rows
-                ],
+            rework_cost = metrics_service.sum_internal_rework_cost(
+                [(r.drawers_reworked, r.cost_per_drawer_at_time) for r in date_rows],
                 fallback_rate=fallback_rate,
             )
             representative_rate = next(
@@ -81,7 +78,6 @@ def export_defects_csv(
             daily_cost_by_date[production_date] = {
                 "rate": representative_rate,
                 "rework_cost": rework_cost,
-                "scrap_cost": scrap_cost,
             }
 
     csv_text = export_service.build_defect_items_csv(rows, daily_cost_by_date=daily_cost_by_date)

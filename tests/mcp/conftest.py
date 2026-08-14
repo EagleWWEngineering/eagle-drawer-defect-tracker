@@ -18,6 +18,7 @@ from app.database import Base
 from app.dependencies import get_db
 from app.main import app
 from app.seed_data import seed_master_data
+from app.services import auth_service
 from mcp_server import server as mcp_module
 
 
@@ -51,8 +52,19 @@ def mcp_env(monkeypatch):
 
     app.dependency_overrides[get_db] = override_get_db
 
+    # The MCP server calls the same REST API the UI uses (CLAUDE.md architecture
+    # rule), so it's subject to the same Phase 2 login requirement. Pre-authenticate
+    # by creating a session row directly and attaching its cookie to the httpx
+    # client, the same way a real MCP server process logs in once via
+    # POST /api/v1/auth/login and then reuses that session indefinitely.
+    auth_db = TestingSession()
+    token = auth_service.create_session(auth_db)
+    auth_db.close()
+
     test_client = httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+        cookies={auth_service.SESSION_COOKIE_NAME: token},
     )
     monkeypatch.setattr(mcp_module, "_client", test_client)
     monkeypatch.setattr(mcp_module, "_master_data_cache", None)

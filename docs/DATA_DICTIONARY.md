@@ -26,8 +26,8 @@ Same shape as Station: id, name (unique), active, sort_order.
 | shift | string | default "Day" |
 | drawers_inspected | int >= 0 | |
 | drawers_rejected_unique | int >= 0 | hard rule: <= drawers_inspected |
-| drawers_reworked | int >= 0 | soft rule (see PROJECT_SPEC.md 2.3) |
-| drawers_scrapped | int >= 0 | soft rule (see PROJECT_SPEC.md 2.3) |
+| drawers_reworked | int >= 0 | soft rule (see PROJECT_SPEC.md 2.3); auto-suggested from DefectCase data, editable (see Phase 4 addendum) |
+| drawers_scrapped | int >= 0 | soft rule (see PROJECT_SPEC.md 2.3); no longer a field on the Daily Summary form (Phase 4 "Scrap removal") - kept for backward compatibility, defaults to 0 for a new row or preserves the existing value when omitted from a PUT |
 | notes | string, optional | required if a soft-rule warning is triggered |
 | cost_per_drawer_at_time | decimal(10,2), optional | Phase 4 — rate snapshot at save time, see below |
 
@@ -87,8 +87,10 @@ transitions are enforced in `app/services/defect_service.py` (`STATUS_TRANSITION
 
 ## Counting definitions
 See PROJECT_SPEC.md section 2.1 for the exact formulas (Defect Event, Defective
-Drawer, Defects per 100 Drawers, Drawer Rejection Rate, First Pass Yield, Rework Rate,
-Scrap Rate). All rates are `null`/"N/A" when `drawers_inspected` is 0.
+Drawer, Defects per 100 Drawers, Drawer Rejection Rate, First Pass Yield, Rework
+Rate). All rates are `null`/"N/A" when `drawers_inspected` is 0. Scrap Rate was
+dropped from the KPI/API/UI surface entirely in Phase 4's "Scrap removal" - see
+that addendum.
 
 ## REST API (`/api/v1`)
 
@@ -108,6 +110,7 @@ All responses are JSON. Errors use `{"error": {"message": "...", "field": "..."}
 | POST `/defect-cases/{case_id}/photos` | Upload a photo |
 | PUT `/daily-production/{production_date}` | Upsert the Daily Production Summary |
 | GET `/daily-production` | List summaries |
+| GET `/daily-production/{production_date}/suggested-counts` | Suggested Rejected/Reworked from real DefectCase data (Phase 4 "Scrap removal" / auto-calculation); read-only, never writes |
 | GET `/rework-queue` | Priority-sorted open items |
 | GET `/reports/summary` | KPI totals for a filtered date range |
 | GET `/reports/pareto` | Pareto by category or possible source station |
@@ -229,10 +232,13 @@ Generic key-value settings store; not cost-specific by design.
 | cost_per_drawer_at_time | decimal(10,2), optional | snapshot of the configured rate at save time; `null` only for rows saved before Phase 4 and never re-saved since |
 
 ### KPI fields added to `/api/v1/reports/summary` and `/api/v1/reports/trend`
-`internal_rework_cost`, `internal_scrap_cost`, `total_internal_quality_cost`,
+`internal_rework_cost`, `total_internal_quality_cost`,
 `quality_cost_per_drawer_inspected` (`null` when `drawers_inspected` is 0 for the
 period). See `PROJECT_SPEC_PHASE4.md` for the exact formulas and the
-missing-snapshot fallback-rate rule.
+missing-snapshot fallback-rate rule. `internal_scrap_cost`/`scrap_rate` were
+dropped from this KPI surface entirely ("Scrap removal", below) — the
+`DailyProductionSummary.drawers_scrapped` column and `Scrap` disposition/status are
+both still kept for backward compatibility, just no longer surfaced anywhere.
 
 ### API (`/api/v1/settings`)
 `GET /cost-per-drawer` · `PUT /cost-per-drawer` (`> 0`, audited).
@@ -240,3 +246,51 @@ missing-snapshot fallback-rate rule.
 ### Configuration
 `DEFAULT_COST_PER_DRAWER` (default `35.00`) — see `.env.example`. Seed-only; the
 `app_settings` row is authoritative after first run.
+
+### Scrap removal (see `PROJECT_SPEC_PHASE4.md` for the full rationale)
+Defective drawers on this floor are reworked or reused; scrap essentially doesn't
+happen and staff can't reliably track it. Scrap Rate, Internal Scrap Cost, and any
+scrap column/chart element were removed from the Dashboard, Reports, and the Daily
+Summary form. `Total Internal Quality Cost` = `Internal Rework Cost` only now. The
+`drawers_scrapped` column, the CSV `day_internal_scrap_cost` column, and the `Scrap`
+disposition/status are all kept in the data model/API for backward compatibility
+(no destructive migration) - `drawers_scrapped` on `DailyProductionSummaryIn` is
+optional; omitting it preserves whatever was already saved instead of zeroing it.
+
+Also new in this release: `drawers_rejected_unique`/`drawers_reworked` on the Daily
+Summary form are pre-filled from real `DefectCase` data (see the
+`/daily-production/{date}/suggested-counts` endpoint and
+`app/services/defect_service.py suggested_daily_counts()`), still fully editable,
+and never silently overwritten once a row is saved for that date/shift.
+
+## Phase 5: Authentication
+
+Single shared login for the whole app (no per-user accounts, no roles) - see
+`app/services/auth_service.py`, `app/auth_middleware.py`, `app/routers/auth.py`.
+
+### AuthSession (`auth_sessions`)
+| Field | Type | Notes |
+|---|---|---|
+| id | int | primary key |
+| token | string, unique, indexed | opaque, `secrets.token_urlsafe(32)` |
+| created_at | datetime (UTC) | informational only - never used to expire a session |
+
+No `expires_at`/TTL column: a session is valid for as long as its row exists, with
+no time-based expiry check anywhere. It's deleted only by an explicit "Log out"
+(this row only) or "Log out everywhere" (every row).
+
+### Configuration
+`APP_USERNAME`, `APP_PASSWORD_HASH` (a bcrypt hash, never the plaintext password) —
+see `.env.example`. Read directly from the environment on every call, not through
+the cached `Settings` singleton.
+
+### API (`/api/v1/auth`) — all unauthenticated except `/login`
+`POST /login` (`{"username", "password"}` → sets the `eagle_session` cookie,
+httponly, not Secure since the app runs over plain HTTP on the LAN, ~10-year
+max-age) · `POST /logout` (ends only this device's session) ·
+`POST /logout-everywhere` (`{"password"}`, re-confirms the current password, then
+deletes every session row at once).
+
+Every other route (UI pages and API endpoints) requires a valid session cookie,
+enforced once by `LoginRequiredMiddleware`, except `GET /api/v1/health` and static
+assets under `/static/`.

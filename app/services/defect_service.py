@@ -501,7 +501,10 @@ def check_daily_summary_warnings(
     Rework/scrap commonly land on a later date than the original rejection, so a
     single day can legitimately show rework/scrap with zero (or fewer) rejections
     that same day. These are not hard blocks until the pilot confirms date
-    attribution across a multi-day repair cycle.
+    attribution across a multi-day repair cycle. drawers_scrapped no longer has a
+    form field of its own (Daily Summary "Scrap removal" - see
+    docs/PROJECT_SPEC_PHASE4.md) but the column/warning logic is kept for backward
+    compatibility with historical and MCP-written rows that still carry a value.
     """
     warnings: list[str] = []
     if drawers_reworked > drawers_rejected_unique:
@@ -566,17 +569,17 @@ def upsert_daily_summary(
     drawers_inspected: int,
     drawers_rejected_unique: int,
     drawers_reworked: int,
-    drawers_scrapped: int,
+    drawers_scrapped: int | None = None,
     notes: str | None,
 ) -> tuple[DailyProductionSummary, list[str]]:
-    warnings = validate_daily_summary_input(
-        drawers_inspected=drawers_inspected,
-        drawers_rejected_unique=drawers_rejected_unique,
-        drawers_reworked=drawers_reworked,
-        drawers_scrapped=drawers_scrapped,
-        notes=notes,
-    )
-
+    """drawers_scrapped is Optional because the Daily Summary form no longer has a
+    scrapped field at all (docs/PROJECT_SPEC_PHASE4.md "Scrap removal") - passing
+    None here means "leave whatever was already stored for this date/shift alone"
+    (0 for a brand new row), so re-saving a legacy row that does carry a scrap count
+    can never silently zero it out. Callers that DO still track scrap (the MCP
+    write tool, direct API/script use) can keep passing an explicit int exactly as
+    before.
+    """
     row = (
         db.query(DailyProductionSummary)
         .filter(
@@ -585,6 +588,20 @@ def upsert_daily_summary(
         )
         .first()
     )
+    effective_scrapped = (
+        drawers_scrapped
+        if drawers_scrapped is not None
+        else (row.drawers_scrapped if row is not None else 0)
+    )
+
+    warnings = validate_daily_summary_input(
+        drawers_inspected=drawers_inspected,
+        drawers_rejected_unique=drawers_rejected_unique,
+        drawers_reworked=drawers_reworked,
+        drawers_scrapped=effective_scrapped,
+        notes=notes,
+    )
+
     if row is None:
         row = DailyProductionSummary(production_date=production_date, shift=shift)
         db.add(row)
@@ -592,7 +609,7 @@ def upsert_daily_summary(
     row.drawers_inspected = drawers_inspected
     row.drawers_rejected_unique = drawers_rejected_unique
     row.drawers_reworked = drawers_reworked
-    row.drawers_scrapped = drawers_scrapped
+    row.drawers_scrapped = effective_scrapped
     row.notes = notes
     # Phase 4: snapshot the rate active right now. Never recomputed later even if
     # the Admin rate changes - see app/services/settings_service.py.
@@ -601,3 +618,66 @@ def upsert_daily_summary(
     db.commit()
     db.refresh(row)
     return row, warnings
+
+
+def get_daily_summary(
+    db: Session, production_date: dt.date, shift: str
+) -> DailyProductionSummary | None:
+    """The already-saved row for this exact date+shift, if any - used by the Daily
+    Summary page to decide whether to show a saved entry as-is or pre-fill a new
+    one from suggested_daily_counts() (never both - see that function's docstring)."""
+    return (
+        db.query(DailyProductionSummary)
+        .filter(
+            DailyProductionSummary.production_date == production_date,
+            DailyProductionSummary.shift == shift,
+        )
+        .first()
+    )
+
+
+def suggested_daily_counts(db: Session, production_date: dt.date) -> dict:
+    """Suggested "Unique Drawers Rejected" / "Drawers Reworked" counts for the Daily
+    Production Summary form, computed from real DefectCase data instead of typed by
+    hand (docs/PROJECT_SPEC_PHASE4.md "Scrap removal" / auto-calculation).
+
+    - Unique drawers rejected = count of distinct, non-deleted DefectCase rows for
+      this production_date, regardless of disposition. One DefectCase already IS
+      one defective drawer no matter how many DefectItem categories are on it
+      (PROJECT_SPEC.md section 2), so counting distinct cases - not items - is the
+      same dedup rule used everywhere else in the app (e.g.
+      app/routers/reports.py _distinct_cases, the section 3.3 KPIs); it already
+      guarantees a drawer flagged under two categories on one case is counted once.
+    - Drawers reworked = count of those cases with disposition "Rework" that are
+      closed as "Closed - Repaired" - this covers a case closed via the
+      resolved-on-the-spot fast path, "Close Directly", or the legacy
+      In Rework -> Ready for QC Recheck -> Closed path equally, since all three
+      land on the same disposition/status combination (see
+      app/services/defect_service.py create_defect_case / update_case_status and
+      PROJECT_SPEC.md section 3.3).
+
+    LIMITATION: DefectCase has no shift field, only production_date, so this
+    suggestion is computed at the whole-day level and is identical no matter which
+    shift the Daily Summary form is being filled out for. If a plant ever runs two
+    shifts against the same production_date, both shifts' forms will suggest the
+    same day-level counts - matching this by shift would require adding a shift
+    field to DefectCase, which is out of scope here.
+    """
+    cases = (
+        db.query(DefectCase)
+        .filter(
+            DefectCase.production_date == production_date,
+            DefectCase.is_deleted.is_(False),
+        )
+        .all()
+    )
+    suggested_rejected_unique = len(cases)
+    suggested_reworked = sum(
+        1 for case in cases if case.disposition == "Rework" and case.status == "Closed - Repaired"
+    )
+    return {
+        "production_date": production_date,
+        "defect_case_count": suggested_rejected_unique,
+        "suggested_drawers_rejected_unique": suggested_rejected_unique,
+        "suggested_drawers_reworked": suggested_reworked,
+    }

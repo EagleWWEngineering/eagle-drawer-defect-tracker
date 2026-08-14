@@ -4,20 +4,32 @@ How to use the Eagle Drawer Defect Tracker day to day. For setup/installation, s
 the main [`README.md`](../README.md). For the business rules behind these screens,
 see [`PROJECT_SPEC.md`](PROJECT_SPEC.md).
 
+## Logging in
+
+The whole app is behind a single shared username/password (see
+`PROJECT_SPEC_PHASE5.md`) — ask whoever set up the app for the shop's shared login
+if you don't have it. Once you log in on a device/browser, you stay logged in
+indefinitely — there's no "session expired, log in again" surprise. Use **Log out**
+on the **Settings** screen to end just your device's session, or **Log out
+everywhere** (re-enter the password to confirm) if a device needs to be locked out
+immediately, e.g. a shared tablet that's been misplaced.
+
 ## Roles (prototype only — not security)
 
-The role selector in the top-right corner (QC / Manufacturing Engineer / Admin) only
-labels who did what in the audit log for this single-user pilot. It does not restrict
-what you can click — anyone can reach any screen. Real access control is a
-pre-requisite before this app is used on a shared network (see `PROJECT_SPEC.md`
-section 8).
+The role selector in the top-right corner (QC / Manufacturing Engineer / Admin) is
+completely separate from the login above — it only labels who did what in the audit
+log. It does not restrict what you can click once you're logged in — anyone with the
+shared login can reach any screen.
 
 ## Daily QC workflow
 
 1. **Record production counts once per shift** on the **Daily Summary** screen:
-   drawers inspected, unique drawers rejected, drawers reworked, drawers scrapped.
-   This is the denominator behind every rate on the Dashboard — do it even on a day
-   with zero defects.
+   drawers inspected (type this in), unique drawers rejected, and drawers reworked.
+   The latter two are pre-filled as a suggestion computed from the defect cases
+   already logged that date — check the number, adjust it if it's not quite right,
+   and use **Recalculate from defect cases** if you logged more cases after the
+   suggestion first loaded. This is the denominator behind every rate on the
+   Dashboard — do it even on a day with zero defects.
 2. **Log each defect as you find it** on the **New Defect** screen (target
    15–20 seconds per entry — everything is tap buttons, not dropdowns):
    - Work order number (required — this is the only required ID). Start typing
@@ -73,8 +85,10 @@ each priority):
 
 The **Dashboard** and **Reports** screens both show:
 - KPI cards: drawers inspected, defect events, unique drawers rejected, defects per
-  100 drawers, rejection rate, first pass yield, rework rate, scrap rate. Any rate
-  shows "N/A" instead of a number when drawers inspected is zero for that period.
+  100 drawers, rejection rate, first pass yield, and rework rate. Any rate shows
+  "N/A" instead of a number when drawers inspected is zero for that period. (There
+  is no Scrap Rate card — scrap essentially doesn't happen on this floor, so it was
+  removed; the underlying data field is still kept for backward compatibility.)
 - A **Pareto chart** by defect category (or, switch the dropdown to group by possible
   source station — remember, that's a hypothesis, not a confirmed root cause).
   Clicking a bar/row on the Reports page filters the record table below it to just

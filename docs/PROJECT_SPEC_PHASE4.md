@@ -158,7 +158,72 @@ directly via the API below).
 ## MCP
 
 `get_defect_summary` (`mcp_server/server.py`) needed no code change beyond its
-docstring: it forwards the full `/api/v1/reports/summary` JSON body, so the four
-cost fields are already present in its response the same way every other KPI
-field is. `tests/mcp/test_mcp_tools.py` asserts the tool's result still equals a
-direct call to the same endpoint, which covers this by construction.
+docstring: it forwards the full `/api/v1/reports/summary` JSON body, so the cost
+fields are already present in its response the same way every other KPI field is.
+`tests/mcp/test_mcp_tools.py` asserts the tool's result still equals a direct call
+to the same endpoint, which covers this by construction.
+
+## Scrap removal
+
+Later revision: defective drawers on this floor are reworked or reused — scrap
+essentially doesn't happen and staff can't reliably track a scrap count. What
+matters is the existing Internal Catch Rate metric (Phase 2), not a scrap number.
+
+- **Daily Production Summary form**: no `drawers_scrapped` field anymore. Fields
+  are Drawers Inspected (manual, required), Unique Drawers Rejected, Drawers
+  Reworked. The latter two are pre-filled from real `DefectCase` data for the
+  given production date (see "Auto-calculation" below), still fully editable, and
+  never silently overwritten by re-opening an already-saved entry.
+- **Dashboard**: the Scrap Rate KPI tile and the Internal Scrap Cost card are gone.
+- **Reports**: Scrap Rate is gone from the summary tiles; the Scrap Cost column is
+  gone from the records table and the CSV export; the cost trend chart plots
+  rework cost only.
+- **Cost calculation**: `Total Internal Quality Cost` = `Internal Rework Cost`
+  only (the scrap term was dropped from the sum). `Total Quality Cost (Internal +
+  External)` is computed from that updated total. `cost_per_drawer` itself is
+  unaffected — still used for rework cost. `internal_scrap_cost` and `scrap_rate`
+  no longer appear anywhere in `KpiOut`/`TrendPointOut`; `metrics_service.py`'s
+  `sum_internal_rework_cost` / `compute_internal_quality_cost` /
+  `defect_case_derived_rework_count` replaced their two-value (`rework, scrap`)
+  predecessors.
+- **Data model**: NOT a destructive migration. `DailyProductionSummary.drawers_scrapped`
+  and the `Scrap` disposition/status both still exist for backward compatibility -
+  only the UI/API surface stopped asking for, calculating, and displaying them.
+  `DailyProductionSummaryIn.drawers_scrapped` became optional (`None` default);
+  `upsert_daily_summary` treats `None` as "leave whatever this date/shift already
+  has alone" (0 for a brand new row) instead of zeroing out a legacy value just
+  because the new form never sends the field. The MCP `record_daily_production`
+  write tool and any direct API/script caller can still pass an explicit value.
+- **New Defect form**: the Scrap disposition button is untouched — still a
+  secondary/tucked-away option, unaffected by any of the above.
+
+### Auto-calculation (Unique Drawers Rejected / Drawers Reworked)
+
+`GET /api/v1/daily-production/{production_date}/suggested-counts` →
+`{"production_date", "defect_case_count", "suggested_drawers_rejected_unique",
+"suggested_drawers_reworked"}`. Read-only — it never writes to
+`DailyProductionSummary`, so calling it (including via the Daily Summary form's
+"Recalculate from defect cases" button) can never overwrite a saved entry.
+Implemented in `app/services/defect_service.py suggested_daily_counts()`:
+
+- **Unique drawers rejected** = count of distinct, non-deleted `DefectCase` rows
+  for that `production_date`, regardless of disposition. One `DefectCase` already
+  IS one defective drawer no matter how many `DefectItem` categories are on it
+  (`PROJECT_SPEC.md` section 2), so counting distinct cases (not items) is the
+  same dedup rule used everywhere else in the app (e.g.
+  `app/routers/reports.py _distinct_cases`) and already guarantees a drawer
+  flagged under two categories on one case is counted once, not twice.
+- **Drawers reworked** = count of those cases with disposition `Rework` closed as
+  `Closed - Repaired` — covers a case closed via the resolved-on-the-spot fast
+  path, "Close Directly", or the legacy recheck path equally, since all three land
+  on the same disposition/status combination (`PROJECT_SPEC.md` section 3.3).
+- **Limitation**: `DefectCase` has no shift field, only `production_date`, so this
+  suggestion is computed at the whole-day level — a plant running two shifts
+  against the same production date would see the identical suggestion on both
+  shifts' forms. Matching by shift would require adding a shift field to
+  `DefectCase`, which is out of scope here.
+
+The Daily Summary page loads whichever is true for the selected date/shift: if a
+row is already saved, its saved values are shown as-is (auto-fill never runs);
+otherwise the suggestion pre-fills the form for a brand-new entry. A manual edit
+before saving is never overridden — the suggestion is only ever a starting point.

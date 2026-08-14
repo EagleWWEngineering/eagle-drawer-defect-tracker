@@ -87,7 +87,7 @@
 
 <section class="card">
   <h2>Internal quality cost trend</h2>
-  <p class="hint">Rework and scrap cost by period, using each day's own rate at the
+  <p class="hint">Rework cost by period, using each day's own rate at the
     time it was saved (historical rate changes are never applied retroactively).</p>
   <div class="chart-container"><canvas id="cost-trend-canvas" class="chart-canvas"></canvas></div>
 </section>
@@ -136,10 +136,11 @@ function kpiTile(label, value) {
   return `<div class="kpi-tile"><div class="kpi-label">${escapeHtml(label)}</div><div class="kpi-value">${value}</div></div>`;
 }
 
-// Scrap is genuinely rare (PROJECT_SPEC.md section 3.2) and recheck is no longer
-// the standard closing path (section 3.3) - both rates ride as small inline
-// substats instead of equal-size cards, so they stay accurate and visible without
-// competing for attention with numbers that are usually 0%.
+// Recheck is no longer the standard closing path (PROJECT_SPEC.md section 3.3), so
+// that rate rides as a small inline substat instead of an equal-size card, so it
+// stays accurate and visible without competing for attention with a number that's
+// usually 0%. (Scrap Rate/Cost were dropped from Reports entirely - scrap
+// essentially doesn't happen on this floor - see docs/PROJECT_SPEC_PHASE4.md.)
 function kpiTileWithSubstat(label, value, substatLabel, substatValue) {
   return `<div class="kpi-tile">
     <div class="kpi-label">${escapeHtml(label)}</div>
@@ -171,9 +172,8 @@ async function loadSummary(params) {
     kpiTile("Defects / 100 drawers", formatRate(kpis.defects_per_100)),
     kpiTile("Rejection rate", formatRate(kpis.rejection_rate)),
     kpiTile("First pass yield", formatRate(kpis.first_pass_yield)),
-    kpiTileWithSubstat("Rework rate", formatRate(kpis.rework_rate), "Scrap rate", formatRate(kpis.scrap_rate)),
+    kpiTile("Rework rate", formatRate(kpis.rework_rate)),
     kpiTile("Rework cost", formatCurrency(kpis.internal_rework_cost)),
-    kpiTile("Scrap cost", formatCurrency(kpis.internal_scrap_cost)),
     kpiTile("Total internal quality cost", formatCurrency(kpis.total_internal_quality_cost)),
     kpiTileWithSubstat(
       "% Resolved on the spot",

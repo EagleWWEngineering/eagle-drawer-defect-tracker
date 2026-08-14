@@ -146,7 +146,6 @@ def test_zero_drawers_inspected_returns_none_for_every_rate():
         defect_events=0,
         unique_drawers_rejected=0,
         drawers_reworked=0,
-        drawers_scrapped=0,
     )
     result = kpis.to_dict()
     for key in (
@@ -154,7 +153,6 @@ def test_zero_drawers_inspected_returns_none_for_every_rate():
         "rejection_rate",
         "first_pass_yield",
         "rework_rate",
-        "scrap_rate",
     ):
         assert result[key] is None
 
@@ -165,10 +163,8 @@ def test_kpi_formulas_match_spec():
         defect_events=30,
         unique_drawers_rejected=20,
         drawers_reworked=15,
-        drawers_scrapped=5,
     ).to_dict()
     assert kpis["defects_per_100"] == 15.0
     assert kpis["rejection_rate"] == 10.0
     assert kpis["first_pass_yield"] == 90.0
     assert kpis["rework_rate"] == 7.5
-    assert kpis["scrap_rate"] == 2.5

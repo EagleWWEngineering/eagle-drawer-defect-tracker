@@ -61,10 +61,10 @@ def test_reports_summary_includes_internal_cost_fields(client, master_data):
         "/api/v1/reports/summary", params={"start_date": "2026-07-24", "end_date": "2026-07-24"}
     )
     body = resp.json()
+    assert "internal_scrap_cost" not in body  # dropped entirely - see PHASE4 doc
     assert body["internal_rework_cost"] == 175.0
-    assert body["internal_scrap_cost"] == 70.0
-    assert body["total_internal_quality_cost"] == 245.0
-    assert body["quality_cost_per_drawer_inspected"] == 2.45
+    assert body["total_internal_quality_cost"] == 175.0  # rework only, no scrap
+    assert body["quality_cost_per_drawer_inspected"] == 1.75
 
 
 def test_reports_summary_zero_inspected_returns_null_cost_per_drawer(client):
@@ -191,8 +191,9 @@ def test_combined_internal_and_external_total_quality_cost(
     combined_total_quality_cost = (
         internal["total_internal_quality_cost"] + external["total_estimated_cost"]
     )
-    # 245 internal (5*35 + 2*35) + 200 external (2 pieces * $100)
-    assert combined_total_quality_cost == 445.0
+    # 175 internal (5*35 rework only - scrap dropped, see PHASE4 doc) + 200
+    # external (2 pieces * $100)
+    assert combined_total_quality_cost == 375.0
 
 
 # ---------------------------------------------------------------------------
@@ -214,10 +215,8 @@ def test_summary_cost_falls_back_to_defect_cases_with_no_daily_summary(client, m
     )
     body = resp.json()
     assert body["internal_rework_cost"] == 35.0  # 1 case * $35, not $0
-    assert body["internal_scrap_cost"] == 0.0
     assert body["cost_basis"] == "defect_cases"
     assert body["defect_case_rework_count"] == 1
-    assert body["defect_case_scrap_count"] == 0
 
 
 def test_summary_cost_blends_daily_summary_and_defect_cases_by_date(client, master_data):

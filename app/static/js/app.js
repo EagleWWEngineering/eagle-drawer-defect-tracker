@@ -54,39 +54,36 @@ function formatCurrency(value) {
   return `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-/** Human-readable explanation of which source(s) drove internal_rework_cost /
- * internal_scrap_cost on a KpiOut response (Phase 4 dual-source cost fix - see
+/** Human-readable explanation of which source(s) drove internal_rework_cost on a
+ * KpiOut response (Phase 4 dual-source cost fix - see
  * app/services/metrics_service.py:compute_internal_quality_cost), WITH the
- * reworked/scrapped drawer counts each source actually contributed - this is the
- * single source of truth for those counts (the per-card "(X drawers)" badge was
- * removed because it only ever showed the Daily Production Summary count, not the
+ * reworked drawer count each source actually contributed - this is the single
+ * source of truth for that count (the per-card "(X drawers)" badge was removed
+ * because it only ever showed the Daily Production Summary count, not the
  * defect-case-derived fallback that the dollar figure also includes whenever
  * cost_basis is "defect_cases" or "blended" - that mismatch is what produced a
- * non-zero dollar amount next to "(0 drawers)").
+ * non-zero dollar amount next to "(0 drawers)"). Scrap cost was dropped from this
+ * app entirely (docs/PROJECT_SPEC_PHASE4.md "Scrap removal").
  *
- * Takes the whole KpiOut-shaped object (kpis.drawers_reworked, kpis.drawers_scrapped,
- * kpis.defect_case_rework_count, kpis.defect_case_scrap_count, kpis.cost_basis). */
+ * Takes the whole KpiOut-shaped object (kpis.drawers_reworked,
+ * kpis.defect_case_rework_count, kpis.cost_basis). */
 function costBasisLabel(kpis) {
   const drawersReworked = kpis.drawers_reworked || 0;
-  const drawersScrapped = kpis.drawers_scrapped || 0;
   const caseReworked = kpis.defect_case_rework_count || 0;
-  const caseScrapped = kpis.defect_case_scrap_count || 0;
-  const caseCount = caseReworked + caseScrapped;
-  const caseBreakdown = `${caseReworked} reworked, ${caseScrapped} scrapped`;
 
   if (kpis.cost_basis === "defect_cases") {
-    return `Based on ${caseCount} defect case${caseCount === 1 ? "" : "s"} (${caseBreakdown}) — no Daily Production Summary recorded for this period.`;
+    return `Based on ${caseReworked} defect case${caseReworked === 1 ? "" : "s"} reworked — no Daily Production Summary recorded for this period.`;
   }
   if (kpis.cost_basis === "blended") {
     return (
-      `Based on Daily Production Summary (${drawersReworked} reworked, ${drawersScrapped} scrapped), ` +
-      `plus ${caseCount} defect case${caseCount === 1 ? "" : "s"} (${caseBreakdown}) on dates with no summary recorded.`
+      `Based on Daily Production Summary (${drawersReworked} reworked), ` +
+      `plus ${caseReworked} defect case${caseReworked === 1 ? "" : "s"} reworked on dates with no summary recorded.`
     );
   }
   if (kpis.cost_basis === "daily_summary") {
-    return `Based on Daily Production Summary — ${drawersReworked} reworked, ${drawersScrapped} scrapped.`;
+    return `Based on Daily Production Summary — ${drawersReworked} reworked.`;
   }
-  return "No rework or scrap recorded for this period.";
+  return "No rework recorded for this period.";
 }
 
 /** "5 minutes ago", "2 hours ago", "3 days ago" - for sync-status style displays. */

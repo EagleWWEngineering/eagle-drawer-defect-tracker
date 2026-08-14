@@ -301,8 +301,25 @@ class DailyProductionSummaryIn(BaseModel):
     drawers_inspected: int = Field(ge=0)
     drawers_rejected_unique: int = Field(ge=0)
     drawers_reworked: int = Field(ge=0)
-    drawers_scrapped: int = Field(ge=0)
+    # No longer a field on the Daily Summary form (scrap essentially doesn't happen
+    # on this floor - see docs/PROJECT_SPEC_PHASE4.md "Scrap removal"). Optional and
+    # defaulting to None (not 0) so upsert_daily_summary can tell "not provided by
+    # this caller" apart from "explicitly zero" and preserve whatever a legacy row
+    # already has instead of silently zeroing it. The MCP write tool and any direct
+    # API caller can still pass an explicit value exactly as before.
+    drawers_scrapped: int | None = Field(default=None, ge=0)
     notes: str | None = None
+
+
+class DailySummarySuggestionOut(BaseModel):
+    """Suggested "Unique Drawers Rejected"/"Drawers Reworked" values for the Daily
+    Summary form, computed from real DefectCase data - see
+    app/services/defect_service.py suggested_daily_counts()."""
+
+    production_date: dt.date
+    defect_case_count: int
+    suggested_drawers_rejected_unique: int
+    suggested_drawers_reworked: int
 
 
 class DailyProductionSummaryOut(BaseModel):
@@ -347,23 +364,23 @@ class KpiOut(BaseModel):
     defect_events: int
     unique_drawers_rejected: int
     drawers_reworked: int
-    drawers_scrapped: int
     defects_per_100: float | None
     rejection_rate: float | None
     first_pass_yield: float | None
     rework_rate: float | None
-    scrap_rate: float | None
     internal_rework_cost: float
-    internal_scrap_cost: float
     total_internal_quality_cost: float
     quality_cost_per_drawer_inspected: float | None
-    # Phase 4 cost fix: which source(s) actually drove internal_rework_cost /
-    # internal_scrap_cost above - "daily_summary", "defect_cases" (no summary
-    # existed for the period so cases were the only source), "blended" (some
-    # dates had a summary, some didn't), or "none" (no rework/scrap either way).
+    # Phase 4 cost fix: which source(s) actually drove internal_rework_cost above -
+    # "daily_summary", "defect_cases" (no summary existed for the period so cases
+    # were the only source), "blended" (some dates had a summary, some didn't), or
+    # "none" (no rework recorded either way). Scrap Rate / Internal Scrap Cost were
+    # dropped from this app entirely - see docs/PROJECT_SPEC_PHASE4.md
+    # "Scrap removal" - drawers_scrapped is no longer part of the KPI surface even
+    # though the underlying DailyProductionSummary.drawers_scrapped column and the
+    # Scrap disposition/status are both kept for backward compatibility.
     # See app/services/metrics_service.py:compute_internal_quality_cost.
     defect_case_rework_count: int
-    defect_case_scrap_count: int
     cost_basis: str
     # PROJECT_SPEC.md section 3.3 KPIs (60-second-fix fast paths). total_cases /
     # queued_rework_count are the respective denominators, exposed for transparency
@@ -388,7 +405,6 @@ class TrendPointOut(BaseModel):
     drawers_inspected: int
     unique_drawers_rejected: int
     internal_rework_cost: float = 0.0
-    internal_scrap_cost: float = 0.0
 
 
 class ReworkQueueItemOut(BaseModel):

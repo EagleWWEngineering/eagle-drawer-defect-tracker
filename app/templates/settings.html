@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Settings - Eagle Drawer Defect Tracker{% endblock %}
+{% block page_name %}settings{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Settings</h1>
+
+<section class="card">
+  <h2>This device</h2>
+  <p class="hint">Logging out here only ends the session on this device/browser -
+    every other device that's currently logged in stays logged in.</p>
+  <div class="btn-row">
+    <button type="button" id="logout-btn" class="secondary">Log out</button>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Log out everywhere</h2>
+  <p class="hint">Immediately ends every active session on every device, including
+    this one. Everyone (including you) will need to log in again. Re-enter the
+    current password to confirm.</p>
+  <form id="logout-everywhere-form">
+    <div class="field">
+      <label for="confirm-password">Current password</label>
+      <input type="password" id="confirm-password" name="password" autocomplete="current-password" required>
+    </div>
+    <div class="btn-row">
+      <button type="submit" id="logout-everywhere-btn" class="danger">Log out everywhere</button>
+    </div>
+  </form>
+</section>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("logout-btn").addEventListener("click", async () => {
+    try {
+      await Api.post("/api/v1/auth/logout", {});
+    } catch (err) {
+      // Even if the request fails, fall through to /login - the cookie is
+      // meaningless there either way.
+    }
+    window.location.href = "/login";
+  });
+
+  const form = document.getElementById("logout-everywhere-form");
+  const btn = document.getElementById("logout-everywhere-btn");
+  form.addEventListener(
+    "submit",
+    guardDoubleSubmit(btn, async (e) => {
+      e.preventDefault();
+      clearFormErrors(form);
+      if (!confirm("Log out every active session on every device? Everyone will need to log in again.")) return;
+      const password = document.getElementById("confirm-password").value;
+      try {
+        await Api.post("/api/v1/auth/logout-everywhere", { password });
+        window.location.href = "/login";
+      } catch (err) {
+        if (err instanceof ApiError && err.field) {
+          showFieldError(form, err.field, err.message);
+        } else {
+          showToast(err.message, "error");
+        }
+      }
+    })
+  );
+});
+</script>
+{% endblock %}

@@ -43,7 +43,6 @@ def _daily_totals(rows: list[DailyProductionSummary]) -> dict:
         "drawers_inspected": sum(r.drawers_inspected for r in rows),
         "drawers_rejected_unique": sum(r.drawers_rejected_unique for r in rows),
         "drawers_reworked": sum(r.drawers_reworked for r in rows),
-        "drawers_scrapped": sum(r.drawers_scrapped for r in rows),
     }
 
 
@@ -72,15 +71,15 @@ def _reached_in_rework_case_ids(db: Session, case_ids: list[int]) -> set[int]:
     return {row[0] for row in rows}
 
 
-def _fallback_case_counts(
+def _fallback_case_rework_count(
     items: list[tuple[DefectItem, DefectCase]], summary_rows: list[DailyProductionSummary]
-) -> tuple[int, int]:
-    """Defect-case-derived (reworked, scrapped) counts (Phase 4 cost fix), limited to
-    cases whose production_date has no DailyProductionSummary row at all - see
+) -> int:
+    """Defect-case-derived reworked count (Phase 4 cost fix), limited to cases whose
+    production_date has no DailyProductionSummary row at all - see
     metrics_service.compute_internal_quality_cost for why that's the fallback rule."""
     summary_dates = {r.production_date for r in summary_rows}
     fallback_cases = [c for c in _distinct_cases(items) if c.production_date not in summary_dates]
-    return metrics_service.defect_case_derived_rework_scrap_counts(
+    return metrics_service.defect_case_derived_rework_count(
         [(c.production_date, c.status, c.disposition) for c in fallback_cases]
     )
 
@@ -118,10 +117,9 @@ def get_summary(
     fallback_rate = settings_service.get_cost_per_drawer(db)
     cost_result = metrics_service.compute_internal_quality_cost(
         daily_summary_entries=[
-            (r.drawers_reworked, r.drawers_scrapped, r.cost_per_drawer_at_time)
-            for r in summary_rows
+            (r.drawers_reworked, r.cost_per_drawer_at_time) for r in summary_rows
         ],
-        fallback_case_counts=_fallback_case_counts(items, summary_rows),
+        fallback_case_rework_count=_fallback_case_rework_count(items, summary_rows),
         fallback_rate=fallback_rate,
         has_daily_summary_rows=bool(summary_rows),
     )
@@ -131,12 +129,9 @@ def get_summary(
         defect_events=defect_events,
         unique_drawers_rejected=totals["drawers_rejected_unique"],
         drawers_reworked=totals["drawers_reworked"],
-        drawers_scrapped=totals["drawers_scrapped"],
         internal_rework_cost=cost_result["internal_rework_cost"],
-        internal_scrap_cost=cost_result["internal_scrap_cost"],
     ).to_dict()
     kpis["defect_case_rework_count"] = cost_result["defect_case_rework_count"]
-    kpis["defect_case_scrap_count"] = cost_result["defect_case_scrap_count"]
     kpis["cost_basis"] = cost_result["cost_basis"]
 
     # PROJECT_SPEC.md section 3.3 KPIs (60-second-fix fast paths).
@@ -227,21 +222,19 @@ def get_trend(
     inspected_by_bucket: dict[str, int] = {}
     rejected_by_bucket: dict[str, int] = {}
     rework_cost_by_bucket: dict[str, float] = {}
-    scrap_cost_by_bucket: dict[str, float] = {}
     for row in summary_rows:
         label = metrics_service.trend_bucket_label(row.production_date, group_by)
         inspected_by_bucket[label] = inspected_by_bucket.get(label, 0) + row.drawers_inspected
         rejected_by_bucket[label] = rejected_by_bucket.get(label, 0) + row.drawers_rejected_unique
-        rework_cost, scrap_cost = metrics_service.sum_internal_quality_costs(
-            [(row.drawers_reworked, row.drawers_scrapped, row.cost_per_drawer_at_time)],
+        rework_cost = metrics_service.sum_internal_rework_cost(
+            [(row.drawers_reworked, row.cost_per_drawer_at_time)],
             fallback_rate=fallback_rate,
         )
         rework_cost_by_bucket[label] = rework_cost_by_bucket.get(label, 0.0) + rework_cost
-        scrap_cost_by_bucket[label] = scrap_cost_by_bucket.get(label, 0.0) + scrap_cost
 
-    # Phase 4 cost fix: add defect-case-derived rework/scrap cost for buckets whose
-    # cases fall on a production_date with no DailyProductionSummary row at all, so
-    # this chart can never disagree with /reports/summary over the same date range
+    # Phase 4 cost fix: add defect-case-derived rework cost for buckets whose cases
+    # fall on a production_date with no DailyProductionSummary row at all, so this
+    # chart can never disagree with /reports/summary over the same date range
     # (PROJECT_SPEC.md section 9: "chart totals must match the filtered record total").
     fallback_cases_by_bucket: dict[str, list[tuple[dt.date, str, str | None]]] = {}
     for case in _distinct_cases(items):
@@ -252,11 +245,8 @@ def get_trend(
             (case.production_date, case.status, case.disposition)
         )
     for label, case_tuples in fallback_cases_by_bucket.items():
-        reworked, scrapped = metrics_service.defect_case_derived_rework_scrap_counts(case_tuples)
+        reworked = metrics_service.defect_case_derived_rework_count(case_tuples)
         rework_cost_by_bucket[label] = rework_cost_by_bucket.get(label, 0.0) + reworked * float(
-            fallback_rate
-        )
-        scrap_cost_by_bucket[label] = scrap_cost_by_bucket.get(label, 0.0) + scrapped * float(
             fallback_rate
         )
 
@@ -268,7 +258,6 @@ def get_trend(
             drawers_inspected=inspected_by_bucket.get(label, 0),
             unique_drawers_rejected=rejected_by_bucket.get(label, 0),
             internal_rework_cost=round(rework_cost_by_bucket.get(label, 0.0), 2),
-            internal_scrap_cost=round(scrap_cost_by_bucket.get(label, 0.0), 2),
         )
         for label in all_labels
     ]

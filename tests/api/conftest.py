@@ -12,6 +12,7 @@ from app.database import Base
 from app.dependencies import get_db
 from app.main import app
 from app.seed_data import seed_master_data
+from app.services import auth_service
 
 
 @pytest.fixture()
@@ -49,6 +50,16 @@ def client():
     # lifespan events). Tests must stay isolated from the real database file.
     test_client = TestClient(app)
     test_client.testing_sessionmaker = TestingSession  # lets tests inspect DB rows directly
+
+    # This fixture is used by ~everything except the dedicated auth tests, which
+    # care about the login flow itself - so pre-authenticate here by creating a
+    # session row directly (bypassing the login form/credentials entirely) and
+    # attaching its cookie, the same way a browser would after a real login.
+    auth_db = TestingSession()
+    token = auth_service.create_session(auth_db)
+    auth_db.close()
+    test_client.cookies.set(auth_service.SESSION_COOKIE_NAME, token)
+
     try:
         yield test_client
     finally:

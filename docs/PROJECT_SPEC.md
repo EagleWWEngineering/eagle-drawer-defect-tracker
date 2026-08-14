@@ -233,11 +233,16 @@ Prompt: `weekly_quality_review`. Full setup in `docs/MCP_SETUP.md`.
 
 ## 8. Safety and reliability
 
-Binds to `127.0.0.1` only. No production auth in the MVP (any role selector is
-labeled a prototype). Soft delete only for defect cases. Every create/edit/status
-change/soft delete/export/master-data change/MCP write is audited. Photo uploads are
-validated by MIME type, extension, size, and filename safety. No customer PII or
-credentials are stored. All user text is HTML-escaped; all DB access is
+Runs on the shop's LAN (plain HTTP, no TLS) and is gated by a single shared
+login (Phase 5 addendum, `docs/PROJECT_SPEC_PHASE5.md`) — every route except the
+health check and static assets requires a valid session. There are no per-user
+accounts or roles in that login; the "Role (prototype)" selector in the header is
+a separate, unrelated, cosmetic label used only to tag the audit log, unauthenticated
+and never a security boundary. Soft delete only for defect cases. Every
+create/edit/status change/soft delete/export/master-data change/MCP write is
+audited. Photo uploads are validated by MIME type, extension, size, and filename
+safety. No customer PII is stored; the one shared login's password is stored only
+as a bcrypt hash, never plaintext. All user text is HTML-escaped; all DB access is
 parameterized through SQLAlchemy. A timestamped SQLite backup script uses the
 official online backup API. The app works fully offline after install.
 

@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Log in - Eagle Drawer Defect Tracker</title>
+  <link rel="stylesheet" href="/static/css/app.css?v={{ static_version('css/app.css') }}">
+  <style>
+    .login-shell {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+    .login-card { width: 100%; max-width: 380px; }
+  </style>
+</head>
+<body data-page="login">
+  <main id="main-content" class="login-shell">
+    <div class="card login-card">
+      <h1 class="page-title" style="margin-top:0;">Eagle Drawer Defect Tracker</h1>
+      <p class="hint">Sign in to continue. This is a shared login for the whole shop
+        floor — there are no separate per-person accounts.</p>
+      <form id="login-form">
+        <div class="field">
+          <label for="username">Username</label>
+          <input type="text" id="username" name="username" autocomplete="username" required autofocus>
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <input type="password" id="password" name="password" autocomplete="current-password" required>
+        </div>
+        <div class="btn-row">
+          <button type="submit" id="login-btn">Log in</button>
+        </div>
+      </form>
+    </div>
+  </main>
+  <div id="toast-region" role="status" aria-live="polite"></div>
+  <script src="/static/js/api.js?v={{ static_version('js/api.js') }}"></script>
+  <script src="/static/js/app.js?v={{ static_version('js/app.js') }}"></script>
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      const params = new URLSearchParams(window.location.search);
+      const next = params.get("next") || "/";
+      const form = document.getElementById("login-form");
+      const btn = document.getElementById("login-btn");
+      form.addEventListener(
+        "submit",
+        guardDoubleSubmit(btn, async (e) => {
+          e.preventDefault();
+          clearFormErrors(form);
+          const username = document.getElementById("username").value;
+          const password = document.getElementById("password").value;
+          try {
+            await Api.post("/api/v1/auth/login", { username, password });
+            window.location.href = next;
+          } catch (err) {
+            if (err instanceof ApiError && err.field) {
+              showFieldError(form, err.field, err.message);
+            } else {
+              showToast(err.message, "error");
+            }
+          }
+        })
+      );
+    });
+  </script>
+</body>
+</html>

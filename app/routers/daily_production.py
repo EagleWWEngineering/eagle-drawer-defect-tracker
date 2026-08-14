@@ -9,7 +9,11 @@ from sqlalchemy.orm import Session
 
 from app.dependencies import get_actor_role, get_db
 from app.models import DailyProductionSummary
-from app.schemas import DailyProductionSummaryIn, DailyProductionSummaryOut
+from app.schemas import (
+    DailyProductionSummaryIn,
+    DailyProductionSummaryOut,
+    DailySummarySuggestionOut,
+)
 from app.services import audit_service, defect_service
 
 router = APIRouter(prefix="/api/v1/daily-production", tags=["daily-production"])
@@ -44,6 +48,18 @@ def upsert_summary(
     out = DailyProductionSummaryOut.model_validate(row)
     out.warnings = warnings
     return out
+
+
+@router.get("/{production_date}/suggested-counts", response_model=DailySummarySuggestionOut)
+def get_suggested_counts(
+    production_date: dt.date, db: Session = Depends(get_db)
+) -> DailySummarySuggestionOut:
+    """Powers the Daily Summary form's auto-calculated suggestion and its
+    "Recalculate from defect cases" button (docs/PROJECT_SPEC_PHASE4.md
+    "Scrap removal" / auto-calculation). Read-only - never writes to
+    DailyProductionSummary, so calling it can never overwrite an already-saved
+    entry; the frontend decides when to apply the suggestion to the form fields."""
+    return DailySummarySuggestionOut(**defect_service.suggested_daily_counts(db, production_date))
 
 
 @router.get("", response_model=list[DailyProductionSummaryOut])

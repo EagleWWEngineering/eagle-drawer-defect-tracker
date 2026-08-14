@@ -35,6 +35,16 @@ logger = logging.getLogger("eagle_defect_tracker_mcp")
 
 DEFECT_API_URL = os.environ.get("DEFECT_API_URL", "http://127.0.0.1:8000").rstrip("/")
 
+# Phase 2: the REST API now sits behind the same single shared login the browser UI
+# uses (see app/auth_middleware.py) - this process is just another client of that
+# API (CLAUDE.md architecture rule), so it needs the same credentials to log in once
+# and reuse the resulting never-expiring session cookie for every subsequent call.
+# Deliberately separate from APP_PASSWORD_HASH in the FastAPI app's own .env (which
+# never contains the plaintext password) - these are supplied to this separate
+# process's own environment, e.g. via its MCP client config (see docs/MCP_SETUP.md).
+DEFECT_API_USERNAME = os.environ.get("DEFECT_API_USERNAME") or os.environ.get("APP_USERNAME")
+DEFECT_API_PASSWORD = os.environ.get("DEFECT_API_PASSWORD")
+
 SERVER_INSTRUCTIONS = """
 Eagle Drawer Defect Tracker - quality data for Eagle Woodworking's drawer-production
 pilot (drawers only; this is a process-improvement tool, not an employee-performance
@@ -89,8 +99,30 @@ def _extract_error_message(response: httpx.Response) -> str:
     return str(data)
 
 
+async def _login(client: httpx.AsyncClient) -> bool:
+    """Log in once and let httpx's client-level cookie jar carry the resulting
+    never-expiring session cookie on every later request. Returns False (rather
+    than raising) when no credentials are configured or the API can't be reached,
+    so the caller can produce one clear, actionable error instead of two."""
+    if not DEFECT_API_USERNAME or not DEFECT_API_PASSWORD:
+        return False
+    try:
+        response = await client.post(
+            "/api/v1/auth/login",
+            json={"username": DEFECT_API_USERNAME, "password": DEFECT_API_PASSWORD},
+        )
+    except (httpx.ConnectError, httpx.TimeoutException):
+        return False
+    return response.status_code < 400
+
+
 async def _request(
-    method: str, path: str, *, params: dict | None = None, json_body: dict | None = None
+    method: str,
+    path: str,
+    *,
+    params: dict | None = None,
+    json_body: dict | None = None,
+    _retried_after_login: bool = False,
 ) -> Any:
     client = _get_client()
     clean_params = {k: v for k, v in (params or {}).items() if v is not None}
@@ -106,6 +138,20 @@ async def _request(
         raise DefectTrackerApiError(
             f"Timed out waiting for the Eagle Drawer Defect Tracker API at {DEFECT_API_URL}."
         ) from exc
+
+    # Phase 2: the API is now behind the shared login (app/auth_middleware.py). Log
+    # in once (if credentials are configured) and retry the same call exactly once -
+    # every later call reuses the session cookie httpx already keeps for this client.
+    if response.status_code == 401 and not _retried_after_login:
+        if await _login(client):
+            return await _request(
+                method, path, params=params, json_body=json_body, _retried_after_login=True
+            )
+        raise DefectTrackerApiError(
+            "Login required to reach the Eagle Drawer Defect Tracker API. Set "
+            "DEFECT_API_USERNAME and DEFECT_API_PASSWORD in this MCP server's "
+            "environment (see docs/MCP_SETUP.md)."
+        )
 
     if response.status_code >= 400:
         raise DefectTrackerApiError(_extract_error_message(response))

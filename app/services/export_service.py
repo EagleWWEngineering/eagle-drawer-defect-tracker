@@ -26,10 +26,10 @@ CSV_COLUMNS = [
     "corrective_action",
     "notes",
     # Phase 4: same-day cost context, joined by production_date. Blank if that
-    # date has no Daily Production Summary saved.
+    # date has no Daily Production Summary saved. Scrap cost was dropped from this
+    # app entirely (docs/PROJECT_SPEC_PHASE4.md "Scrap removal") - no scrap column.
     "day_cost_per_drawer",
     "day_internal_rework_cost",
-    "day_internal_scrap_cost",
 ]
 
 
@@ -39,9 +39,9 @@ def build_defect_items_csv(
     daily_cost_by_date: dict[dt.date, dict] | None = None,
 ) -> str:
     """daily_cost_by_date: production_date -> {"rate": Decimal|float, "rework_cost":
-    float, "scrap_cost": float}, one entry per date (already summed across shifts
-    if a date has more than one). Missing/empty for a date with no Daily Production
-    Summary saved yet - those context columns are left blank, not zero.
+    float}, one entry per date (already summed across shifts if a date has more
+    than one). Missing/empty for a date with no Daily Production Summary saved yet
+    - those context columns are left blank, not zero.
     """
     daily_cost_by_date = daily_cost_by_date or {}
     buffer = io.StringIO()
@@ -52,9 +52,8 @@ def build_defect_items_csv(
         if day_cost is not None:
             day_cost_per_drawer = str(day_cost["rate"])
             day_internal_rework_cost = str(day_cost["rework_cost"])
-            day_internal_scrap_cost = str(day_cost["scrap_cost"])
         else:
-            day_cost_per_drawer = day_internal_rework_cost = day_internal_scrap_cost = ""
+            day_cost_per_drawer = day_internal_rework_cost = ""
 
         writer.writerow(
             [
@@ -76,7 +75,6 @@ def build_defect_items_csv(
                 (case.notes or "").replace("\n", " "),
                 day_cost_per_drawer,
                 day_internal_rework_cost,
-                day_internal_scrap_cost,
             ]
         )
     return buffer.getvalue()
