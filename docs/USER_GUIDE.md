@@ -18,20 +18,30 @@ section 8).
    drawers inspected, unique drawers rejected, drawers reworked, drawers scrapped.
    This is the denominator behind every rate on the Dashboard — do it even on a day
    with zero defects.
-2. **Log each defect as you find it** on the **New Defect** screen (aim for
-   30–45 seconds per entry):
-   - Work order number (required — this is the only required ID).
-   - Found station (where you found it) and, if you suspect where it came from,
-     Possible source station — this is a hypothesis, not a confirmed cause.
-   - Priority (Urgent/High/Normal) — always shown with a text label, never color alone.
-   - One or more defect categories. If one drawer has three sanding scratches, that's
-     still one "Sanding / Surface" row — just leave the quantity at 1. If three
-     separate drawers all have the same sanding defect, set the quantity to 3 on that
-     one row instead of adding three rows.
-   - A photo is optional and can be attached right after saving.
-3. You'll see a confirmation with the case number (e.g. `DF-20260724-0001`) —
-   write that on the paper log if you're using one, or read it back to whoever is
-   collecting paper logs that day.
+2. **Log each defect as you find it** on the **New Defect** screen (target
+   15–20 seconds per entry — everything is tap buttons, not dropdowns):
+   - Work order number (required — this is the only required ID). Start typing
+     and pick from the last 20 work orders if it's one you've already logged
+     against; Found Station pre-fills from that work order's last case.
+   - Tap the defect category button(s) that apply — multiple is fine, one drawer
+     with three sanding scratches is still one "Sanding / Surface" tap.
+   - Tap Found Station (where you found it) from the common row, or "More
+     stations..." for the full list. Possible Source Station works the same way
+     and is optional — it's a hypothesis, not a confirmed cause.
+   - Priority defaults to Normal; only tap Urgent or High to override.
+   - Disposition (Rework/Scrap/Hold/Use As Is) is optional at entry time — leave
+     it blank if you haven't decided yet.
+   - Affected drawer quantity defaults to 1 with a +/− stepper.
+   - Detected time is a simple `h:mm` field with AM/PM buttons, defaulting to now.
+   - Root cause, corrective action, and repair action are **not** on this form —
+     fill those in later from the **Rework Queue**, once there's actually
+     something to say about them.
+   - A photo is optional; attach it from the "Logged this session" list below the
+     form after saving, without leaving this screen.
+3. After saving you'll see a brief green "Saved: DF-20260724-0001" confirmation.
+   The form stays put with the work order number and production date kept (so the
+   next entry on the same order/day is a single tap away) and everything else
+   cleared, ready for the next entry.
 4. **Re-inspection of an unresolved defect** (same drawer, same problem, still not
    fixed): don't create a new entry. Find the existing case (Reports → work order
    search, or the Rework Queue) and update its status/notes there instead.
@@ -54,6 +64,10 @@ each priority):
   Use As Is → Closed – Use As Is).
 - Reopening a case that's already closed requires a note explaining why — this is
   intentional, so there's always a record of why a "done" case came back.
+- Root cause, corrective action, and repair action live here too, as their own text
+  fields per case. They save independently of the status dropdown, so you can jot
+  down a root cause on a case that's still Open without having to pick a status
+  change at the same time.
 
 ## Reviewing quality data (Manufacturing Engineer)
 

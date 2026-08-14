@@ -44,6 +44,7 @@
 <section class="card">
   <h2>Quality Cost</h2>
   <div id="quality-cost-kpis" class="kpi-grid"><p>Loading...</p></div>
+  <p id="quality-cost-basis" class="cost-basis-note"></p>
 </section>
 
 <section class="card">
@@ -133,6 +134,18 @@ function kpiTile(label, value) {
   return `<div class="kpi-tile"><div class="kpi-label">${escapeHtml(label)}</div><div class="kpi-value">${value}</div></div>`;
 }
 
+// Scrap is genuinely rare on the shop floor (PROJECT_SPEC.md section 3.2), so its
+// rate rides as a small inline stat inside the Rework Rate tile instead of an
+// equal-size card of its own - still accurate and visible, just not competing for
+// attention with a number that's usually 0%.
+function kpiTileWithSubstat(label, value, substatLabel, substatValue) {
+  return `<div class="kpi-tile">
+    <div class="kpi-label">${escapeHtml(label)}</div>
+    <div class="kpi-value">${value}</div>
+    <div class="kpi-substat">${escapeHtml(substatLabel)}: ${substatValue}</div>
+  </div>`;
+}
+
 function renderKpis(container, kpis) {
   container.innerHTML = [
     kpiTile("Drawers inspected", kpis.drawers_inspected),
@@ -141,8 +154,7 @@ function renderKpis(container, kpis) {
     kpiTile("Defects / 100 drawers", formatRate(kpis.defects_per_100)),
     kpiTile("Rejection rate", formatRate(kpis.rejection_rate)),
     kpiTile("First pass yield", formatRate(kpis.first_pass_yield)),
-    kpiTile("Rework rate", formatRate(kpis.rework_rate)),
-    kpiTile("Scrap rate", formatRate(kpis.scrap_rate)),
+    kpiTileWithSubstat("Rework rate", formatRate(kpis.rework_rate), "Scrap rate", formatRate(kpis.scrap_rate)),
   ].join("");
 }
 
@@ -221,6 +233,7 @@ async function loadQualityCost(range) {
     kpiTile("Total internal quality cost", formatCurrency(internal.total_internal_quality_cost)),
     kpiTile("Total quality cost (internal + external)", formatCurrency(combinedTotal)),
   ].join("");
+  document.getElementById("quality-cost-basis").textContent = costBasisLabel(internal);
 }
 
 async function loadPeriod() {
@@ -246,7 +259,7 @@ async function loadReworkPreview() {
   tbody.innerHTML = rows
     .map(
       (r) => `<tr>
-        <td><a href="/reports?work_order_number=${encodeURIComponent(r.work_order_number)}">${escapeHtml(r.case_number)}</a></td>
+        <td><a href="#" data-case="${r.id}">${escapeHtml(r.case_number)}</a></td>
         <td>${escapeHtml(r.work_order_number)}</td>
         <td>${priorityBadge(r.priority)}</td>
         <td>${statusBadge(r.status)}</td>
@@ -254,6 +267,7 @@ async function loadReworkPreview() {
       </tr>`
     )
     .join("") || `<tr><td colspan="5">Nothing in the rework queue right now.</td></tr>`;
+  wireCaseLinks(tbody);
 }
 
 async function populateMasterDataFilters() {

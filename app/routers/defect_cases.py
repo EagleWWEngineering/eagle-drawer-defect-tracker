@@ -20,12 +20,15 @@ from app.dependencies import get_actor_role, get_db
 from app.errors import ValidationError
 from app.models import DefectCase, DefectItem, DefectPhoto
 from app.schemas import (
+    BulkActionOut,
+    BulkIdsIn,
     DefectCaseCreate,
     DefectCaseListOut,
     DefectCaseOut,
     DefectCaseStatusChange,
     DefectCaseUpdate,
     DefectPhotoOut,
+    WorkOrderLastStationOut,
     defect_case_to_out,
 )
 from app.services import audit_service, defect_service
@@ -63,6 +66,7 @@ def create_case(
         priority=payload.priority,
         items=[i.model_dump() for i in payload.items],
         disposition=payload.disposition,
+        resolved_on_the_spot=payload.resolved_on_the_spot,
         repair_action=payload.repair_action,
         root_cause=payload.root_cause,
         corrective_action=payload.corrective_action,
@@ -132,6 +136,35 @@ def list_cases(
         .all()
     )
     return DefectCaseListOut(total=total, cases=[defect_case_to_out(c) for c in cases])
+
+
+@router.get("/work-orders/recent", response_model=list[str])
+def list_recent_work_orders(
+    db: Session = Depends(get_db),
+    limit: int = Query(default=20, ge=1, le=100),
+) -> list[str]:
+    """Most-recently-used work order numbers, for the New Defect form's autocomplete
+    (entry-speed fix - see app/templates/defect_entry.html)."""
+    return defect_service.list_recent_work_order_numbers(db, limit=limit)
+
+
+@router.get(
+    "/work-orders/{work_order_number}/last-station", response_model=WorkOrderLastStationOut | None
+)
+def get_last_station_for_work_order(
+    work_order_number: str, db: Session = Depends(get_db)
+) -> WorkOrderLastStationOut | None:
+    """Found Station to pre-fill when the operator re-types a work order that
+    already has a case logged against it. Returns null (not a 404) when the work
+    order has no prior case - "nothing to pre-fill with" isn't an error."""
+    case = defect_service.get_last_case_for_work_order(db, work_order_number)
+    if case is None:
+        return None
+    return WorkOrderLastStationOut(
+        work_order_number=case.work_order_number,
+        found_station_id=case.found_station_id,
+        found_station_name=case.found_station.name,
+    )
 
 
 @router.get("/by-number/{case_number}", response_model=DefectCaseOut)
@@ -244,6 +277,42 @@ def soft_delete_case(
         entity_id=case.case_number,
     )
     return defect_case_to_out(deleted)
+
+
+@router.post("/bulk-delete", response_model=BulkActionOut)
+def bulk_delete_cases(
+    payload: BulkIdsIn,
+    db: Session = Depends(get_db),
+    actor_role: str = Depends(get_actor_role),
+) -> BulkActionOut:
+    cases = defect_service.bulk_soft_delete_cases(db, payload.ids)
+    for case in cases:
+        audit_service.record(
+            db,
+            actor_role=actor_role,
+            action="soft_delete",
+            entity_type="DefectCase",
+            entity_id=case.case_number,
+        )
+    return BulkActionOut(count=len(cases), ids=[c.id for c in cases])
+
+
+@router.post("/bulk-restore", response_model=BulkActionOut)
+def bulk_restore_cases(
+    payload: BulkIdsIn,
+    db: Session = Depends(get_db),
+    actor_role: str = Depends(get_actor_role),
+) -> BulkActionOut:
+    cases = defect_service.bulk_restore_cases(db, payload.ids)
+    for case in cases:
+        audit_service.record(
+            db,
+            actor_role=actor_role,
+            action="restore",
+            entity_type="DefectCase",
+            entity_id=case.case_number,
+        )
+    return BulkActionOut(count=len(cases), ids=[c.id for c in cases])
 
 
 @router.post("/{case_id}/photos", response_model=DefectPhotoOut)

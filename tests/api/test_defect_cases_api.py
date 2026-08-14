@@ -112,10 +112,14 @@ def test_update_status_writes_status_history_and_audit(client, master_data):
 
 
 def test_invalid_transition_returns_400_with_field_error(client, master_data):
+    # "Closed - Repaired" is now reachable directly from Open (PROJECT_SPEC.md
+    # section 3.3 - Close Directly, requires a note instead of being rejected).
+    # "Ready for QC Recheck" is not a direct-close target and not in
+    # STATUS_TRANSITIONS for Open, so it's still a genuinely invalid transition.
     case = _create_case(client, master_data).json()
     resp = client.post(
         f"/api/v1/defect-cases/{case['id']}/status",
-        json={"new_status": "Closed - Repaired"},
+        json={"new_status": "Ready for QC Recheck"},
     )
     assert resp.status_code == 400
     assert resp.json()["error"]["field"] == "new_status"
@@ -137,6 +141,63 @@ def test_soft_delete_hides_from_normal_queries_but_preserves_record(client, mast
         "/api/v1/defect-cases", params={"work_order_number": "WO-5001", "include_deleted": True}
     )
     assert include_resp.json()["total"] == 1
+
+
+def test_bulk_delete_and_restore_defect_cases(client, master_data):
+    case1 = _create_case(client, master_data, work_order_number="WO-BULK-1").json()
+    case2 = _create_case(client, master_data, work_order_number="WO-BULK-2").json()
+    case3 = _create_case(client, master_data, work_order_number="WO-BULK-3").json()
+
+    resp = client.post("/api/v1/defect-cases/bulk-delete", json={"ids": [case1["id"], case2["id"]]})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["count"] == 2
+    assert sorted(body["ids"]) == sorted([case1["id"], case2["id"]])
+
+    assert client.get(f"/api/v1/defect-cases/{case1['id']}").status_code == 404
+    assert client.get(f"/api/v1/defect-cases/{case2['id']}").status_code == 404
+    assert client.get(f"/api/v1/defect-cases/{case3['id']}").status_code == 200
+
+    include_resp = client.get(
+        "/api/v1/defect-cases", params={"include_deleted": True, "page_size": 500}
+    )
+    deleted_ids = {c["id"] for c in include_resp.json()["cases"] if c["is_deleted"]}
+    assert deleted_ids == {case1["id"], case2["id"]}
+
+    restore_resp = client.post("/api/v1/defect-cases/bulk-restore", json={"ids": [case1["id"]]})
+    assert restore_resp.status_code == 200
+    restore_body = restore_resp.json()
+    assert restore_body["count"] == 1
+    assert restore_body["ids"] == [case1["id"]]
+
+    assert client.get(f"/api/v1/defect-cases/{case1['id']}").status_code == 200
+    assert client.get(f"/api/v1/defect-cases/{case2['id']}").status_code == 404
+
+
+def test_bulk_delete_skips_unknown_and_already_deleted_ids(client, master_data):
+    case = _create_case(client, master_data, work_order_number="WO-BULK-4").json()
+
+    resp = client.post("/api/v1/defect-cases/bulk-delete", json={"ids": [case["id"], 999999]})
+    assert resp.status_code == 200
+    assert resp.json() == {"count": 1, "ids": [case["id"]]}
+
+    # Deleting an already-deleted case again is a no-op, not an error.
+    resp2 = client.post("/api/v1/defect-cases/bulk-delete", json={"ids": [case["id"]]})
+    assert resp2.status_code == 200
+    assert resp2.json() == {"count": 0, "ids": []}
+
+
+def test_bulk_restore_skips_ids_that_are_not_currently_deleted(client, master_data):
+    case = _create_case(client, master_data, work_order_number="WO-BULK-5").json()
+
+    resp = client.post("/api/v1/defect-cases/bulk-restore", json={"ids": [case["id"]]})
+    assert resp.status_code == 200
+    assert resp.json() == {"count": 0, "ids": []}
+
+
+def test_bulk_delete_rejects_empty_ids(client, master_data):
+    resp = client.post("/api/v1/defect-cases/bulk-delete", json={"ids": []})
+    assert resp.status_code == 422
 
 
 def test_duplicate_category_in_same_request_merges_not_double_counted(client, master_data):
@@ -182,6 +243,55 @@ def test_unsafe_file_type_upload_is_rejected(client, master_data):
     )
     assert resp.status_code == 400
     assert resp.json()["error"]["field"] == "file"
+
+
+def test_recent_work_orders_returns_most_recently_used_first(client, master_data):
+    _create_case(
+        client, master_data, work_order_number="WO-OLD", detected_at="2026-07-24T08:00:00Z"
+    )
+    _create_case(
+        client, master_data, work_order_number="WO-NEW", detected_at="2026-07-24T16:00:00Z"
+    )
+
+    resp = client.get("/api/v1/defect-cases/work-orders/recent")
+    assert resp.status_code == 200
+    work_orders = resp.json()
+    assert work_orders.index("WO-NEW") < work_orders.index("WO-OLD")
+
+
+def test_recent_work_orders_respects_limit(client, master_data):
+    for i in range(5):
+        _create_case(client, master_data, work_order_number=f"WO-LIMIT-{i}")
+    resp = client.get("/api/v1/defect-cases/work-orders/recent", params={"limit": 2})
+    assert len(resp.json()) == 2
+
+
+def test_last_station_for_work_order_prefills_from_most_recent_case(client, master_data):
+    _create_case(
+        client,
+        master_data,
+        work_order_number="WO-STATION",
+        found_station_id=master_data["stations"]["Dado"],
+        detected_at="2026-07-24T08:00:00Z",
+    )
+    _create_case(
+        client,
+        master_data,
+        work_order_number="WO-STATION",
+        found_station_id=master_data["stations"]["Assembly"],
+        detected_at="2026-07-24T16:00:00Z",
+    )
+
+    resp = client.get("/api/v1/defect-cases/work-orders/WO-STATION/last-station")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["found_station_name"] == "Assembly"
+
+
+def test_last_station_for_unknown_work_order_returns_null(client, master_data):
+    resp = client.get("/api/v1/defect-cases/work-orders/WO-NEVER-SEEN/last-station")
+    assert resp.status_code == 200
+    assert resp.json() is None
 
 
 def test_valid_photo_upload_succeeds(client, master_data, tmp_path, monkeypatch):

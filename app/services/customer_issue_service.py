@@ -182,6 +182,39 @@ def soft_delete_issue(db: Session, issue: CustomerIssue) -> CustomerIssue:
     return issue
 
 
+def bulk_soft_delete_issues(db: Session, ids: list[int]) -> list[CustomerIssue]:
+    """Soft-delete every not-already-deleted issue in `ids`. IDs that don't exist
+    or are already deleted are silently skipped - the caller only gets back the
+    issues it actually changed."""
+    issues = (
+        db.query(CustomerIssue)
+        .filter(CustomerIssue.id.in_(ids), CustomerIssue.is_deleted.is_(False))
+        .all()
+    )
+    for issue in issues:
+        issue.is_deleted = True
+    db.commit()
+    for issue in issues:
+        db.refresh(issue)
+    return issues
+
+
+def bulk_restore_issues(db: Session, ids: list[int]) -> list[CustomerIssue]:
+    """Restore every currently-deleted issue in `ids`. Same skip-silently rule as
+    bulk_soft_delete_issues for IDs that don't exist or aren't deleted."""
+    issues = (
+        db.query(CustomerIssue)
+        .filter(CustomerIssue.id.in_(ids), CustomerIssue.is_deleted.is_(True))
+        .all()
+    )
+    for issue in issues:
+        issue.is_deleted = False
+    db.commit()
+    for issue in issues:
+        db.refresh(issue)
+    return issues
+
+
 def compute_summary(issues: list[CustomerIssue]) -> dict:
     """Total issues, total pieces, total estimated cost for a (pre-filtered) set."""
     total_issues = len(issues)

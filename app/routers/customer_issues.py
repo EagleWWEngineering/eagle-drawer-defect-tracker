@@ -17,6 +17,8 @@ from app.dependencies import get_actor_role, get_db
 from app.errors import NotFoundError
 from app.models import CustomerIssue, CustomerIssueCategory, DailyProductionSummary
 from app.schemas import (
+    BulkActionOut,
+    BulkIdsIn,
     CustomerIssueCategoryOut,
     CustomerIssueCreate,
     CustomerIssueListOut,
@@ -320,6 +322,42 @@ def soft_delete_issue(
         entity_id=issue.issue_number,
     )
     return customer_issue_to_out(deleted)
+
+
+@router.post("/bulk-delete", response_model=BulkActionOut)
+def bulk_delete_issues(
+    payload: BulkIdsIn,
+    db: Session = Depends(get_db),
+    actor_role: str = Depends(get_actor_role),
+) -> BulkActionOut:
+    issues = customer_issue_service.bulk_soft_delete_issues(db, payload.ids)
+    for issue in issues:
+        audit_service.record(
+            db,
+            actor_role=actor_role,
+            action="soft_delete",
+            entity_type="CustomerIssue",
+            entity_id=issue.issue_number,
+        )
+    return BulkActionOut(count=len(issues), ids=[i.id for i in issues])
+
+
+@router.post("/bulk-restore", response_model=BulkActionOut)
+def bulk_restore_issues(
+    payload: BulkIdsIn,
+    db: Session = Depends(get_db),
+    actor_role: str = Depends(get_actor_role),
+) -> BulkActionOut:
+    issues = customer_issue_service.bulk_restore_issues(db, payload.ids)
+    for issue in issues:
+        audit_service.record(
+            db,
+            actor_role=actor_role,
+            action="restore",
+            entity_type="CustomerIssue",
+            entity_id=issue.issue_number,
+        )
+    return BulkActionOut(count=len(issues), ids=[i.id for i in issues])
 
 
 @export_router.get("/customer-issues.csv")

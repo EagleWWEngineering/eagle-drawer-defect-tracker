@@ -401,4 +401,41 @@ async def test_run_sync_uses_last_successful_sync_date_when_available(db_session
     _mock_sync(monkeypatch, handler2)
     await sync_service.run_sync(db_session)  # no explicit `since` this time
 
-    assert captured["since"] == first_log.sync_completed_at.date().isoformat()
+    expected = first_log.sync_completed_at.date() - dt.timedelta(
+        days=sync_service.SINCE_LOOKBACK_BUFFER_DAYS
+    )
+    assert captured["since"] == expected.isoformat()
+
+
+async def test_run_sync_default_since_looks_back_past_last_success_date(db_session, monkeypatch):
+    """A brief that classifies an issue a day or two after it was received (see
+    SINCE_LOOKBACK_BUFFER_DAYS) must not be permanently skipped just because an
+    earlier, empty-result sync's completion date already moved the cursor past
+    the day that issue is tagged with."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True, "count": 0, "issues": []})
+
+    _mock_sync(monkeypatch, handler)
+    first_log = await sync_service.run_sync(db_session, since=dt.date(2026, 7, 28))
+    assert first_log.status == "success"
+
+    captured = {}
+
+    def handler2(request: httpx.Request) -> httpx.Response:
+        captured["since"] = request.url.params["since"]
+        return httpx.Response(200, json={"ok": True, "count": 0, "issues": []})
+
+    _mock_sync(monkeypatch, handler2)
+    await sync_service.run_sync(db_session)  # no explicit `since`
+
+    # sync_completed_at is stamped with the real clock at run time, not with the
+    # `since` passed above - it has no bearing on the next default `since`. What
+    # must hold is the buffer invariant itself: the next default `since` sits
+    # strictly before (i.e. "looks back past") the prior sync's completion date.
+    since_used = dt.date.fromisoformat(captured["since"])
+    expected = first_log.sync_completed_at.date() - dt.timedelta(
+        days=sync_service.SINCE_LOOKBACK_BUFFER_DAYS
+    )
+    assert since_used == expected
+    assert since_used < first_log.sync_completed_at.date()

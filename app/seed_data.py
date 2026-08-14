@@ -17,10 +17,11 @@ COST_PER_DRAWER_SETTING_KEY = "cost_per_drawer"
 
 STATIONS: list[str] = [
     "Ripping & Picking",
-    "Cross Cut",
+    "Upcut",
     "Dovetail Machine",
     "Dado",
     "Assembly",
+    "Bottom Panel",
     "Putty",
     "Side Sanding",
     "Top Sanding",
@@ -32,6 +33,11 @@ STATIONS: list[str] = [
     "Notch & Bore",
     "QC / Sorting / Shipping",
 ]
+
+# Stations seeded under an old name that's since been corrected. Renamed IN PLACE
+# (never delete+recreate) so the Station keeps its id - any existing DefectCase/
+# CustomerIssue row referencing it by station_id is unaffected by the rename.
+STATION_RENAMES: dict[str, str] = {"Cross Cut": "Upcut"}
 
 DEFECT_CATEGORIES: list[str] = [
     "Bad Wood / Material",
@@ -90,8 +96,22 @@ CUSTOMER_ISSUE_SOURCE_TYPES: list[str] = ["Manufacturing", "Shipping Damage"]
 CUSTOMER_ISSUE_STATUSES: list[str] = ["Open", "Ignored", "Linked"]
 
 
+def _apply_station_renames(db: Session) -> None:
+    """Rename a station in place wherever an old seeded name is still in the
+    database (idempotent - a no-op once the rename has happened once)."""
+    for old_name, new_name in STATION_RENAMES.items():
+        old = db.query(Station).filter(Station.name == old_name).first()
+        if old is None:
+            continue
+        if db.query(Station).filter(Station.name == new_name).first() is not None:
+            continue  # new name already exists (e.g. added by hand) - don't clobber it
+        old.name = new_name
+
+
 def seed_master_data(db: Session) -> None:
     """Insert baseline stations/categories if they don't already exist (idempotent)."""
+    _apply_station_renames(db)
+
     existing_stations = {s.name for s in db.query(Station).all()}
     for order, name in enumerate(STATIONS, start=1):
         if name not in existing_stations:

@@ -55,6 +55,7 @@
 <section class="card">
   <h2>Summary</h2>
   <div id="summary-kpis" class="kpi-grid"></div>
+  <p id="summary-cost-basis" class="cost-basis-note"></p>
 </section>
 
 <section class="card">
@@ -106,7 +107,10 @@
   <div class="table-scroll">
     <table id="records-table">
       <thead>
-        <tr><th>Case</th><th>Date</th><th>Work order</th><th>Categories</th><th>Priority</th><th>Status</th><th>Disposition</th></tr>
+        <tr>
+          <th class="row-check-header"><input type="checkbox" id="records-select-all" aria-label="Select all records"></th>
+          <th>Case</th><th>Date</th><th>Work order</th><th>Categories</th><th>Priority</th><th>Status</th><th>Disposition</th>
+        </tr>
       </thead>
       <tbody></tbody>
     </table>
@@ -118,6 +122,7 @@
 <script>
 let currentDrilldownLabel = null;
 let currentGroupBy = "category";
+let recordsBulkSelect;
 
 function currentFilters() {
   const form = document.getElementById("filter-form");
@@ -129,6 +134,18 @@ function currentFilters() {
 
 function kpiTile(label, value) {
   return `<div class="kpi-tile"><div class="kpi-label">${escapeHtml(label)}</div><div class="kpi-value">${value}</div></div>`;
+}
+
+// Scrap is genuinely rare (PROJECT_SPEC.md section 3.2) and recheck is no longer
+// the standard closing path (section 3.3) - both rates ride as small inline
+// substats instead of equal-size cards, so they stay accurate and visible without
+// competing for attention with numbers that are usually 0%.
+function kpiTileWithSubstat(label, value, substatLabel, substatValue) {
+  return `<div class="kpi-tile">
+    <div class="kpi-label">${escapeHtml(label)}</div>
+    <div class="kpi-value">${value}</div>
+    <div class="kpi-substat">${escapeHtml(substatLabel)}: ${substatValue}</div>
+  </div>`;
 }
 
 async function populateMasterDataFilters() {
@@ -154,12 +171,18 @@ async function loadSummary(params) {
     kpiTile("Defects / 100 drawers", formatRate(kpis.defects_per_100)),
     kpiTile("Rejection rate", formatRate(kpis.rejection_rate)),
     kpiTile("First pass yield", formatRate(kpis.first_pass_yield)),
-    kpiTile("Rework rate", formatRate(kpis.rework_rate)),
-    kpiTile("Scrap rate", formatRate(kpis.scrap_rate)),
+    kpiTileWithSubstat("Rework rate", formatRate(kpis.rework_rate), "Scrap rate", formatRate(kpis.scrap_rate)),
     kpiTile("Rework cost", formatCurrency(kpis.internal_rework_cost)),
     kpiTile("Scrap cost", formatCurrency(kpis.internal_scrap_cost)),
     kpiTile("Total internal quality cost", formatCurrency(kpis.total_internal_quality_cost)),
+    kpiTileWithSubstat(
+      "% Resolved on the spot",
+      formatRate(kpis.pct_resolved_on_the_spot),
+      "Queued rework closed w/o recheck",
+      formatRate(kpis.pct_queued_rework_closed_without_recheck)
+    ),
   ].join("");
+  document.getElementById("summary-cost-basis").textContent = costBasisLabel(kpis);
 }
 
 async function loadPareto(params) {
@@ -204,6 +227,7 @@ async function loadRecords(params) {
     result.cases
       .map(
         (c) => `<tr>
+          <td class="row-check-cell"><input type="checkbox" class="row-check" data-id="${c.id}" aria-label="Select ${escapeHtml(c.case_number)}"></td>
           <td><a href="#" data-case="${c.id}">${escapeHtml(c.case_number)}</a></td>
           <td>${c.production_date}</td>
           <td>${escapeHtml(c.work_order_number)}</td>
@@ -213,7 +237,9 @@ async function loadRecords(params) {
           <td>${escapeHtml(c.disposition || "")}</td>
         </tr>`
       )
-      .join("") || `<tr><td colspan="7">No records match these filters.</td></tr>`;
+      .join("") || `<tr><td colspan="8">No records match these filters.</td></tr>`;
+  recordsBulkSelect.refresh();
+  wireCaseLinks(tbody);
 }
 
 function updateCsvLink(params) {
@@ -242,6 +268,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (urlParams.get("work_order_number")) {
     document.getElementById("f-work-order").value = urlParams.get("work_order_number");
   }
+
+  recordsBulkSelect = initBulkSelect({
+    tableBodySelector: "#records-table tbody",
+    selectAllId: "records-select-all",
+    entityLabel: "case",
+    onDelete: (ids) => Api.bulkDeleteDefectCases(ids),
+    onDeleted: () => loadRecords(currentFilters()),
+  });
 
   try {
     await populateMasterDataFilters();

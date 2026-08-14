@@ -38,6 +38,26 @@
 
   <div id="toast-region" role="status" aria-live="polite"></div>
 
+  <div id="bulk-action-bar" class="bulk-action-bar" style="display:none;" role="region" aria-label="Bulk actions">
+    <span id="bulk-action-count" class="bulk-action-count"></span>
+    <div class="bulk-action-buttons">
+      <button type="button" id="bulk-delete-btn" class="danger">🗑 Delete Selected</button>
+      <button type="button" id="bulk-clear-btn" class="secondary">Clear Selection</button>
+    </div>
+  </div>
+
+  <!-- Case detail modal: shared by every page with a case link (Reports, Rework
+       Queue, Dashboard) - see app/static/js/app.js openCaseDetail(). -->
+  <div id="case-detail-modal" class="modal-overlay no-print" style="display:none;">
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="case-detail-title">
+      <div class="modal-header">
+        <h2 id="case-detail-title">Case</h2>
+        <button type="button" id="case-detail-close" class="modal-close" aria-label="Close case detail">&times;</button>
+      </div>
+      <div id="case-detail-body" class="modal-body"><p>Loading...</p></div>
+    </div>
+  </div>
+
   <script src="/static/js/api.js?v={{ static_version('js/api.js') }}"></script>
   <script src="/static/js/charts.js?v={{ static_version('js/charts.js') }}"></script>
   <script src="/static/js/app.js?v={{ static_version('js/app.js') }}"></script>

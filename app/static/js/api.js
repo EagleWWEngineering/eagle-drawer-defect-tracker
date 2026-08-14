@@ -110,6 +110,10 @@ const Api = {
     request("PUT", "/api/v1/settings/cost-per-drawer", { body: { cost_per_drawer: costPerDrawer } }),
 
   // Defect cases
+  getRecentWorkOrders: (limit) =>
+    request("GET", "/api/v1/defect-cases/work-orders/recent", { params: { limit } }),
+  getLastStationForWorkOrder: (workOrderNumber) =>
+    request("GET", `/api/v1/defect-cases/work-orders/${encodeURIComponent(workOrderNumber)}/last-station`),
   createDefectCase: (payload) => request("POST", "/api/v1/defect-cases", { body: payload }),
   listDefectCases: (params) => request("GET", "/api/v1/defect-cases", { params }),
   getDefectCase: (id) => request("GET", `/api/v1/defect-cases/${id}`),
@@ -118,6 +122,8 @@ const Api = {
   changeStatus: (id, payload) =>
     request("POST", `/api/v1/defect-cases/${id}/status`, { body: payload }),
   softDeleteCase: (id) => request("DELETE", `/api/v1/defect-cases/${id}`),
+  bulkDeleteDefectCases: (ids) => request("POST", "/api/v1/defect-cases/bulk-delete", { body: { ids } }),
+  bulkRestoreDefectCases: (ids) => request("POST", "/api/v1/defect-cases/bulk-restore", { body: { ids } }),
 
   // Daily production
   upsertDailySummary: (date, payload) =>

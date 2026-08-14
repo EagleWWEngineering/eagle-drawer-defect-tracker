@@ -54,6 +54,41 @@ function formatCurrency(value) {
   return `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+/** Human-readable explanation of which source(s) drove internal_rework_cost /
+ * internal_scrap_cost on a KpiOut response (Phase 4 dual-source cost fix - see
+ * app/services/metrics_service.py:compute_internal_quality_cost), WITH the
+ * reworked/scrapped drawer counts each source actually contributed - this is the
+ * single source of truth for those counts (the per-card "(X drawers)" badge was
+ * removed because it only ever showed the Daily Production Summary count, not the
+ * defect-case-derived fallback that the dollar figure also includes whenever
+ * cost_basis is "defect_cases" or "blended" - that mismatch is what produced a
+ * non-zero dollar amount next to "(0 drawers)").
+ *
+ * Takes the whole KpiOut-shaped object (kpis.drawers_reworked, kpis.drawers_scrapped,
+ * kpis.defect_case_rework_count, kpis.defect_case_scrap_count, kpis.cost_basis). */
+function costBasisLabel(kpis) {
+  const drawersReworked = kpis.drawers_reworked || 0;
+  const drawersScrapped = kpis.drawers_scrapped || 0;
+  const caseReworked = kpis.defect_case_rework_count || 0;
+  const caseScrapped = kpis.defect_case_scrap_count || 0;
+  const caseCount = caseReworked + caseScrapped;
+  const caseBreakdown = `${caseReworked} reworked, ${caseScrapped} scrapped`;
+
+  if (kpis.cost_basis === "defect_cases") {
+    return `Based on ${caseCount} defect case${caseCount === 1 ? "" : "s"} (${caseBreakdown}) — no Daily Production Summary recorded for this period.`;
+  }
+  if (kpis.cost_basis === "blended") {
+    return (
+      `Based on Daily Production Summary (${drawersReworked} reworked, ${drawersScrapped} scrapped), ` +
+      `plus ${caseCount} defect case${caseCount === 1 ? "" : "s"} (${caseBreakdown}) on dates with no summary recorded.`
+    );
+  }
+  if (kpis.cost_basis === "daily_summary") {
+    return `Based on Daily Production Summary — ${drawersReworked} reworked, ${drawersScrapped} scrapped.`;
+  }
+  return "No rework or scrap recorded for this period.";
+}
+
 /** "5 minutes ago", "2 hours ago", "3 days ago" - for sync-status style displays. */
 function timeAgo(isoString) {
   if (!isoString) return "never";
@@ -103,6 +138,92 @@ function guardDoubleSubmit(button, action) {
   };
 }
 
+/** Wires up bulk row-select + the shared floating action bar (#bulk-action-bar in
+ * base.html) for one table. Call the returned refresh() after every re-render of
+ * the table body, since its row checkboxes are regenerated each time.
+ *
+ * options.tableBodySelector - CSS selector for the <tbody> whose rows carry
+ *   `<input class="row-check" data-id="...">` checkboxes in their first column.
+ * options.selectAllId - id of that table's header "select all" checkbox.
+ * options.entityLabel - singular noun for confirm/success messages (e.g. "case").
+ * options.onDelete(ids) - must soft-delete the given ids via the API.
+ * options.onDeleted() - called after a successful delete to reload the table. */
+function initBulkSelect({ tableBodySelector, selectAllId, entityLabel = "item", onDelete, onDeleted }) {
+  const bar = document.getElementById("bulk-action-bar");
+  const countEl = document.getElementById("bulk-action-count");
+  const deleteBtn = document.getElementById("bulk-delete-btn");
+  const clearBtn = document.getElementById("bulk-clear-btn");
+  const selectAll = selectAllId ? document.getElementById(selectAllId) : null;
+
+  function rowCheckboxes() {
+    return Array.from(document.querySelectorAll(`${tableBodySelector} input.row-check`));
+  }
+
+  function selectedIds() {
+    return rowCheckboxes()
+      .filter((cb) => cb.checked)
+      .map((cb) => Number(cb.dataset.id));
+  }
+
+  function updateBar() {
+    const ids = selectedIds();
+    const boxes = rowCheckboxes();
+    if (ids.length > 0) {
+      bar.style.display = "flex";
+      countEl.textContent = `${ids.length} selected`;
+    } else {
+      bar.style.display = "none";
+    }
+    if (selectAll) {
+      selectAll.checked = boxes.length > 0 && ids.length === boxes.length;
+      selectAll.indeterminate = ids.length > 0 && ids.length < boxes.length;
+    }
+  }
+
+  function refresh() {
+    rowCheckboxes().forEach((cb) => {
+      cb.addEventListener("change", updateBar);
+      cb.addEventListener("click", (e) => e.stopPropagation());
+    });
+    updateBar();
+  }
+
+  if (selectAll) {
+    selectAll.addEventListener("change", () => {
+      rowCheckboxes().forEach((cb) => {
+        cb.checked = selectAll.checked;
+      });
+      updateBar();
+    });
+  }
+
+  clearBtn.addEventListener("click", () => {
+    rowCheckboxes().forEach((cb) => {
+      cb.checked = false;
+    });
+    updateBar();
+  });
+
+  deleteBtn.addEventListener(
+    "click",
+    guardDoubleSubmit(deleteBtn, async () => {
+      const ids = selectedIds();
+      if (!ids.length) return;
+      const label = ids.length === 1 ? entityLabel : `${entityLabel}s`;
+      if (!confirm(`Delete ${ids.length} selected ${label}? This can be undone by an admin.`)) return;
+      try {
+        await onDelete(ids);
+        showToast(`${ids.length} ${label} deleted.`, "success");
+        if (onDeleted) await onDeleted();
+      } catch (err) {
+        showToast(err.message, "error");
+      }
+    })
+  );
+
+  return { refresh };
+}
+
 function initRoleSelector() {
   const select = document.getElementById("actor-role-select");
   if (!select) return;
@@ -118,7 +239,150 @@ function highlightActiveNavLink() {
   });
 }
 
+/* ---------------------------------------------------------------------- */
+/* Case detail modal - shared across Reports, Rework Queue, and the        */
+/* Dashboard rework preview so clicking a case number anywhere opens the   */
+/* same view (full case info + photo upload) instead of dead-ending on a   */
+/* "#" link. Markup lives once in base.html (#case-detail-modal).          */
+/* ---------------------------------------------------------------------- */
+
+function openCaseDetailModal() {
+  const modal = document.getElementById("case-detail-modal");
+  if (!modal) return;
+  modal.style.display = "flex";
+  document.body.style.overflow = "hidden";
+}
+
+function closeCaseDetailModal() {
+  const modal = document.getElementById("case-detail-modal");
+  if (!modal) return;
+  modal.style.display = "none";
+  document.body.style.overflow = "";
+}
+
+async function renderCaseDetail(caseId) {
+  const c = await Api.getDefectCase(caseId);
+  document.getElementById("case-detail-title").textContent = `Case ${c.case_number}`;
+
+  const itemsHtml =
+    c.items
+      .map(
+        (i) =>
+          `<li>${escapeHtml(i.defect_category_name)} — ${i.affected_drawer_quantity} drawer${i.affected_drawer_quantity === 1 ? "" : "s"}${i.notes ? ` — ${escapeHtml(i.notes)}` : ""}</li>`
+      )
+      .join("") || "<li>No defect items.</li>";
+
+  const historyHtml =
+    c.status_history
+      .map(
+        (h) =>
+          `<li>${h.from_status ? `${escapeHtml(h.from_status)} &rarr; ` : ""}${escapeHtml(h.to_status)} <span class="hint">(${escapeHtml(h.changed_at_local || "")})</span>${h.note ? ` — ${escapeHtml(h.note)}` : ""}</li>`
+      )
+      .join("") || "<li>No status changes yet.</li>";
+
+  const photosHtml = c.photos.length
+    ? `<div class="photo-grid">${c.photos
+        .map(
+          (p) =>
+            `<a href="${p.url}" target="_blank" rel="noopener" class="photo-thumb"><img src="${p.url}" alt="${escapeHtml(p.original_filename)}" loading="lazy"></a>`
+        )
+        .join("")}</div>`
+    : `<p class="hint">No photos uploaded yet.</p>`;
+
+  document.getElementById("case-detail-body").innerHTML = `
+    <div class="case-detail-meta">
+      ${priorityBadge(c.priority)} ${statusBadge(c.status)}
+      <p><strong>Work order:</strong> ${escapeHtml(c.work_order_number)}${c.drawer_part_reference ? ` — ${escapeHtml(c.drawer_part_reference)}` : ""}</p>
+      <p><strong>Detected:</strong> ${escapeHtml(c.detected_at_local || "")} &nbsp; <strong>Production date:</strong> ${c.production_date}</p>
+      <p><strong>Found station:</strong> ${escapeHtml(c.found_station_name)} &nbsp; <strong>Possible source station:</strong> ${escapeHtml(c.possible_source_station_name || "unknown")}</p>
+      ${c.disposition ? `<p><strong>Disposition:</strong> ${escapeHtml(c.disposition)}</p>` : ""}
+    </div>
+
+    <h3>Defect items</h3>
+    <ul>${itemsHtml}</ul>
+
+    ${c.root_cause ? `<p><strong>Root cause:</strong> ${escapeHtml(c.root_cause)}</p>` : ""}
+    ${c.corrective_action ? `<p><strong>Corrective action:</strong> ${escapeHtml(c.corrective_action)}</p>` : ""}
+    ${c.repair_action ? `<p><strong>Repair action:</strong> ${escapeHtml(c.repair_action)}</p>` : ""}
+    ${c.notes ? `<p><strong>Notes:</strong> ${escapeHtml(c.notes)}</p>` : ""}
+
+    <h3>Status history</h3>
+    <ul>${historyHtml}</ul>
+
+    <h3>Photos</h3>
+    ${photosHtml}
+    <form id="case-photo-upload-form" class="case-photo-upload">
+      <div class="field">
+        <label for="case-photo-file">Add a photo</label>
+        <input type="file" id="case-photo-file" name="file" accept="image/jpeg,image/png,image/webp" required>
+      </div>
+      <button type="submit" class="secondary">Upload photo</button>
+    </form>
+  `;
+
+  const uploadForm = document.getElementById("case-photo-upload-form");
+  const uploadBtn = uploadForm.querySelector("button");
+  uploadForm.addEventListener(
+    "submit",
+    guardDoubleSubmit(uploadBtn, async (e) => {
+      e.preventDefault();
+      const file = document.getElementById("case-photo-file").files[0];
+      if (!file) return;
+      try {
+        await Api.uploadPhoto(caseId, file);
+        showToast("Photo uploaded.", "success");
+        await renderCaseDetail(caseId);
+      } catch (err) {
+        showToast(err.message, "error");
+      }
+    })
+  );
+}
+
+/** Open the case detail modal for `caseId`. This is the one function every
+ * case link on every page should call - see reports.html / rework_queue.html /
+ * dashboard.html - instead of linking to "#" or elsewhere. */
+async function openCaseDetail(caseId) {
+  openCaseDetailModal();
+  document.getElementById("case-detail-title").textContent = "Loading case…";
+  document.getElementById("case-detail-body").innerHTML = "<p>Loading...</p>";
+  try {
+    await renderCaseDetail(caseId);
+  } catch (err) {
+    document.getElementById("case-detail-body").innerHTML = `<p class="hint">Could not load this case.</p>`;
+    showToast(err.message, "error");
+  }
+}
+
+/** Wires every `<a data-case="123">` inside `container` to open the case detail
+ * modal instead of following its href. Call after any innerHTML re-render that
+ * adds case links (Reports records table, Rework Queue, Dashboard preview). */
+function wireCaseLinks(container) {
+  container.querySelectorAll("a[data-case]").forEach((a) => {
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      openCaseDetail(Number(a.dataset.case));
+    });
+  });
+}
+
+function initCaseDetailModal() {
+  const modal = document.getElementById("case-detail-modal");
+  if (!modal) return;
+  document.getElementById("case-detail-close").addEventListener("click", closeCaseDetailModal);
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) closeCaseDetailModal();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && modal.style.display !== "none") closeCaseDetailModal();
+  });
+}
+
+window.openCaseDetail = openCaseDetail;
+window.wireCaseLinks = wireCaseLinks;
+
 document.addEventListener("DOMContentLoaded", () => {
   initRoleSelector();
   highlightActiveNavLink();
+  initCaseDetailModal();
 });

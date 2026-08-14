@@ -31,6 +31,15 @@ logger = logging.getLogger("sync_service")
 
 QUALITY_ISSUES_PATH = "/api/quality-issues"
 
+# The brief's classifier can take up to ~1 day to finish processing an email and
+# add it to /api/quality-issues, tagged with the day it was *received* rather
+# than the day it was classified. Advancing `since` to the exact date of the
+# last successful sync (even one that fetched 0 records) can permanently skip
+# such late-classified issues once "since" passes their day. This buffer makes
+# every incremental sync re-check a trailing window; re-synced issues are
+# idempotent (upserted by source_thread_id), so the overlap is harmless.
+SINCE_LOOKBACK_BUFFER_DAYS = 3
+
 # Spec-defined subcategory -> CustomerIssueCategory.name mapping. Anything not
 # listed here falls back to "Other" (see _map_category).
 SUBCATEGORY_TO_CATEGORY_NAME: dict[str, str] = {
@@ -233,13 +242,14 @@ def _default_since(db: Session) -> dt.date:
         .first()
     )
     if last_success is not None and last_success.sync_completed_at is not None:
-        return last_success.sync_completed_at.date()
+        return last_success.sync_completed_at.date() - dt.timedelta(days=SINCE_LOOKBACK_BUFFER_DAYS)
     # First-ever sync: bootstrap with a generous window rather than "today only".
     return dt.date.today() - dt.timedelta(days=90)
 
 
 async def run_sync(db: Session, *, since: dt.date | None = None) -> SyncLog:
-    """Pull issues since the last successful sync (or a 90-day bootstrap window),
+    """Pull issues since the last successful sync minus a lookback buffer (see
+    SINCE_LOOKBACK_BUFFER_DAYS), or a 90-day bootstrap window on the first run,
     upsert them by source_thread_id, and record the outcome as a SyncLog row.
 
     Never raises - a failure to reach the production brief is recorded in the

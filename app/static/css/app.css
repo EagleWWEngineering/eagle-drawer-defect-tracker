@@ -164,6 +164,26 @@ main {
   margin-top: 0.15rem;
 }
 
+/* Secondary stat riding inside a tile (e.g. Scrap rate inside Rework rate -
+   PROJECT_SPEC.md section 3.2) - visible and accurate, just not equal-size with
+   the primary stat above it. */
+.kpi-tile .kpi-substat {
+  font-size: 0.75rem;
+  color: var(--color-muted);
+  margin-top: 0.3rem;
+}
+
+/* Quality Cost / Reports Summary source note (app/static/js/app.js
+   costBasisLabel()) - this is the single source of truth for the reworked/scrapped
+   drawer counts behind the cost figures above it, so it needs to read clearly, not
+   disappear as small gray "hint" text. */
+.cost-basis-note {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-top: 0.75rem;
+}
+
 /* ---------------------------------------------------------------------- */
 /* Forms                                                                   */
 /* ---------------------------------------------------------------------- */
@@ -272,6 +292,129 @@ button.danger, .btn.danger {
 }
 
 /* ---------------------------------------------------------------------- */
+/* New Defect entry: tap-button grids, stepper, AM/PM toggle, save flash   */
+/* (entry-speed redesign - app/templates/defect_entry.html)                */
+/* ---------------------------------------------------------------------- */
+
+.button-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.button-grid-2 { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); max-width: 320px; }
+.button-grid-4 { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); max-width: 520px; }
+
+.tap-btn {
+  background: #fff;
+  color: var(--color-text);
+  border: 2px solid var(--color-border);
+  min-height: 56px;
+  font-weight: 600;
+  padding: 0.5rem 0.6rem;
+  text-align: center;
+  white-space: normal;
+}
+
+.tap-btn.selected {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: var(--color-primary-dark);
+}
+
+.tap-btn.priority-urgent.selected { background: var(--priority-urgent); border-color: var(--priority-urgent); }
+.tap-btn.priority-high.selected { background: var(--priority-high); border-color: var(--priority-high); }
+
+/* The primary/default disposition (Rework - PROJECT_SPEC.md section 3.2): bigger
+   and full-width so it visually dominates the secondary Use As Is/Hold buttons and
+   the collapsed "More options..." (Scrap) below it. */
+.tap-btn-primary {
+  display: block;
+  width: 100%;
+  min-height: 72px;
+  font-size: 1.15rem;
+  margin-bottom: 0.5rem;
+}
+
+/* Secondary "leave this case open" opt-out (PROJECT_SPEC.md section 3.3) - a small
+   plain checkbox + label, deliberately understated next to the big primary
+   disposition button and repair-action presets above it. */
+.leave-open-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 400;
+  color: var(--color-muted);
+  cursor: pointer;
+}
+
+.leave-open-label input[type="checkbox"] {
+  width: auto;
+  min-height: auto;
+}
+
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.stepper button {
+  min-width: var(--touch-min);
+  font-size: 1.3rem;
+  padding: 0.4rem 0.9rem;
+}
+
+.stepper #qty-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  min-width: 2ch;
+  text-align: center;
+}
+
+.time-input-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+
+.time-input-row input { max-width: 110px; }
+
+.ampm-toggle {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.ampm-btn {
+  background: #fff;
+  color: var(--color-text);
+  border: 2px solid var(--color-border);
+  min-width: 56px;
+  padding: 0.4rem 0.6rem;
+}
+
+.ampm-btn.active {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: var(--color-primary-dark);
+}
+
+.save-flash {
+  background: #e9f8ee;
+  color: var(--color-success);
+  border: 1px solid #bfe6cd;
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+  font-weight: 700;
+  margin-bottom: 1rem;
+  transition: opacity 0.4s ease;
+  opacity: 1;
+}
+
+.save-flash.fade-out { opacity: 0; }
+
+/* ---------------------------------------------------------------------- */
 /* Badges: priority / status always show text, never rely on color alone  */
 /* ---------------------------------------------------------------------- */
 
@@ -348,6 +491,33 @@ tr.clickable:hover { background: #f5f7ff; }
 .filters .field { margin-bottom: 0; }
 
 /* ---------------------------------------------------------------------- */
+/* Bulk select / floating action bar                                      */
+/* ---------------------------------------------------------------------- */
+
+.row-check-cell, .row-check-header { width: 2.5rem; text-align: center; }
+
+.bulk-action-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1500;
+  background: var(--color-text);
+  color: #fff;
+  padding: 0.75rem 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.2);
+}
+
+.bulk-action-bar .bulk-action-count { font-weight: 600; }
+
+.bulk-action-bar .bulk-action-buttons { display: flex; gap: 0.5rem; }
+
+/* ---------------------------------------------------------------------- */
 /* Toast / confirmation banner                                            */
 /* ---------------------------------------------------------------------- */
 
@@ -387,6 +557,111 @@ tr.clickable:hover { background: #f5f7ff; }
 canvas.chart-canvas {
   display: block;
   max-width: 100%;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Rework Queue: direct close (primary) + collapsed "more options"        */
+/* (PROJECT_SPEC.md section 3.3 - app/templates/rework_queue.html). Closing */
+/* directly is the standard way to close a queued case now, so it gets a   */
+/* solid highlighted box; editing root cause/other status changes is      */
+/* secondary, so it's tucked into a collapsed <details>.                   */
+/* ---------------------------------------------------------------------- */
+
+.close-case-box {
+  padding: 0.75rem;
+  border: 1px solid var(--color-primary);
+  border-radius: 8px;
+  background: #eef3ff;
+}
+
+.close-case-box .field { margin-bottom: 0.6rem; }
+
+.more-options {
+  margin-top: 0.75rem;
+}
+
+.more-options summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--color-muted);
+  padding: 0.4rem 0;
+}
+
+.more-options form { margin-top: 0.5rem; }
+
+/* ---------------------------------------------------------------------- */
+/* Case detail modal (defect case info + photo upload)                    */
+/* ---------------------------------------------------------------------- */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 18, 22, 0.55);
+  z-index: 1800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.modal-panel {
+  background: var(--color-surface);
+  border-radius: var(--radius);
+  max-width: 640px;
+  width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--color-border);
+  position: sticky;
+  top: 0;
+  background: var(--color-surface);
+}
+
+.modal-header h2 { margin: 0; font-size: 1.15rem; }
+
+.modal-close {
+  background: none;
+  border: none;
+  color: var(--color-muted);
+  font-size: 1.6rem;
+  line-height: 1;
+  padding: 0.2rem 0.5rem;
+  min-height: auto;
+}
+
+.modal-body { padding: 1.25rem; }
+.modal-body h3 { margin: 1rem 0 0.4rem; font-size: 1rem; }
+.modal-body ul { margin: 0 0 0.75rem; padding-left: 1.25rem; }
+
+.photo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+
+.photo-thumb {
+  display: block;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.photo-thumb img { width: 100%; height: 90px; object-fit: cover; display: block; }
+
+.case-photo-upload { display: flex; align-items: end; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.5rem; }
+.case-photo-upload .field { margin-bottom: 0; flex: 1; min-width: 200px; }
+
+@media (max-width: 480px) {
+  .modal-panel { max-height: 100vh; border-radius: 0; }
 }
 
 /* ---------------------------------------------------------------------- */

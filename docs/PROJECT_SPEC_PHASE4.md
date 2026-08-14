@@ -65,6 +65,45 @@ implemented once, in `metrics_service.sum_internal_quality_costs(entries, *,
 fallback_rate)`, and reused by every caller (reports summary, reports trend,
 CSV export) so the rule can't drift between call sites.
 
+### Defect-case fallback (dual-source cost)
+
+`DailyProductionSummary` counts are the *official* source when they exist — a
+manually-entered daily count may include rework/scrap that never got a defect
+case. But if QC logs a `DefectCase` with a `Rework`/`Scrap` disposition (or a
+`Closed - Repaired`/`Closed - Scrapped` status) for a production date that has
+**no** `DailyProductionSummary` row at all, cost must not silently show $0 just
+because nobody filled out the daily form for that date.
+
+`metrics_service.compute_internal_quality_cost(*, daily_summary_entries,
+fallback_case_counts, fallback_rate, has_daily_summary_rows)` resolves this per
+production date:
+
+- Dates that **have** a `DailyProductionSummary` row use it, exactly as before
+  (Fallback rate section above still applies to old rows within it).
+- Dates that have **no** `DailyProductionSummary` row at all fall back to
+  counting defect cases: one case with disposition `Rework` (or status
+  `Closed - Repaired`) counts as one reworked drawer; one case with disposition
+  `Scrap` (or status `Closed - Scrapped`) counts as one scrapped drawer — see
+  `metrics_service.classify_case_cost_bucket` (scrap wins if a case shows both
+  signals, since the final physical outcome is what actually cost money).
+  Case-derived cost always uses the *currently configured* rate, since a
+  `DefectCase` has no per-row rate snapshot of its own.
+- The two sources are never combined for the same date — a date with a summary
+  row is never also counted through the case fallback, so nothing is double
+  counted.
+
+`KpiOut` (from `/reports/summary`) and each `/reports/trend` point expose the
+resulting `defect_case_rework_count`, `defect_case_scrap_count`, and
+`cost_basis` (`"daily_summary"` | `"defect_cases"` | `"blended"` | `"none"`), so
+the Dashboard and Reports Summary cards can show "Based on daily summary",
+"Based on N defect cases (no daily summary recorded)", or a blended note,
+instead of leaving the user to guess where a number came from.
+
+The CSV export (`/api/v1/exports/defect-items.csv`) intentionally keeps its
+original per-row, per-date behavior described below and does **not** apply this
+fallback — its cost columns are specifically "the daily-summary rate/cost that
+applied on this defect's date", not a period total.
+
 ## Configuration
 
 `DEFAULT_COST_PER_DRAWER` in `.env` (default `35.00`) is the seed value used only
@@ -98,7 +137,9 @@ directly via the API below).
   Scrap Cost, Total Internal Quality Cost, and Total Quality Cost (Internal +
   External), scoped to whatever date range is selected in the dashboard's date
   range filter (Start/End date fields, quick-select buttons for Today/This
-  Week/This Month/Last 30 Days, default last 7 days).
+  Week/This Month/Last 30 Days, default last 7 days). A note under the card
+  (`costBasisLabel` in `app/static/js/app.js`) states which source drove the
+  number — daily summary, N defect cases, or a blend of both.
 - **Daily Production Summary**: the current rate is shown as a read-only
   reference line above the form (`Current rate: $X.XX/drawer`) so staff know
   what will be applied *before* they save; after a successful save, a

@@ -8,7 +8,7 @@ import datetime as dt
 
 from pydantic import BaseModel, Field, computed_field, field_validator
 
-from app.services.defect_service import allowed_next_statuses
+from app.services.defect_service import allowed_next_statuses, direct_close_statuses
 from app.timezone_utils import to_display_string
 
 # ---------------------------------------------------------------------------
@@ -125,6 +125,10 @@ class DefectCaseCreate(BaseModel):
     priority: str = "Normal"
     items: list[DefectItemIn] = Field(min_length=1)
     disposition: str | None = None
+    # "Fixed immediately?" fast path (PROJECT_SPEC.md section 3.3) - New Defect
+    # form toggle. True creates the case already closed (see defect_service.py
+    # create_defect_case); only valid alongside disposition Rework/Scrap/Use As Is.
+    resolved_on_the_spot: bool = False
     repair_action: str | None = None
     root_cause: str | None = None
     corrective_action: str | None = None
@@ -174,6 +178,8 @@ class DefectCaseOut(BaseModel):
     priority: str
     status: str
     disposition: str | None
+    resolved_on_the_spot: bool
+    skipped_recheck: bool
     repair_action: str | None
     root_cause: str | None
     corrective_action: str | None
@@ -185,6 +191,7 @@ class DefectCaseOut(BaseModel):
     photos: list[DefectPhotoOut]
     status_history: list[StatusHistoryOut]
     defect_event_count: int
+    is_deleted: bool
 
     @computed_field
     @property
@@ -213,6 +220,15 @@ class DefectCaseOut(BaseModel):
             options = ["Open", *options]
         return options
 
+    @computed_field
+    @property
+    def direct_close_statuses(self) -> list[str]:
+        """The 3 closed-status "close this case" targets (PROJECT_SPEC.md section
+        3.3) - non-empty for every non-closed status, always requiring a note. Kept
+        separate from allowed_next_statuses so the UI renders it as the primary
+        close action rather than a normal status dropdown option."""
+        return sorted(direct_close_statuses(self.status))
+
     model_config = {"from_attributes": True}
 
 
@@ -234,6 +250,8 @@ def defect_case_to_out(case) -> DefectCaseOut:
         priority=case.priority,
         status=case.status,
         disposition=case.disposition,
+        resolved_on_the_spot=case.resolved_on_the_spot,
+        skipped_recheck=case.skipped_recheck,
         repair_action=case.repair_action,
         root_cause=case.root_cause,
         corrective_action=case.corrective_action,
@@ -254,12 +272,23 @@ def defect_case_to_out(case) -> DefectCaseOut:
         photos=list(case.photos),
         status_history=list(case.status_history),
         defect_event_count=sum(i.affected_drawer_quantity for i in case.items),
+        is_deleted=case.is_deleted,
     )
 
 
 class DefectCaseListOut(BaseModel):
     total: int
     cases: list[DefectCaseOut]
+
+
+class WorkOrderLastStationOut(BaseModel):
+    """New Defect form speed fix: what to pre-fill Found Station with when the
+    operator re-types a work order that already has a case (see
+    defect_service.get_last_case_for_work_order)."""
+
+    work_order_number: str
+    found_station_id: int
+    found_station_name: str
 
 
 # ---------------------------------------------------------------------------
@@ -328,6 +357,23 @@ class KpiOut(BaseModel):
     internal_scrap_cost: float
     total_internal_quality_cost: float
     quality_cost_per_drawer_inspected: float | None
+    # Phase 4 cost fix: which source(s) actually drove internal_rework_cost /
+    # internal_scrap_cost above - "daily_summary", "defect_cases" (no summary
+    # existed for the period so cases were the only source), "blended" (some
+    # dates had a summary, some didn't), or "none" (no rework/scrap either way).
+    # See app/services/metrics_service.py:compute_internal_quality_cost.
+    defect_case_rework_count: int
+    defect_case_scrap_count: int
+    cost_basis: str
+    # PROJECT_SPEC.md section 3.3 KPIs (60-second-fix fast paths). total_cases /
+    # queued_rework_count are the respective denominators, exposed for transparency
+    # the same way defect_case_rework_count etc. are above.
+    total_cases: int
+    resolved_on_the_spot_count: int
+    pct_resolved_on_the_spot: float | None
+    queued_rework_count: int
+    skipped_recheck_count: int
+    pct_queued_rework_closed_without_recheck: float | None
 
 
 class ParetoRowOut(BaseModel):
@@ -357,6 +403,11 @@ class ReworkQueueItemOut(BaseModel):
     possible_source_station_name: str | None
     detected_at: dt.datetime
     age_hours: float
+    # Filled in later from the Rework Queue rather than at entry time (see
+    # app/templates/defect_entry.html / rework_queue.html) - CLAUDE.md.
+    root_cause: str | None
+    corrective_action: str | None
+    repair_action: str | None
 
     @computed_field
     @property
@@ -367,6 +418,13 @@ class ReworkQueueItemOut(BaseModel):
     @property
     def allowed_next_statuses(self) -> list[str]:
         return sorted(allowed_next_statuses(self.status))
+
+    @computed_field
+    @property
+    def direct_close_statuses(self) -> list[str]:
+        """Drives the Rework Queue's primary "close this case" box - see
+        DefectCaseOut.direct_close_statuses."""
+        return sorted(direct_close_statuses(self.status))
 
 
 class WorkOrderHistoryOut(BaseModel):
@@ -436,6 +494,7 @@ class CustomerIssueOut(BaseModel):
     source_thread_id: str | None
     created_at: dt.datetime
     updated_at: dt.datetime
+    is_deleted: bool
 
     @computed_field
     @property
@@ -479,6 +538,7 @@ def customer_issue_to_out(issue) -> CustomerIssueOut:
         source_thread_id=issue.source_thread_id,
         created_at=issue.created_at,
         updated_at=issue.updated_at,
+        is_deleted=issue.is_deleted,
     )
 
 
@@ -542,6 +602,20 @@ class SyncLogOut(BaseModel):
         return to_display_string(self.sync_completed_at)
 
     model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# Bulk actions (shared by DefectCase and CustomerIssue bulk-delete/bulk-restore)
+# ---------------------------------------------------------------------------
+
+
+class BulkIdsIn(BaseModel):
+    ids: list[int] = Field(min_length=1)
+
+
+class BulkActionOut(BaseModel):
+    count: int
+    ids: list[int]
 
 
 # ---------------------------------------------------------------------------

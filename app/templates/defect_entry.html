@@ -5,68 +5,94 @@
 {% block content %}
 <h1 class="page-title">New Defect</h1>
 
-<div id="confirmation-card" class="card" style="display:none; border-color:#bfe6cd; background:#f3fbf5;">
-  <h2>Saved: <span id="confirmation-case-number"></span></h2>
-  <p>Case created successfully. You can attach an optional photo below, or start the next entry.</p>
-  <div class="field" style="max-width: 420px;">
-    <label for="photo-input">Optional photo</label>
-    <input type="file" id="photo-input" accept="image/jpeg,image/png,image/webp">
-  </div>
-  <div id="attached-photos"></div>
-  <div class="btn-row">
-    <button type="button" id="upload-photo-btn" class="secondary">Attach photo</button>
-    <button type="button" id="new-entry-btn">Enter another defect</button>
-  </div>
-</div>
+<div id="save-flash" class="save-flash" style="display:none;" role="status" aria-live="polite"></div>
 
 <form id="defect-form" class="card">
+  <div class="field">
+    <label for="work_order_number">Work order number</label>
+    <input type="text" id="work_order_number" name="work_order_number" required autocomplete="off" list="recent-work-orders">
+    <datalist id="recent-work-orders"></datalist>
+  </div>
+
   <div class="filters">
     <div class="field">
       <label for="production_date">Production date <span class="hint">(defaults to today; pick an earlier date for paper-log entry)</span></label>
       <input type="date" id="production_date" name="production_date" required>
     </div>
     <div class="field">
-      <label for="detected_at">Detected date/time</label>
-      <input type="datetime-local" id="detected_at" name="detected_at" required>
-    </div>
-    <div class="field">
-      <label for="work_order_number">Work order number</label>
-      <input type="text" id="work_order_number" name="work_order_number" required autocomplete="off">
+      <label for="detected_time">Detected time</label>
+      <div class="time-input-row">
+        <input type="text" id="detected_time" name="detected_time" inputmode="numeric" placeholder="h:mm" required>
+        <div class="ampm-toggle" role="group" aria-label="AM or PM" id="ampm-group">
+          <button type="button" class="ampm-btn" data-ampm="AM">AM</button>
+          <button type="button" class="ampm-btn" data-ampm="PM">PM</button>
+        </div>
+      </div>
     </div>
     <div class="field">
       <label for="drawer_part_reference">Drawer / part reference <span class="hint">(optional)</span></label>
       <input type="text" id="drawer_part_reference" name="drawer_part_reference">
     </div>
-    <div class="field">
-      <label for="found_station_id">Found station</label>
-      <select id="found_station_id" name="found_station_id" required></select>
-    </div>
-    <div class="field">
-      <label for="possible_source_station_id">Possible source station <span class="hint">(a hypothesis, not confirmed root cause)</span></label>
-      <select id="possible_source_station_id" name="possible_source_station_id"><option value="">-- none --</option></select>
-    </div>
-    <div class="field">
-      <label for="priority">Priority</label>
-      <select id="priority" name="priority">
-        <option>Urgent</option><option>High</option><option selected>Normal</option>
-      </select>
-    </div>
-    <div class="field">
-      <label for="disposition">Disposition <span class="hint">(optional)</span></label>
-      <select id="disposition" name="disposition"><option value="">-- not decided yet --</option></select>
+  </div>
+
+  <div class="field">
+    <label>Defect categories <span class="hint">(tap all that apply — one drawer with 3 sanding scratches is still one "Sanding" tap)</span></label>
+    <div id="category-grid" class="button-grid" role="group" aria-label="Defect categories"></div>
+  </div>
+
+  <div class="field">
+    <label>Found station <span class="hint">(where QC caught it)</span></label>
+    <div id="found-station-common" class="button-grid" role="group" aria-label="Common found stations"></div>
+    <div id="found-station-all" class="button-grid" role="group" aria-label="All found stations" style="display:none;"></div>
+    <button type="button" id="found-station-more-btn" class="secondary">More stations...</button>
+  </div>
+
+  <div class="field">
+    <label>Possible source station <span class="hint">(optional — where do you think it came from? a hypothesis, not a confirmed root cause)</span></label>
+    <div id="source-station-common" class="button-grid" role="group" aria-label="Common possible source stations"></div>
+    <div id="source-station-all" class="button-grid" role="group" aria-label="All possible source stations" style="display:none;"></div>
+    <button type="button" id="source-station-more-btn" class="secondary">More stations...</button>
+  </div>
+
+  <div class="field">
+    <label>Disposition <span class="hint">(most defects get reworked — that's why Rework is picked for you)</span></label>
+    <div id="disposition-primary"></div>
+    <div id="disposition-secondary" class="button-grid button-grid-2" role="group" aria-label="Other disposition" style="margin-top:0.4rem;"></div>
+    <button type="button" id="disposition-more-btn" class="secondary" style="margin-top:0.4rem;">More options... (Scrap)</button>
+    <div id="disposition-more" class="button-grid" role="group" aria-label="Additional dispositions" style="display:none; margin-top:0.4rem;"></div>
+  </div>
+
+  <div class="field" id="repair-preset-field" style="display:none;">
+    <label>What was done? <span class="hint">(quick pick — the case closes as soon as you save)</span></label>
+    <div id="repair-preset-grid" class="button-grid" role="group" aria-label="Repair action preset"></div>
+    <input type="text" id="repair-preset-other-text" placeholder="Describe what was done" style="display:none; margin-top:0.5rem;">
+  </div>
+
+  <div class="field" id="leave-open-field">
+    <label class="leave-open-label">
+      <input type="checkbox" id="leave-open-checkbox">
+      Not resolved yet — leave this case open
+    </label>
+    <p id="hold-hint" class="hint" style="display:none;">Hold cases are saved as Waiting until a decision is made — nothing else to fill in here.</p>
+  </div>
+
+  <div class="field">
+    <label>Priority <span class="hint">(defaults to Normal — tap to override)</span></label>
+    <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
+      <div id="priority-override" class="button-grid button-grid-2" role="group" aria-label="Priority override" style="margin-bottom:0;"></div>
+      <span id="priority-current-label"></span>
     </div>
   </div>
 
   <div class="field">
-    <label>Defect categories <span class="hint">(one drawer with 3 sanding scratches = 1 Sanding event; add a row per category)</span></label>
-    <div id="category-rows"></div>
-    <button type="button" id="add-category-row" class="secondary">+ Add another category</button>
+    <label>Affected drawer quantity</label>
+    <div class="stepper">
+      <button type="button" id="qty-decrement" class="secondary" aria-label="Decrease quantity">&minus;</button>
+      <span id="qty-value" aria-live="polite">1</span>
+      <button type="button" id="qty-increment" class="secondary" aria-label="Increase quantity">+</button>
+    </div>
   </div>
 
-  <div class="field">
-    <label for="repair_action">Repair action <span class="hint">(optional - what actually happened)</span></label>
-    <textarea id="repair_action" name="repair_action"></textarea>
-  </div>
   <div class="field">
     <label for="notes">Notes <span class="hint">(optional)</span></label>
     <textarea id="notes" name="notes"></textarea>
@@ -76,109 +102,475 @@
     <button type="submit" id="save-btn">Save defect</button>
   </div>
 </form>
+
+<section id="session-log-section" class="card" style="display:none;">
+  <h2>Logged this session</h2>
+  <p class="hint">Attach an optional photo to any entry below without leaving this screen.</p>
+  <div class="table-scroll">
+    <table id="session-log-table">
+      <thead><tr><th>Case</th><th>Time</th><th>Categories</th><th>Photo</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
 {% endblock %}
 
 {% block extra_scripts %}
 <script>
+// Real seeded station names (app/seed_data.py) that best match the common QC
+// catch points called out in the entry-speed redesign. Looked up by exact name at
+// render time and silently skipped if a name doesn't exist (e.g. renamed in
+// Admin) - "More stations..." always has the complete, authoritative list.
+const COMMON_STATION_NAMES = ["Prep Sanding", "Assembly", "QC / Sorting / Shipping", "Top Coat", "Notch & Bore"];
+const PRIORITY_OVERRIDE_ORDER = ["Urgent", "High"];
+// Rework is the default/primary disposition (PROJECT_SPEC.md section 3.2) - almost
+// every defect gets reworked or re-cut on the spot, so it's pre-selected and shown
+// as one big button. Use As Is / Hold are secondary. Scrap is genuinely rare and
+// tucked behind "More options..." - still fully functional, just one extra tap away
+// instead of competing visually with Rework.
+const DISPOSITION_PRIMARY = "Rework";
+const DISPOSITION_SECONDARY_ORDER = ["Use As Is", "Hold"];
+const DISPOSITION_MORE_ORDER = ["Scrap"];
+// Dispositions with a closed status to jump to (see app/services/defect_service.py
+// INSTANT_CLOSE_STATUS_BY_DISPOSITION) - these default to closing the case
+// immediately (see leaveOpen below). Hold is deliberately excluded: Hold means the
+// disposition itself isn't decided yet, so there's nothing to have "already fixed".
+const INSTANT_CLOSE_DISPOSITIONS = new Set(["Rework", "Scrap", "Use As Is"]);
+const REPAIR_PRESETS = [
+  "Resanded",
+  "Replaned/re-cut",
+  "Reglued",
+  "Replaced part",
+  "Re-bored/re-notched",
+  "Other",
+];
+
 let masterData = null;
-let lastCreatedCaseId = null;
+let recentWorkOrders = [];
 
-function categoryRowHtml(index) {
-  return `<div class="category-row" data-row="${index}">
-    <div class="field">
-      <label for="cat-${index}">Category</label>
-      <select id="cat-${index}" class="category-select" required></select>
-    </div>
-    <div class="field">
-      <label for="qty-${index}">Affected drawer qty</label>
-      <input type="number" id="qty-${index}" class="qty-input" min="1" value="1" required>
-    </div>
-    <button type="button" class="secondary remove-row-btn" aria-label="Remove this category row">Remove</button>
-  </div>`;
+let selectedCategoryIds = new Set();
+let selectedFoundStationId = null;
+let selectedSourceStationId = null;
+let selectedDisposition = DISPOSITION_PRIMARY; // Rework pre-selected by default
+let selectedPriority = "Normal";
+let selectedAmPm = "AM";
+let qty = 1;
+// Immediate resolution is now the form's DEFAULT flow, not a toggle to think about -
+// leaveOpen only becomes true via the small secondary checkbox for the genuinely
+// rare case where nothing's decided yet (PROJECT_SPEC.md section 3.3).
+let leaveOpen = false;
+let selectedRepairPreset = null;
+let dispositionMoreExpanded = false;
+
+function dispositionSupportsInstantClose(disposition) {
+  return INSTANT_CLOSE_DISPOSITIONS.has(disposition);
 }
 
-function addCategoryRow() {
-  const container = document.getElementById("category-rows");
-  const index = container.children.length;
-  container.insertAdjacentHTML("beforeend", categoryRowHtml(index));
-  const select = container.lastElementChild.querySelector(".category-select");
-  masterData.defect_categories.forEach((c) => {
-    select.insertAdjacentHTML("beforeend", `<option value="${c.id}">${escapeHtml(c.name)}</option>`);
-  });
-  container.lastElementChild.querySelector(".remove-row-btn").addEventListener("click", (e) => {
-    if (container.children.length <= 1) {
-      showToast("At least one defect category is required.", "error");
-      return;
-    }
-    e.target.closest(".category-row").remove();
+function isInstantClose() {
+  return dispositionSupportsInstantClose(selectedDisposition) && !leaveOpen;
+}
+
+function stationByName(name) {
+  return masterData.stations.find((s) => s.name === name) || null;
+}
+
+function stationButtonHtml(station, isSelected) {
+  return `<button type="button" class="tap-btn${isSelected ? " selected" : ""}" data-id="${station.id}" aria-pressed="${isSelected}">${escapeHtml(station.name)}</button>`;
+}
+
+function renderCategoryGrid() {
+  const container = document.getElementById("category-grid");
+  container.innerHTML = masterData.defect_categories
+    .map((c) => {
+      const isSelected = selectedCategoryIds.has(c.id);
+      return `<button type="button" class="tap-btn${isSelected ? " selected" : ""}" data-id="${c.id}" aria-pressed="${isSelected}">${escapeHtml(c.name)}</button>`;
+    })
+    .join("");
+}
+
+function dispositionButtonHtml(value, extraClass) {
+  const isSelected = selectedDisposition === value;
+  return `<button type="button" class="tap-btn${extraClass ? " " + extraClass : ""}${isSelected ? " selected" : ""}" data-value="${escapeHtml(value)}" aria-pressed="${isSelected}">${escapeHtml(value)}</button>`;
+}
+
+function renderDispositionButtons() {
+  // Primary: Rework, big and pre-selected.
+  document.getElementById("disposition-primary").innerHTML = dispositionButtonHtml(
+    DISPOSITION_PRIMARY,
+    "tap-btn-primary"
+  );
+
+  // Secondary: Use As Is, Hold - same size as every other tap button, just not
+  // competing visually with the primary Rework button above.
+  const secondary = DISPOSITION_SECONDARY_ORDER.filter((d) => masterData.dispositions.includes(d));
+  document.getElementById("disposition-secondary").innerHTML = secondary
+    .map((d) => dispositionButtonHtml(d))
+    .join("");
+
+  // "More options...": Scrap. Auto-expand if it's already selected (e.g. after a
+  // validation error) so its selected state is never hidden behind a collapsed panel.
+  const more = DISPOSITION_MORE_ORDER.filter((d) => masterData.dispositions.includes(d));
+  if (more.includes(selectedDisposition)) dispositionMoreExpanded = true;
+  document.getElementById("disposition-more").innerHTML = more.map((d) => dispositionButtonHtml(d)).join("");
+  document.getElementById("disposition-more").style.display = dispositionMoreExpanded ? "grid" : "none";
+  document.getElementById("disposition-more-btn").textContent = dispositionMoreExpanded
+    ? "Show fewer options"
+    : "More options... (Scrap)";
+}
+
+function renderResolutionFields() {
+  const isHold = selectedDisposition === "Hold";
+
+  // Hold has no "resolved" concept of its own - it's always saved as Waiting, so
+  // there's nothing to decide here; show a short explanatory hint instead of the
+  // leave-open checkbox / repair preset.
+  document.getElementById("leave-open-field").style.display = isHold ? "none" : "block";
+  document.getElementById("hold-hint").style.display = isHold ? "block" : "none";
+  document.getElementById("leave-open-checkbox").checked = leaveOpen;
+
+  const showRepairPreset = isInstantClose();
+  document.getElementById("repair-preset-field").style.display = showRepairPreset ? "block" : "none";
+  const grid = document.getElementById("repair-preset-grid");
+  grid.innerHTML = REPAIR_PRESETS.map((p) => {
+    const isSelected = selectedRepairPreset === p;
+    return `<button type="button" class="tap-btn${isSelected ? " selected" : ""}" data-value="${escapeHtml(p)}" aria-pressed="${isSelected}">${escapeHtml(p)}</button>`;
+  }).join("");
+  const otherInput = document.getElementById("repair-preset-other-text");
+  otherInput.style.display = selectedRepairPreset === "Other" ? "block" : "none";
+}
+
+function renderPriorityButtons() {
+  const container = document.getElementById("priority-override");
+  container.innerHTML = PRIORITY_OVERRIDE_ORDER
+    .filter((p) => masterData.priorities.includes(p))
+    .map((p) => {
+      const isSelected = selectedPriority === p;
+      return `<button type="button" class="tap-btn priority-${p.toLowerCase()}${isSelected ? " selected" : ""}" data-value="${p}" aria-pressed="${isSelected}">${p}</button>`;
+    })
+    .join("");
+  document.getElementById("priority-current-label").innerHTML = priorityBadge(selectedPriority);
+}
+
+function renderQty() {
+  document.getElementById("qty-value").textContent = qty;
+}
+
+function renderAmPm() {
+  document.querySelectorAll(".ampm-btn").forEach((btn) => {
+    const active = btn.dataset.ampm === selectedAmPm;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-pressed", String(active));
   });
 }
 
-function localDatetimeNowValue() {
+function setDetectedTimeToNow() {
   const now = new Date();
-  now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
-  return now.toISOString().slice(0, 16);
+  const hours = now.getHours();
+  const minutes = now.getMinutes();
+  selectedAmPm = hours >= 12 ? "PM" : "AM";
+  let hours12 = hours % 12;
+  if (hours12 === 0) hours12 = 12;
+  document.getElementById("detected_time").value = `${hours12}:${String(minutes).padStart(2, "0")}`;
+  renderAmPm();
 }
 
-function resetForm() {
-  const form = document.getElementById("defect-form");
-  clearFormErrors(form);
-  form.reset();
-  document.getElementById("production_date").value = new Date().toISOString().slice(0, 10);
-  document.getElementById("detected_at").value = localDatetimeNowValue();
-  document.getElementById("category-rows").innerHTML = "";
-  addCategoryRow();
-  document.getElementById("confirmation-card").style.display = "none";
-  form.style.display = "block";
-  document.getElementById("work_order_number").focus();
+function parseTimeInput(raw) {
+  const match = /^([0-9]{1,2}):([0-9]{2})$/.exec((raw || "").trim());
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours < 1 || hours > 12 || minutes < 0 || minutes > 59) return null;
+  return { hours12: hours, minutes };
 }
 
-async function loadMasterDataIntoForm() {
-  masterData = await Api.getMasterData();
-  const foundSelect = document.getElementById("found_station_id");
-  const sourceSelect = document.getElementById("possible_source_station_id");
-  masterData.stations.forEach((s) => {
-    foundSelect.insertAdjacentHTML("beforeend", `<option value="${s.id}">${escapeHtml(s.name)}</option>`);
-    sourceSelect.insertAdjacentHTML("beforeend", `<option value="${s.id}">${escapeHtml(s.name)}</option>`);
+function buildDetectedAtIso() {
+  const parsed = parseTimeInput(document.getElementById("detected_time").value);
+  const dateStr = document.getElementById("production_date").value;
+  if (!parsed || !dateStr) return null;
+  const [y, m, d] = dateStr.split("-").map(Number);
+  let hour24 = parsed.hours12 % 12;
+  if (selectedAmPm === "PM") hour24 += 12;
+  const dt = new Date(y, m - 1, d, hour24, parsed.minutes, 0, 0);
+  return dt.toISOString();
+}
+
+async function loadRecentWorkOrdersIntoDatalist() {
+  const datalist = document.getElementById("recent-work-orders");
+  datalist.innerHTML = recentWorkOrders.map((wo) => `<option value="${escapeHtml(wo)}"></option>`).join("");
+}
+
+async function maybePrefillStationFromWorkOrder() {
+  const wo = document.getElementById("work_order_number").value.trim();
+  if (!wo || selectedFoundStationId !== null) return;
+  try {
+    const last = await Api.getLastStationForWorkOrder(wo);
+    if (last && last.found_station_id && selectedFoundStationId === null) {
+      selectedFoundStationId = last.found_station_id;
+      renderFoundStations();
+    }
+  } catch (err) {
+    // Prefill is a convenience, not required for the form to work - fail silently.
+  }
+}
+
+function renderFoundStations() {
+  renderStationGroup("found-station-common", "found-station-all", selectedFoundStationId);
+}
+function renderSourceStations() {
+  renderStationGroup("source-station-common", "source-station-all", selectedSourceStationId);
+}
+
+function renderStationGroup(commonId, allId, selectedId) {
+  const commons = COMMON_STATION_NAMES.map(stationByName).filter(Boolean);
+  document.getElementById(commonId).innerHTML = commons
+    .map((s) => stationButtonHtml(s, s.id === selectedId))
+    .join("");
+  document.getElementById(allId).innerHTML = masterData.stations
+    .map((s) => stationButtonHtml(s, s.id === selectedId))
+    .join("");
+}
+
+function wireStationGroup(commonId, allId, moreBtnId, onSelect) {
+  const handler = (e) => {
+    const btn = e.target.closest(".tap-btn");
+    if (!btn) return;
+    onSelect(Number(btn.dataset.id));
+  };
+  document.getElementById(commonId).addEventListener("click", handler);
+  document.getElementById(allId).addEventListener("click", handler);
+  const moreBtn = document.getElementById(moreBtnId);
+  const allEl = document.getElementById(allId);
+  moreBtn.addEventListener("click", () => {
+    const showingAll = allEl.style.display !== "none";
+    allEl.style.display = showingAll ? "none" : "grid";
+    moreBtn.textContent = showingAll ? "More stations..." : "Show fewer";
   });
-  const dispSelect = document.getElementById("disposition");
-  masterData.dispositions.forEach((d) => dispSelect.insertAdjacentHTML("beforeend", `<option>${escapeHtml(d)}</option>`));
 }
 
 function collectPayload() {
-  const form = document.getElementById("defect-form");
-  const fd = new FormData(form);
-  const items = Array.from(document.querySelectorAll(".category-row")).map((row) => ({
-    defect_category_id: Number(row.querySelector(".category-select").value),
-    affected_drawer_quantity: Number(row.querySelector(".qty-input").value) || 1,
-  }));
-
-  const detectedLocal = fd.get("detected_at");
+  const instantClose = isInstantClose();
+  let repairAction = null;
+  if (instantClose) {
+    repairAction =
+      selectedRepairPreset === "Other"
+        ? document.getElementById("repair-preset-other-text").value.trim() || "Other"
+        : selectedRepairPreset;
+  }
   return {
-    production_date: fd.get("production_date"),
-    detected_at: detectedLocal ? new Date(detectedLocal).toISOString() : null,
-    work_order_number: fd.get("work_order_number"),
-    drawer_part_reference: fd.get("drawer_part_reference") || null,
-    found_station_id: Number(fd.get("found_station_id")),
-    possible_source_station_id: fd.get("possible_source_station_id") ? Number(fd.get("possible_source_station_id")) : null,
-    priority: fd.get("priority"),
-    items,
-    disposition: fd.get("disposition") || null,
-    repair_action: fd.get("repair_action") || null,
-    notes: fd.get("notes") || null,
+    production_date: document.getElementById("production_date").value,
+    detected_at: buildDetectedAtIso(),
+    work_order_number: document.getElementById("work_order_number").value,
+    drawer_part_reference: document.getElementById("drawer_part_reference").value || null,
+    found_station_id: selectedFoundStationId,
+    possible_source_station_id: selectedSourceStationId,
+    priority: selectedPriority,
+    items: Array.from(selectedCategoryIds).map((id) => ({
+      defect_category_id: id,
+      affected_drawer_quantity: qty,
+    })),
+    disposition: selectedDisposition,
+    resolved_on_the_spot: instantClose,
+    repair_action: repairAction,
+    notes: document.getElementById("notes").value || null,
   };
+}
+
+function validateBeforeSubmit(form) {
+  if (!document.getElementById("work_order_number").value.trim()) {
+    showFieldError(form, "work_order_number", "Work order number is required.");
+    return false;
+  }
+  if (!buildDetectedAtIso()) {
+    showFieldError(form, "detected_time", "Enter a valid time, e.g. 7:45.");
+    return false;
+  }
+  if (selectedFoundStationId === null) {
+    showToast("Select where the defect was found.", "error");
+    return false;
+  }
+  if (selectedCategoryIds.size === 0) {
+    showToast("Select at least one defect category.", "error");
+    return false;
+  }
+  if (isInstantClose() && !selectedRepairPreset) {
+    showToast("Pick what was done to fix it (or choose 'Other').", "error");
+    return false;
+  }
+  return true;
+}
+
+function showSaveFlash(text) {
+  const el = document.getElementById("save-flash");
+  el.textContent = text;
+  el.style.display = "block";
+  el.classList.remove("fade-out");
+  clearTimeout(el._fadeTimer);
+  el._fadeTimer = setTimeout(() => {
+    el.classList.add("fade-out");
+    setTimeout(() => {
+      el.style.display = "none";
+    }, 400);
+  }, 2000);
+}
+
+function addSessionLogRow(created) {
+  document.getElementById("session-log-section").style.display = "block";
+  const tbody = document.querySelector("#session-log-table tbody");
+  const rowId = `log-${created.id}`;
+  tbody.insertAdjacentHTML(
+    "afterbegin",
+    `<tr data-case-id="${created.id}">
+      <td>${escapeHtml(created.case_number)}</td>
+      <td>${escapeHtml(created.detected_at_local || "")}</td>
+      <td>${created.items.map((i) => escapeHtml(i.defect_category_name)).join(", ")}</td>
+      <td>
+        <input type="file" class="session-photo-input" id="${rowId}-file" accept="image/jpeg,image/png,image/webp">
+        <button type="button" class="secondary session-photo-btn" data-case-id="${created.id}" data-file-id="${rowId}-file">Attach</button>
+      </td>
+    </tr>`
+  );
+}
+
+function resetFormForNextEntry() {
+  selectedCategoryIds = new Set();
+  selectedFoundStationId = null;
+  selectedSourceStationId = null;
+  selectedDisposition = DISPOSITION_PRIMARY;
+  selectedPriority = "Normal";
+  leaveOpen = false;
+  selectedRepairPreset = null;
+  dispositionMoreExpanded = false;
+  qty = 1;
+  document.getElementById("drawer_part_reference").value = "";
+  document.getElementById("notes").value = "";
+  document.getElementById("repair-preset-other-text").value = "";
+  setDetectedTimeToNow();
+  renderCategoryGrid();
+  renderFoundStations();
+  renderSourceStations();
+  renderDispositionButtons();
+  renderResolutionFields();
+  renderPriorityButtons();
+  renderQty();
+  document.getElementById("work_order_number").focus();
+}
+
+function resetFormFully() {
+  document.getElementById("work_order_number").value = "";
+  document.getElementById("production_date").value = new Date().toISOString().slice(0, 10);
+  resetFormForNextEntry();
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
   try {
-    await loadMasterDataIntoForm();
+    masterData = await Api.getMasterData();
+    recentWorkOrders = await Api.getRecentWorkOrders(20);
   } catch (err) {
     showToast(err.message, "error");
     return;
   }
-  resetForm();
 
-  document.getElementById("add-category-row").addEventListener("click", addCategoryRow);
+  loadRecentWorkOrdersIntoDatalist();
+  resetFormFully();
+
+  wireStationGroup("found-station-common", "found-station-all", "found-station-more-btn", (id) => {
+    selectedFoundStationId = selectedFoundStationId === id ? null : id;
+    renderFoundStations();
+  });
+  wireStationGroup("source-station-common", "source-station-all", "source-station-more-btn", (id) => {
+    selectedSourceStationId = selectedSourceStationId === id ? null : id;
+    renderSourceStations();
+  });
+
+  document.getElementById("category-grid").addEventListener("click", (e) => {
+    const btn = e.target.closest(".tap-btn");
+    if (!btn) return;
+    const id = Number(btn.dataset.id);
+    if (selectedCategoryIds.has(id)) selectedCategoryIds.delete(id);
+    else selectedCategoryIds.add(id);
+    renderCategoryGrid();
+  });
+
+  function handleDispositionClick(e) {
+    const btn = e.target.closest(".tap-btn");
+    if (!btn) return;
+    // Disposition is always exactly one of the four values now - Rework by
+    // default - not an optional "leave blank if undecided" field; "undecided"
+    // is what Hold is for.
+    selectedDisposition = btn.dataset.value;
+    leaveOpen = false;
+    selectedRepairPreset = null;
+    document.getElementById("repair-preset-other-text").value = "";
+    renderDispositionButtons();
+    renderResolutionFields();
+  }
+  document.getElementById("disposition-primary").addEventListener("click", handleDispositionClick);
+  document.getElementById("disposition-secondary").addEventListener("click", handleDispositionClick);
+  document.getElementById("disposition-more").addEventListener("click", handleDispositionClick);
+
+  document.getElementById("disposition-more-btn").addEventListener("click", () => {
+    dispositionMoreExpanded = !dispositionMoreExpanded;
+    renderDispositionButtons();
+  });
+
+  document.getElementById("leave-open-checkbox").addEventListener("change", (e) => {
+    leaveOpen = e.target.checked;
+    selectedRepairPreset = null;
+    document.getElementById("repair-preset-other-text").value = "";
+    renderResolutionFields();
+  });
+
+  document.getElementById("repair-preset-grid").addEventListener("click", (e) => {
+    const btn = e.target.closest(".tap-btn");
+    if (!btn) return;
+    const value = btn.dataset.value;
+    selectedRepairPreset = selectedRepairPreset === value ? null : value;
+    renderResolutionFields();
+  });
+
+  document.getElementById("priority-override").addEventListener("click", (e) => {
+    const btn = e.target.closest(".tap-btn");
+    if (!btn) return;
+    const value = btn.dataset.value;
+    selectedPriority = selectedPriority === value ? "Normal" : value;
+    renderPriorityButtons();
+  });
+
+  document.getElementById("qty-decrement").addEventListener("click", () => {
+    qty = Math.max(1, qty - 1);
+    renderQty();
+  });
+  document.getElementById("qty-increment").addEventListener("click", () => {
+    qty += 1;
+    renderQty();
+  });
+
+  document.getElementById("ampm-group").addEventListener("click", (e) => {
+    const btn = e.target.closest(".ampm-btn");
+    if (!btn) return;
+    selectedAmPm = btn.dataset.ampm;
+    renderAmPm();
+  });
+
+  document.getElementById("work_order_number").addEventListener("blur", maybePrefillStationFromWorkOrder);
+
+  document.getElementById("session-log-table").addEventListener("click", async (e) => {
+    const btn = e.target.closest(".session-photo-btn");
+    if (!btn) return;
+    const caseId = Number(btn.dataset.caseId);
+    const fileInput = document.getElementById(btn.dataset.fileId);
+    if (!fileInput.files.length) {
+      showToast("Choose a photo file first.", "error");
+      return;
+    }
+    try {
+      await Api.uploadPhoto(caseId, fileInput.files[0]);
+      showToast("Photo attached.", "success");
+      fileInput.value = "";
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  });
 
   const form = document.getElementById("defect-form");
   const saveBtn = document.getElementById("save-btn");
@@ -187,14 +579,21 @@ document.addEventListener("DOMContentLoaded", async () => {
     guardDoubleSubmit(saveBtn, async (e) => {
       e.preventDefault();
       clearFormErrors(form);
+      if (!validateBeforeSubmit(form)) return;
       try {
         const payload = collectPayload();
         const created = await Api.createDefectCase(payload);
-        lastCreatedCaseId = created.id;
-        document.getElementById("confirmation-case-number").textContent = created.case_number;
-        form.style.display = "none";
-        document.getElementById("confirmation-card").style.display = "block";
-        showToast(`Saved ${created.case_number}`, "success");
+        showSaveFlash(
+          created.resolved_on_the_spot
+            ? `Resolved on the spot — ${created.case_number} closed.`
+            : `Saved: ${created.case_number}`
+        );
+        addSessionLogRow(created);
+        if (!recentWorkOrders.includes(created.work_order_number)) {
+          recentWorkOrders.unshift(created.work_order_number);
+          loadRecentWorkOrdersIntoDatalist();
+        }
+        resetFormForNextEntry();
       } catch (err) {
         if (err instanceof ApiError && err.field) {
           showFieldError(form, err.field, err.message);
@@ -204,27 +603,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
     })
   );
-
-  document.getElementById("new-entry-btn").addEventListener("click", resetForm);
-
-  document.getElementById("upload-photo-btn").addEventListener("click", async () => {
-    const input = document.getElementById("photo-input");
-    if (!input.files.length) {
-      showToast("Choose a photo file first.", "error");
-      return;
-    }
-    try {
-      const photo = await Api.uploadPhoto(lastCreatedCaseId, input.files[0]);
-      showToast("Photo attached.", "success");
-      input.value = "";
-      document.getElementById("attached-photos").insertAdjacentHTML(
-        "beforeend",
-        `<p><a href="${photo.url}" target="_blank" rel="noopener">${escapeHtml(photo.original_filename)}</a></p>`
-      );
-    } catch (err) {
-      showToast(err.message, "error");
-    }
-  });
 });
 </script>
 {% endblock %}

@@ -5,6 +5,24 @@ internal+external total quality cost."""
 from __future__ import annotations
 
 
+def _create_case(client, master_data, **overrides):
+    payload = {
+        "production_date": "2026-07-24",
+        "detected_at": "2026-07-24T14:30:00Z",
+        "work_order_number": "WO-COST-1",
+        "found_station_id": master_data["stations"]["QC / Sorting / Shipping"],
+        "priority": "Normal",
+        "items": [
+            {
+                "defect_category_id": master_data["categories"]["Sanding / Surface"],
+                "affected_drawer_quantity": 1,
+            }
+        ],
+    }
+    payload.update(overrides)
+    return client.post("/api/v1/defect-cases", json=payload)
+
+
 def test_daily_production_upsert_and_list_include_cost_fields(client):
     resp = client.put(
         "/api/v1/daily-production/2026-07-24",
@@ -175,3 +193,110 @@ def test_combined_internal_and_external_total_quality_cost(
     )
     # 245 internal (5*35 + 2*35) + 200 external (2 pieces * $100)
     assert combined_total_quality_cost == 445.0
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 fix: internal cost must never show $0 just because nobody filled out a
+# Daily Production Summary, as long as real defect cases with a Rework/Scrap
+# disposition exist for that period.
+# ---------------------------------------------------------------------------
+
+
+def test_summary_cost_falls_back_to_defect_cases_with_no_daily_summary(client, master_data):
+    case = _create_case(client, master_data).json()
+    client.post(
+        f"/api/v1/defect-cases/{case['id']}/status",
+        json={"new_status": "In Rework", "disposition": "Rework"},
+    )
+
+    resp = client.get(
+        "/api/v1/reports/summary", params={"start_date": "2026-07-24", "end_date": "2026-07-24"}
+    )
+    body = resp.json()
+    assert body["internal_rework_cost"] == 35.0  # 1 case * $35, not $0
+    assert body["internal_scrap_cost"] == 0.0
+    assert body["cost_basis"] == "defect_cases"
+    assert body["defect_case_rework_count"] == 1
+    assert body["defect_case_scrap_count"] == 0
+
+
+def test_summary_cost_blends_daily_summary_and_defect_cases_by_date(client, master_data):
+    # 2026-07-24 has a daily summary; 2026-07-25 only has a defect case.
+    client.put(
+        "/api/v1/daily-production/2026-07-24",
+        json={
+            "shift": "Day",
+            "drawers_inspected": 100,
+            "drawers_rejected_unique": 10,
+            "drawers_reworked": 5,
+            "drawers_scrapped": 2,
+        },
+    )
+    case = _create_case(
+        client, master_data, production_date="2026-07-25", detected_at="2026-07-25T09:00:00Z"
+    ).json()
+    client.post(
+        f"/api/v1/defect-cases/{case['id']}/status",
+        json={"new_status": "In Rework", "disposition": "Rework"},
+    )
+
+    resp = client.get(
+        "/api/v1/reports/summary", params={"start_date": "2026-07-24", "end_date": "2026-07-25"}
+    )
+    body = resp.json()
+    assert body["internal_rework_cost"] == 175.0 + 35.0  # 5*35 from summary + 1*35 from the case
+    assert body["cost_basis"] == "blended"
+    assert body["defect_case_rework_count"] == 1
+
+
+def test_summary_cost_prefers_daily_summary_for_dates_that_have_one(client, master_data):
+    """A case on a date that DOES have a Daily Production Summary must not also be
+    counted through the defect-case fallback (no double counting)."""
+    client.put(
+        "/api/v1/daily-production/2026-07-24",
+        json={
+            "shift": "Day",
+            "drawers_inspected": 100,
+            "drawers_rejected_unique": 10,
+            "drawers_reworked": 5,
+            "drawers_scrapped": 2,
+        },
+    )
+    case = _create_case(client, master_data).json()
+    client.post(
+        f"/api/v1/defect-cases/{case['id']}/status",
+        json={"new_status": "In Rework", "disposition": "Rework"},
+    )
+
+    resp = client.get(
+        "/api/v1/reports/summary", params={"start_date": "2026-07-24", "end_date": "2026-07-24"}
+    )
+    body = resp.json()
+    assert body["internal_rework_cost"] == 175.0  # 5*35, the case is NOT added on top
+    assert body["cost_basis"] == "daily_summary"
+    assert body["defect_case_rework_count"] == 0
+
+
+def test_summary_cost_basis_is_none_when_nothing_recorded(client):
+    resp = client.get(
+        "/api/v1/reports/summary", params={"start_date": "2026-07-24", "end_date": "2026-07-24"}
+    )
+    body = resp.json()
+    assert body["cost_basis"] == "none"
+    assert body["internal_rework_cost"] == 0.0
+
+
+def test_trend_cost_also_falls_back_to_defect_cases(client, master_data):
+    case = _create_case(
+        client, master_data, production_date="2026-07-26", detected_at="2026-07-26T09:00:00Z"
+    ).json()
+    client.post(
+        f"/api/v1/defect-cases/{case['id']}/status",
+        json={"new_status": "In Rework", "disposition": "Rework"},
+    )
+
+    resp = client.get(
+        "/api/v1/reports/trend", params={"start_date": "2026-07-26", "end_date": "2026-07-26"}
+    )
+    points = {p["period"]: p for p in resp.json()}
+    assert points["2026-07-26"]["internal_rework_cost"] == 35.0

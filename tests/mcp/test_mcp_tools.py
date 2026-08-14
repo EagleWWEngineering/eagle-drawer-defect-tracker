@@ -127,9 +127,13 @@ async def test_invalid_status_transition_raises_clear_error(mcp_env):
     mcp_module, _Session = mcp_env
     created = await _create_case_via_api(mcp_module, wo="WO-BAD-STATUS")
 
+    # "Closed - Repaired" is now reachable directly from Open (PROJECT_SPEC.md
+    # section 3.3 - Close Directly, with an optional note). "Ready for QC Recheck"
+    # is not a direct-close target and not in STATUS_TRANSITIONS for Open, so it's
+    # still a genuinely invalid transition.
     with pytest.raises(mcp_module.DefectTrackerApiError):
         await mcp_module.update_defect_case_status(
-            case_number=created["case_number"], new_status="Closed - Repaired"
+            case_number=created["case_number"], new_status="Ready for QC Recheck"
         )
 
 

@@ -34,16 +34,17 @@ def _make_case(db_session, stations, categories, today, priority="Normal"):
     [
         ("Open", "In Rework"),
         ("Open", "Waiting"),
-        ("Open", "Closed - Scrapped"),
-        ("Open", "Closed - Use As Is"),
         ("In Rework", "Ready for QC Recheck"),
         ("In Rework", "Waiting"),
         ("Waiting", "In Rework"),
-        ("Waiting", "Closed - Scrapped"),
-        ("Ready for QC Recheck", "Closed - Repaired"),
         ("Ready for QC Recheck", "In Rework"),
-        ("Ready for QC Recheck", "Closed - Scrapped"),
-        ("Ready for QC Recheck", "Closed - Use As Is"),
+        # NOTE: every "-> Closed - *" transition used to be listed here too (some
+        # requiring no note, e.g. Open -> Closed - Scrapped). PROJECT_SPEC.md
+        # section 3.3 made closing directly - from ANY non-closed status, to ANY
+        # of the 3 closed statuses - the standard action instead, always gated on
+        # a required note. See tests/unit/test_resolved_on_the_spot.py for that
+        # coverage (with-note-succeeds / without-note-fails, from every source
+        # status).
     ],
 )
 def test_allowed_transitions_succeed(db_session, stations, categories, today, current, new_status):
@@ -59,13 +60,12 @@ def test_allowed_transitions_succeed(db_session, stations, categories, today, cu
     "current,new_status",
     [
         ("Open", "Ready for QC Recheck"),
-        ("Open", "Closed - Repaired"),
-        ("In Rework", "Closed - Repaired"),
-        ("In Rework", "Closed - Scrapped"),
-        ("Waiting", "Closed - Repaired"),
-        ("Waiting", "Closed - Use As Is"),
         ("Closed - Repaired", "In Rework"),
         ("Closed - Scrapped", "Waiting"),
+        # NOTE: Open/Waiting/Ready for QC Recheck -> a Closed status used to be
+        # disallowed here for some source/target combinations. They're all direct
+        # closes now (require a note instead of being flatly rejected) - see
+        # tests/unit/test_resolved_on_the_spot.py.
     ],
 )
 def test_disallowed_transitions_raise(db_session, stations, categories, today, current, new_status):
@@ -95,7 +95,11 @@ def test_reopen_closed_case_requires_note(db_session, stations, categories, toda
 def test_disposition_scrap_closes_case(db_session, stations, categories, today):
     case = _make_case(db_session, stations, categories, today)
     updated = update_case_status(
-        db_session, case, new_status="Closed - Scrapped", disposition="Scrap"
+        db_session,
+        case,
+        new_status="Closed - Scrapped",
+        disposition="Scrap",
+        note="Confirmed scrapped - not repairable.",
     )
     assert updated.status == "Closed - Scrapped"
     assert updated.disposition == "Scrap"

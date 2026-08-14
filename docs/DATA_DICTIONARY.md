@@ -79,8 +79,11 @@ before_json, after_json, success, message.
 
 ## Status list
 Open, In Rework, Waiting, Ready for QC Recheck, Closed - Repaired, Closed - Scrapped,
-Closed - Use As Is. Allowed transitions are enforced in
-`app/services/defect_service.py` (`STATUS_TRANSITIONS`) — see PROJECT_SPEC.md section 3.1.
+Closed - Use As Is. "Ready for QC Recheck" is a legacy status kept for backward
+compatibility only — the shop floor has no real recheck moment, so no UI presents
+moving a case into it as an expected step (PROJECT_SPEC.md section 3.3). Allowed
+transitions are enforced in `app/services/defect_service.py` (`STATUS_TRANSITIONS`,
+`direct_close_statuses`) — see PROJECT_SPEC.md section 3.1.
 
 ## Counting definitions
 See PROJECT_SPEC.md section 2.1 for the exact formulas (Defect Event, Defective

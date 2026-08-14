@@ -128,6 +128,64 @@ def test_soft_delete_hides_from_normal_queries_but_preserves_record(client, cust
     assert include_resp.json()["total"] == 1
 
 
+def test_bulk_delete_and_restore_customer_issues(client, customer_categories):
+    issue1 = _create_issue(client, customer_categories, order_number="SO-BULK-1").json()
+    issue2 = _create_issue(client, customer_categories, order_number="SO-BULK-2").json()
+    issue3 = _create_issue(client, customer_categories, order_number="SO-BULK-3").json()
+
+    resp = client.post(
+        "/api/v1/customer-issues/bulk-delete", json={"ids": [issue1["id"], issue2["id"]]}
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["count"] == 2
+    assert sorted(body["ids"]) == sorted([issue1["id"], issue2["id"]])
+
+    assert client.get(f"/api/v1/customer-issues/{issue1['id']}").status_code == 404
+    assert client.get(f"/api/v1/customer-issues/{issue2['id']}").status_code == 404
+    assert client.get(f"/api/v1/customer-issues/{issue3['id']}").status_code == 200
+
+    include_resp = client.get(
+        "/api/v1/customer-issues", params={"include_deleted": True, "page_size": 500}
+    )
+    deleted_ids = {i["id"] for i in include_resp.json()["issues"] if i["is_deleted"]}
+    assert deleted_ids == {issue1["id"], issue2["id"]}
+
+    restore_resp = client.post("/api/v1/customer-issues/bulk-restore", json={"ids": [issue1["id"]]})
+    assert restore_resp.status_code == 200
+    restore_body = restore_resp.json()
+    assert restore_body["count"] == 1
+    assert restore_body["ids"] == [issue1["id"]]
+
+    assert client.get(f"/api/v1/customer-issues/{issue1['id']}").status_code == 200
+    assert client.get(f"/api/v1/customer-issues/{issue2['id']}").status_code == 404
+
+
+def test_bulk_delete_skips_unknown_and_already_deleted_issue_ids(client, customer_categories):
+    issue = _create_issue(client, customer_categories, order_number="SO-BULK-4").json()
+
+    resp = client.post("/api/v1/customer-issues/bulk-delete", json={"ids": [issue["id"], 999999]})
+    assert resp.status_code == 200
+    assert resp.json() == {"count": 1, "ids": [issue["id"]]}
+
+    resp2 = client.post("/api/v1/customer-issues/bulk-delete", json={"ids": [issue["id"]]})
+    assert resp2.status_code == 200
+    assert resp2.json() == {"count": 0, "ids": []}
+
+
+def test_bulk_restore_skips_issue_ids_that_are_not_currently_deleted(client, customer_categories):
+    issue = _create_issue(client, customer_categories, order_number="SO-BULK-5").json()
+
+    resp = client.post("/api/v1/customer-issues/bulk-restore", json={"ids": [issue["id"]]})
+    assert resp.status_code == 200
+    assert resp.json() == {"count": 0, "ids": []}
+
+
+def test_bulk_delete_rejects_empty_issue_ids(client, customer_categories):
+    resp = client.post("/api/v1/customer-issues/bulk-delete", json={"ids": []})
+    assert resp.status_code == 422
+
+
 def test_pareto_by_category_sorted_desc_with_cumulative_pct(client, customer_categories):
     _create_issue(client, customer_categories, issue_category_id=customer_categories["Wrong Size"])
     _create_issue(client, customer_categories, issue_category_id=customer_categories["Wrong Size"])

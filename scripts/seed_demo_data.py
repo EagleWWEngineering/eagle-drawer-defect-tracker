@@ -109,15 +109,18 @@ def seed_demo_data(days: int, seed: int) -> None:
                 )
 
                 # Age most cases forward through a plausible status, so the Rework
-                # Queue and Reports pages both have interesting non-Open data.
+                # Queue and Reports pages both have interesting non-Open data. Scrap
+                # is deliberately rare (PROJECT_SPEC.md section 3.2 - only the last
+                # 5%) to match the shop floor, where an operator almost always
+                # reworks the part in hand rather than scrapping it.
                 roll = random.random()
-                if roll < 0.35:
+                if roll < 0.30:
                     pass  # leave as Open
-                elif roll < 0.55:
+                elif roll < 0.50:
                     defect_service.update_case_status(db, case, new_status="In Rework")
-                elif roll < 0.65:
+                elif roll < 0.60:
                     defect_service.update_case_status(db, case, new_status="Waiting")
-                elif roll < 0.85:
+                elif roll < 0.95:
                     defect_service.update_case_status(db, case, new_status="In Rework")
                     defect_service.update_case_status(db, case, new_status="Ready for QC Recheck")
                     defect_service.update_case_status(
@@ -126,10 +129,18 @@ def seed_demo_data(days: int, seed: int) -> None:
                         new_status="Closed - Repaired",
                         disposition="Rework",
                         repair_action="Re-sanded and re-finished the affected surface.",
+                        note="Re-sanded and re-finished the affected surface.",
                     )
                 else:
+                    # Rare case (PROJECT_SPEC.md section 3.2: Scrap is genuinely
+                    # uncommon on the shop floor). The note is optional for a normal
+                    # close, but demo data reads better with one on record anyway.
                     defect_service.update_case_status(
-                        db, case, new_status="Closed - Scrapped", disposition="Scrap"
+                        db,
+                        case,
+                        new_status="Closed - Scrapped",
+                        disposition="Scrap",
+                        note="Confirmed scrapped - not repairable.",
                     )
 
         print(f"Seeded {case_counter} synthetic defect cases across {days} calendar days.")

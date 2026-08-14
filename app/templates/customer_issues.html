@@ -106,6 +106,7 @@
     <table id="issues-table">
       <thead>
         <tr>
+          <th class="row-check-header"><input type="checkbox" id="issues-select-all" aria-label="Select all issues"></th>
           <th>Issue #</th><th>Date</th><th>Customer</th><th>Order #</th><th>Category</th>
           <th>Source</th><th>Should've caught</th><th>Pieces</th><th>Est. cost</th><th>Status</th>
         </tr>
@@ -120,6 +121,7 @@
 <script>
 let masterCategories = [];
 let defectCaseOptions = [];
+let issuesBulkSelect;
 
 function currentFilters() {
   const form = document.getElementById("filter-form");
@@ -172,7 +174,7 @@ function detailRowHtml(issue) {
     .join("");
 
   return `<tr class="detail-row" data-detail-for="${issue.id}">
-    <td colspan="10">
+    <td colspan="11">
       <div class="card" style="margin:0;">
         <p><strong>Description:</strong> ${escapeHtml(issue.description)}</p>
         ${issue.photo_urls ? `<p><strong>Photos:</strong> ${escapeHtml(issue.photo_urls)}</p>` : ""}
@@ -210,6 +212,7 @@ function rowHtml(issue) {
     ? `<span class="badge badge-status" title="Auto-synced from the production brief">auto</span>`
     : `<span class="badge badge-status" title="Entered manually (phone/walk-in)">manual</span>`;
   return `<tr class="clickable" data-issue-id="${issue.id}">
+    <td class="row-check-cell"><input type="checkbox" class="row-check" data-id="${issue.id}" aria-label="Select ${escapeHtml(issue.issue_number)}"></td>
     <td>${escapeHtml(issue.issue_number)} ${syncBadge}</td>
     <td>${issue.reported_date}</td>
     <td>${escapeHtml(issue.customer_name)}</td>
@@ -233,12 +236,14 @@ async function loadIssues(params) {
   const tbody = document.querySelector("#issues-table tbody");
   tbody.innerHTML = "";
   if (!result.issues.length) {
-    tbody.innerHTML = `<tr><td colspan="10">No customer issues match these filters.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="11">No customer issues match these filters.</td></tr>`;
+    issuesBulkSelect.refresh();
     return;
   }
   result.issues.forEach((issue) => {
     tbody.insertAdjacentHTML("beforeend", rowHtml(issue));
   });
+  issuesBulkSelect.refresh();
 
   tbody.querySelectorAll("tr.clickable").forEach((tr) => {
     tr.addEventListener("click", () => {
@@ -349,6 +354,15 @@ async function loadSyncStatus() {
 
 document.addEventListener("DOMContentLoaded", async () => {
   defaultDateRange();
+
+  issuesBulkSelect = initBulkSelect({
+    tableBodySelector: "#issues-table tbody",
+    selectAllId: "issues-select-all",
+    entityLabel: "issue",
+    onDelete: (ids) => Api.post("/api/v1/customer-issues/bulk-delete", { ids }),
+    onDeleted: () => reloadAll(),
+  });
+
   try {
     await populateCategoryFilter();
     await loadDefectCaseOptions();

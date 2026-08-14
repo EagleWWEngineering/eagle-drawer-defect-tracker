@@ -139,13 +139,29 @@ def test_rework_queue_sorts_urgent_first_then_oldest(client, master_data):
 
 def test_rework_queue_excludes_closed_cases(client, master_data):
     case = _create_case(client, master_data, "Sanding / Surface", wo="WO-CLOSED")
-    client.post(
+    close_resp = client.post(
         f"/api/v1/defect-cases/{case['id']}/status",
-        json={"new_status": "Closed - Use As Is"},
+        json={"new_status": "Closed - Use As Is", "note": "Decided to use as is."},
     )
+    assert close_resp.status_code == 200, close_resp.text
     resp = client.get("/api/v1/rework-queue")
     work_orders = [r["work_order_number"] for r in resp.json()]
     assert "WO-CLOSED" not in work_orders
+
+
+def test_rework_queue_includes_root_cause_fields_for_later_editing(client, master_data):
+    """Root cause / corrective action / repair action are filled in from the Rework
+    Queue, not at entry time (CLAUDE.md) - the queue item must carry them."""
+    case = _create_case(client, master_data, "Sanding / Surface", wo="WO-RC")
+    client.patch(
+        f"/api/v1/defect-cases/{case['id']}",
+        json={"root_cause": "Dull sandpaper", "corrective_action": "Replace belt weekly"},
+    )
+    resp = client.get("/api/v1/rework-queue")
+    row = next(r for r in resp.json() if r["work_order_number"] == "WO-RC")
+    assert row["root_cause"] == "Dull sandpaper"
+    assert row["corrective_action"] == "Replace belt weekly"
+    assert row["repair_action"] is None
 
 
 def test_trend_grouped_by_day_matches_pareto_and_summary_totals(client, master_data):

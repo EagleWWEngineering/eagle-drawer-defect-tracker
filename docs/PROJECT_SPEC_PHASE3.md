@@ -56,8 +56,15 @@ Every attempt (success or failure) writes one `SyncLog` row
 (`app/services/sync_service.run_sync`). `run_sync()` never raises — an unreachable
 or malformed response is recorded as `status="failed"` with a message in `errors`,
 so neither the hourly background task nor the "Sync Now" button ever crashes the
-app. `since` defaults to the last successful sync's completion date, or 90 days back
-on the very first run.
+app. `since` defaults to the last successful sync's completion date minus a
+`SINCE_LOOKBACK_BUFFER_DAYS` (3-day) buffer, or 90 days back on the very first run.
+The buffer exists because the brief's classifier can take up to ~1 day to add an
+email to `/api/quality-issues`, tagged with the day it was *received* rather than
+classified — without a buffer, an empty-result sync that completes after midnight
+would advance `since` past that day and permanently hide the issue once it does
+appear. Re-syncing the buffered window is safe: issues are upserted by
+`source_thread_id`, so re-fetching a day already synced just re-applies the brief-
+sourced field refresh described below, never a duplicate.
 
 The background task (`app.main`'s `lifespan`, calling
 `sync_service.run_periodic_sync`) runs one sync immediately on app startup, then

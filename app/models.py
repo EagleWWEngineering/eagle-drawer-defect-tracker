@@ -120,6 +120,16 @@ class DefectCase(Base):
     root_cause: Mapped[str | None] = mapped_column(Text, nullable=True)
     corrective_action: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # "Fixed immediately?" fast path (PROJECT_SPEC.md section 3.3): true when this
+    # case was created already in a closed status because the QC catch was resolved
+    # in the same ~60 seconds as entry, instead of going through Open/In Rework/Ready
+    # for QC Recheck. Set once at creation, never changed afterward - see
+    # app/services/defect_service.py create_defect_case.
+    resolved_on_the_spot: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # "Close Directly (Skip Recheck)" fast path (PROJECT_SPEC.md section 3.3): true
+    # when this case went In Rework -> Closed-* directly, bypassing Ready for QC
+    # Recheck. Set by app/services/defect_service.py update_case_status.
+    skipped_recheck: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[dt.datetime] = mapped_column(

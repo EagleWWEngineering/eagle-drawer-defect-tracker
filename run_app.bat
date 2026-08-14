@@ -31,7 +31,8 @@ if errorlevel 1 (
 )
 
 echo.
-echo Starting Eagle Drawer Defect Tracker at http://127.0.0.1:8000
+echo Starting Eagle Drawer Defect Tracker at http://0.0.0.0:8000
+echo Reachable on the shop network at http://<this-machine-ip>:8000
 echo Press Ctrl+C to stop.
 echo.
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000

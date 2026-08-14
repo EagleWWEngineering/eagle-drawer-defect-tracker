@@ -55,6 +55,29 @@
 </section>
 
 <section class="card">
+  <h2>Deleted Items</h2>
+  <p class="hint">Soft-deleted records only - nothing on this screen ever permanently
+    removes data. Restoring a record sets its deleted flag back off, exactly as it
+    was before deletion.</p>
+
+  <h3>Defect Cases</h3>
+  <div class="table-scroll">
+    <table id="deleted-cases-table">
+      <thead><tr><th>Case</th><th>Work order</th><th>Date</th><th>Status</th><th>Restore</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <h3>Customer Issues</h3>
+  <div class="table-scroll">
+    <table id="deleted-issues-table">
+      <thead><tr><th>Issue #</th><th>Customer</th><th>Date</th><th>Status</th><th>Restore</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<section class="card">
   <div style="display:flex; justify-content:space-between; align-items:center;">
     <h2 style="margin:0;">Sync Log</h2>
     <a class="btn secondary" href="/customer-issues">Go to Customer Issues</a>
@@ -109,6 +132,66 @@ async function loadTables() {
   });
 }
 
+async function loadDeletedCases() {
+  const result = await Api.listDefectCases({ include_deleted: true, page_size: 500 });
+  const deleted = result.cases.filter((c) => c.is_deleted);
+  const tbody = document.querySelector("#deleted-cases-table tbody");
+  tbody.innerHTML =
+    deleted
+      .map(
+        (c) => `<tr>
+          <td>${escapeHtml(c.case_number)}</td>
+          <td>${escapeHtml(c.work_order_number)}</td>
+          <td>${c.production_date}</td>
+          <td>${statusBadge(c.status)}</td>
+          <td><button type="button" class="secondary restore-btn" data-id="${c.id}">Restore</button></td>
+        </tr>`
+      )
+      .join("") || `<tr><td colspan="5">No deleted defect cases.</td></tr>`;
+
+  tbody.querySelectorAll(".restore-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      try {
+        await Api.bulkRestoreDefectCases([Number(btn.dataset.id)]);
+        showToast("Defect case restored.", "success");
+        await loadDeletedCases();
+      } catch (err) {
+        showToast(err.message, "error");
+      }
+    });
+  });
+}
+
+async function loadDeletedIssues() {
+  const result = await Api.get("/api/v1/customer-issues", { include_deleted: true, page_size: 500 });
+  const deleted = result.issues.filter((i) => i.is_deleted);
+  const tbody = document.querySelector("#deleted-issues-table tbody");
+  tbody.innerHTML =
+    deleted
+      .map(
+        (i) => `<tr>
+          <td>${escapeHtml(i.issue_number)}</td>
+          <td>${escapeHtml(i.customer_name)}</td>
+          <td>${i.reported_date}</td>
+          <td>${statusBadge(i.status)}</td>
+          <td><button type="button" class="secondary restore-btn" data-id="${i.id}">Restore</button></td>
+        </tr>`
+      )
+      .join("") || `<tr><td colspan="5">No deleted customer issues.</td></tr>`;
+
+  tbody.querySelectorAll(".restore-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      try {
+        await Api.post("/api/v1/customer-issues/bulk-restore", { ids: [Number(btn.dataset.id)] });
+        showToast("Customer issue restored.", "success");
+        await loadDeletedIssues();
+      } catch (err) {
+        showToast(err.message, "error");
+      }
+    });
+  });
+}
+
 function syncLogStatusBadge(status) {
   const cssStatus = status === "success" ? "closed-repaired" : "closed-scrapped";
   return `<span class="badge badge-status badge-status-${cssStatus}">${escapeHtml(status)}</span>`;
@@ -142,6 +225,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     await loadTables();
     await loadSyncLog();
     await loadCostSettings();
+    await loadDeletedCases();
+    await loadDeletedIssues();
   } catch (err) {
     showToast(err.message, "error");
   }
