@@ -335,16 +335,13 @@ function defaultDateRange() {
 async function loadSyncStatus() {
   const line = document.getElementById("sync-status-line");
   try {
-    const log = await Api.get("/api/v1/sync/status");
-    if (!log) {
-      line.textContent = "Never synced yet.";
-      return;
-    }
-    if (log.status === "success") {
-      line.textContent = `Last synced: ${timeAgo(log.sync_completed_at)} — ${log.records_fetched} issues (${log.records_created} new, ${log.records_updated} updated)`;
+    const status = await Api.get("/api/v1/sync/customer-issues/relay-connection");
+    if (status.relay_connected) {
+      line.textContent = `🟢 Local relay connected — last checked in at ${status.relay_last_seen_at_local}.`;
       line.style.color = "";
     } else {
-      line.textContent = `Sync failed ${timeAgo(log.sync_started_at)} — ${log.errors || "source unreachable"}`;
+      const lastSeen = status.relay_last_seen_at_local || "never";
+      line.textContent = `🔴 Local relay not connected — sync will resume automatically once it's back online. Last seen: ${lastSeen}.`;
       line.style.color = "var(--color-danger)";
     }
   } catch (err) {
@@ -381,20 +378,16 @@ document.addEventListener("DOMContentLoaded", async () => {
   syncBtn.addEventListener(
     "click",
     guardDoubleSubmit(syncBtn, async () => {
-      const line = document.getElementById("sync-status-line");
-      line.textContent = "Syncing...";
+      // The actual fetch+ingest now happens asynchronously on the local relay's
+      // next check-in (see docs/PROJECT_SPEC_PHASE3.md) - this just requests it
+      // and shows the confirmation message. No live created/updated/skipped
+      // counts to show here since the work hasn't happened yet.
       try {
-        const log = await Api.post("/api/v1/sync/customer-issues");
-        if (log.status === "success") {
-          showToast(`Sync complete: ${log.records_created} new, ${log.records_updated} updated.`, "success");
-        } else {
-          showToast(`Sync failed: ${log.errors || "source unreachable"}`, "error");
-        }
-        await loadSyncStatus();
-        await reloadAll();
-        await loadDefectCaseOptions();
+        const result = await Api.post("/api/v1/sync/customer-issues/request-manual-sync");
+        showToast(result.message, "success");
       } catch (err) {
         showToast(err.message, "error");
+      } finally {
         await loadSyncStatus();
       }
     })

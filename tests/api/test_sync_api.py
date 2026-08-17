@@ -102,6 +102,30 @@ def test_logs_lists_most_recent_first_and_respects_limit(client, monkeypatch):
     assert logs[0]["id"] > logs[1]["id"]
 
 
+def test_request_manual_sync_sets_pending_and_responds_instantly(client):
+    resp = client.post("/api/v1/sync/customer-issues/request-manual-sync")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["message"]
+    assert body["requested_at"]
+    assert body["requested_at_local"]
+
+    status_resp = client.get("/api/v1/sync/customer-issues/relay-connection")
+    assert status_resp.json()["manual_sync_pending"] is True
+
+
+def test_relay_connection_never_seen_reports_not_connected(client):
+    resp = client.get("/api/v1/sync/customer-issues/relay-connection")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["relay_connected"] is False
+    assert body["relay_last_seen_at"] is None
+    assert body["relay_last_seen_at_local"] is None
+    assert body["manual_sync_pending"] is False
+
+
 def test_manually_created_issue_is_not_flagged_as_synced(client, customer_categories):
     payload = {
         "reported_date": "2026-07-24",

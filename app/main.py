@@ -5,8 +5,6 @@ Run with: uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -35,7 +33,6 @@ from app.routers import (
 from app.routers import settings as settings_router
 from app.schemas import HealthOut
 from app.seed_data import seed_master_data
-from app.services import sync_service
 
 settings = get_settings()
 APP_DIR = Path(__file__).resolve().parent
@@ -59,17 +56,21 @@ async def lifespan(_app: FastAPI):
     finally:
         db.close()
 
-    # Phase 3: pull Customer Issues from the production brief on startup, then every
-    # SYNC_INTERVAL_MINUTES. Cancelled cleanly on shutdown. run_sync() never raises
-    # (see sync_service.py), so an unreachable production brief just gets logged and
-    # retried on the next interval - it never prevents the app from serving requests.
-    sync_task = asyncio.create_task(sync_service.run_periodic_sync(settings.sync_interval_minutes))
-    try:
-        yield
-    finally:
-        sync_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await sync_task
+    # Phase 3 originally scheduled sync_service.run_periodic_sync() here to pull
+    # Customer Issues from the production brief every SYNC_INTERVAL_MINUTES.
+    # Retired: Render's servers cannot reach the production brief directly
+    # (confirmed firewalled), so every one of those automatic attempts always
+    # failed. Customer Issues sync now happens exclusively via a local relay that
+    # CAN reach the production brief - scripts/relay_customer_issues.py (the
+    # existing unconditional hourly fetch+ingest) and scripts/relay_poll.py (a new
+    # ~1-minute heartbeat that also runs a full relay pass when a "Sync Now" click
+    # has requested one) - both POSTing to
+    # POST /api/v1/sync/customer-issues/ingest-raw. sync_service.run_periodic_sync()
+    # / run_sync() and the manual POST /api/v1/sync/customer-issues debug route are
+    # deliberately left in place (not deleted) for a future local-network
+    # deployment or manual debugging - only this automatic background task is
+    # retired, so it no longer fires on its own.
+    yield
 
 
 app = FastAPI(

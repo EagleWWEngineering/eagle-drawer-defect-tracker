@@ -66,25 +66,68 @@ appear. Re-syncing the buffered window is safe: issues are upserted by
 `source_thread_id`, so re-fetching a day already synced just re-applies the brief-
 sourced field refresh described below, never a duplicate.
 
-The background task (`app.main`'s `lifespan`, calling
-`sync_service.run_periodic_sync`) runs one sync immediately on app startup, then
-every `SYNC_INTERVAL_MINUTES` (default 60), and is cancelled cleanly on shutdown.
+**Historical note (superseded by "Relay follow-up" below):** the background task
+(`app.main`'s `lifespan`, calling `sync_service.run_periodic_sync`) originally ran
+one sync immediately on app startup, then every `SYNC_INTERVAL_MINUTES` (default
+60), cancelled cleanly on shutdown. `sync_service.run_periodic_sync()`/`run_sync()`
+themselves are unchanged and still work exactly as described above - only the
+automatic scheduling of that task was retired, for the reason in the next section.
+
+## Relay follow-up: Render can't reach the production brief directly
+
+Render's servers cannot reach the production brief directly (confirmed firewalled
+on the production brief's side). Every automatic run of the periodic background
+task above always failed there, so `app.main`'s `lifespan` no longer schedules it.
+Customer Issues sync instead happens exclusively via a local relay running on a
+machine that CAN reach the production brief:
+
+- **`scripts/relay_customer_issues.py`** (unchanged, still hourly): fetches the raw
+  payload from the production brief and `POST`s it, unmodified, to
+  `POST /api/v1/sync/customer-issues/ingest-raw`, which calls the exact same
+  `process_issues_payload()` used by the direct-fetch path above - no mapping/dedup
+  logic is duplicated.
+- **`scripts/relay_poll.py`** (new, intended every ~1 minute): calls
+  `GET /api/v1/sync/customer-issues/relay-status` (a cheap, DB-only heartbeat - no
+  production-brief call happens there). That call itself updates
+  `sync_relay_last_seen_at` (an `AppSetting`, see `app/services/sync_service.py`)
+  and reports whether a manual sync is pending; if so, this script immediately runs
+  the exact same fetch+ingest as `relay_customer_issues.py` by calling its `run()`
+  function directly, never reimplementing that logic.
+
+The Customer Issues tab's "Sync Now" button no longer triggers a direct fetch (that
+always failed on Render). It calls `POST /api/v1/sync/customer-issues/request-
+manual-sync` instead, which just sets another `AppSetting`
+(`sync_manual_requested_at`) and returns instantly; the local relay's next
+check-in notices it, runs a full relay pass, and the ingest endpoint clears the
+flag on success. The manual "Sync Now" debug route (`POST
+/api/v1/sync/customer-issues`, still a direct fetch) is left in place and working,
+just no longer called by the UI - harmless for local-network use/debugging.
 
 ## API
 
 `POST /api/v1/customer-issues` (unchanged) still works for manual entry —
-`source_thread_id` stays `null`. New: `POST /api/v1/sync/customer-issues` ("Sync
-Now"), `GET /api/v1/sync/status` (most recent attempt, `null` if never run), and
-`GET /api/v1/sync/logs?limit=20` (added beyond the two routes in the original
-request, since the Admin screen's "last 20 sync runs" table needed a list endpoint
-distinct from the single-latest `/status`).
+`source_thread_id` stays `null`. `GET /api/v1/sync/status` (most recent attempt,
+`null` if never run) and `GET /api/v1/sync/logs?limit=20` (the Admin screen's "last
+20 sync runs" table) are unchanged. `POST /api/v1/sync/customer-issues` ("Sync Now"
+direct-fetch debug route) still exists but is no longer called by the UI - see
+above. New (relay follow-up): `POST /api/v1/sync/customer-issues/request-manual-
+sync` (the UI's actual "Sync Now" call), `GET /api/v1/sync/customer-issues/relay-
+status` (RELAY_API_KEY-authenticated heartbeat, called by `scripts/relay_poll.py`),
+and `GET /api/v1/sync/customer-issues/relay-connection` (normal login session,
+polled by the UI for its connected/disconnected status line).
 
 ## UI
 
-Customer Issues tab: "Sync now" button + a status line ("Last synced: 5 minutes
-ago — 47 issues" / "Sync failed 2 hours ago — ..."), and an `auto`/`manual` badge
-next to each issue number so staff can tell synced rows from manually-entered ones.
-Admin: a Sync Log table of the last 20 attempts.
+Customer Issues tab: "Sync now" button (now just requests a manual sync and shows
+an instant confirmation toast - see "Relay follow-up" above) + a heartbeat-based
+status line computed from `sync_relay_last_seen_at`:
+"🟢 Local relay connected — last checked in at [time]." when the heartbeat is
+within the last ~2 minutes, otherwise "🔴 Local relay not connected — sync will
+resume automatically once it's back online. Last seen: [time or "never"]." Also an
+`auto`/`manual` badge next to each issue number so staff can tell synced rows from
+manually-entered ones. Admin: a Sync Log table of the last 20 attempts (unchanged -
+still reflects both the relay's hourly ingest-raw calls and any manual-sync-
+triggered one, distinguished by the `relay:` source_url prefix).
 
 ## Seed data
 

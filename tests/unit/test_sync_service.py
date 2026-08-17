@@ -535,3 +535,102 @@ async def test_run_sync_default_since_looks_back_past_last_success_date(db_sessi
     )
     assert since_used == expected
     assert since_used < first_log.sync_completed_at.date()
+
+
+# ---------------------------------------------------------------------------
+# Manual sync request / relay heartbeat singleton state (AppSetting-backed)
+# ---------------------------------------------------------------------------
+
+
+def test_manual_sync_not_pending_by_default(db_session):
+    assert sync_service.is_manual_sync_pending(db_session) is False
+    assert sync_service.get_manual_sync_requested_at(db_session) is None
+
+
+def test_request_manual_sync_sets_pending_flag(db_session):
+    requested_at = sync_service.request_manual_sync(db_session)
+
+    assert requested_at.tzinfo is not None
+    assert sync_service.is_manual_sync_pending(db_session) is True
+    stored = sync_service.get_manual_sync_requested_at(db_session)
+    assert stored == requested_at
+
+
+def test_clear_manual_sync_request_unsets_pending_flag(db_session):
+    sync_service.request_manual_sync(db_session)
+    assert sync_service.is_manual_sync_pending(db_session) is True
+
+    sync_service.clear_manual_sync_request(db_session)
+    db_session.commit()
+
+    assert sync_service.is_manual_sync_pending(db_session) is False
+    assert sync_service.get_manual_sync_requested_at(db_session) is None
+
+
+def test_clear_manual_sync_request_is_a_harmless_noop_when_nothing_pending(db_session):
+    sync_service.clear_manual_sync_request(db_session)
+    db_session.commit()
+    assert sync_service.is_manual_sync_pending(db_session) is False
+
+
+def test_process_issues_payload_clears_pending_manual_sync_on_success(db_session):
+    sync_service.request_manual_sync(db_session)
+    assert sync_service.is_manual_sync_pending(db_session) is True
+
+    sync_service.process_issues_payload(
+        db_session, {"issues": []}, source_url="relay:http://fake-brief/api/quality-issues"
+    )
+
+    assert sync_service.is_manual_sync_pending(db_session) is False
+
+
+def test_record_relay_heartbeat_updates_last_seen_and_reports_pending(db_session):
+    assert sync_service.get_relay_last_seen_at(db_session) is None
+
+    pending = sync_service.record_relay_heartbeat(db_session)
+    assert pending is False
+    first_seen = sync_service.get_relay_last_seen_at(db_session)
+    assert first_seen is not None
+
+    sync_service.request_manual_sync(db_session)
+    pending = sync_service.record_relay_heartbeat(db_session)
+    assert pending is True
+    second_seen = sync_service.get_relay_last_seen_at(db_session)
+    assert second_seen is not None
+    assert second_seen >= first_seen
+
+
+def test_relay_connection_status_never_seen_is_not_connected(db_session):
+    status = sync_service.relay_connection_status(db_session)
+    assert status == {
+        "relay_last_seen_at": None,
+        "relay_connected": False,
+        "manual_sync_pending": False,
+    }
+
+
+def test_relay_connection_status_recent_heartbeat_is_connected(db_session):
+    sync_service.record_relay_heartbeat(db_session)
+    now = sync_service.get_relay_last_seen_at(db_session) + dt.timedelta(seconds=30)
+
+    status = sync_service.relay_connection_status(db_session, now=now)
+
+    assert status["relay_connected"] is True
+    assert status["relay_last_seen_at"] is not None
+
+
+def test_relay_connection_status_stale_heartbeat_is_not_connected(db_session):
+    sync_service.record_relay_heartbeat(db_session)
+    last_seen = sync_service.get_relay_last_seen_at(db_session)
+    now = last_seen + sync_service.RELAY_HEARTBEAT_STALE_AFTER + dt.timedelta(seconds=1)
+
+    status = sync_service.relay_connection_status(db_session, now=now)
+
+    assert status["relay_connected"] is False
+    assert status["relay_last_seen_at"] == last_seen
+
+
+def test_relay_connection_status_reflects_manual_sync_pending(db_session):
+    sync_service.request_manual_sync(db_session)
+    status = sync_service.relay_connection_status(db_session)
+    assert status["manual_sync_pending"] is True

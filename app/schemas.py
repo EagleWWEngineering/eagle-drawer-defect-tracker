@@ -620,6 +620,43 @@ class SyncLogOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ManualSyncRequestOut(BaseModel):
+    """Response to POST /api/v1/sync/customer-issues/request-manual-sync (the
+    Customer Issues tab's "Sync Now" button) - always returned instantly, with no
+    counts, since the actual fetch+ingest happens later on the local relay's next
+    check-in."""
+
+    message: str
+    requested_at: dt.datetime
+
+    @computed_field
+    @property
+    def requested_at_local(self) -> str | None:
+        return to_display_string(self.requested_at)
+
+
+class RelayHeartbeatOut(BaseModel):
+    """Response to GET /api/v1/sync/customer-issues/relay-status - the local
+    relay's frequent heartbeat check-in (see scripts/relay_poll.py)."""
+
+    manual_sync_pending: bool
+
+
+class RelayConnectionStatusOut(BaseModel):
+    """Response to GET /api/v1/sync/customer-issues/relay-connection - drives the
+    Customer Issues tab's 🟢/🔴 status line. relay_last_seen_at is null if the relay
+    has never checked in."""
+
+    relay_last_seen_at: dt.datetime | None
+    relay_connected: bool
+    manual_sync_pending: bool
+
+    @computed_field
+    @property
+    def relay_last_seen_at_local(self) -> str | None:
+        return to_display_string(self.relay_last_seen_at)
+
+
 # ---------------------------------------------------------------------------
 # Bulk actions (shared by DefectCase and CustomerIssue bulk-delete/bulk-restore)
 # ---------------------------------------------------------------------------

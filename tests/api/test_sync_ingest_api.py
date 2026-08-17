@@ -232,3 +232,85 @@ def test_ingest_does_not_require_a_login_session(unauth_client, relay_key):
     resp = unauth_client.post(INGEST_PATH, json={"issues": []}, headers={"X-Relay-Key": relay_key})
 
     assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# ingest-raw clears a pending manual sync request on success
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_success_clears_pending_manual_sync_request(unauth_client, relay_key):
+    from app.services import sync_service
+
+    db = unauth_client.testing_sessionmaker()
+    try:
+        sync_service.request_manual_sync(db)
+        assert sync_service.is_manual_sync_pending(db) is True
+    finally:
+        db.close()
+
+    resp = unauth_client.post(INGEST_PATH, json={"issues": []}, headers={"X-Relay-Key": relay_key})
+    assert resp.status_code == 200
+
+    db = unauth_client.testing_sessionmaker()
+    try:
+        assert sync_service.is_manual_sync_pending(db) is False
+    finally:
+        db.close()
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/sync/customer-issues/relay-status (the local relay's frequent
+# heartbeat check-in) - same auth pattern as ingest-raw: RELAY_API_KEY header,
+# no login session required.
+# ---------------------------------------------------------------------------
+
+RELAY_STATUS_PATH = "/api/v1/sync/customer-issues/relay-status"
+
+
+def test_relay_status_missing_key_returns_401(unauth_client, relay_key):
+    resp = unauth_client.get(RELAY_STATUS_PATH)
+    assert resp.status_code == 401
+
+
+def test_relay_status_wrong_key_returns_401(unauth_client, relay_key):
+    resp = unauth_client.get(RELAY_STATUS_PATH, headers={"X-Relay-Key": "totally-wrong"})
+    assert resp.status_code == 401
+
+
+def test_relay_status_does_not_require_a_login_session(unauth_client, relay_key):
+    assert auth_service.SESSION_COOKIE_NAME not in unauth_client.cookies
+
+    resp = unauth_client.get(RELAY_STATUS_PATH, headers={"X-Relay-Key": relay_key})
+
+    assert resp.status_code == 200
+
+
+def test_relay_status_updates_heartbeat_and_reports_not_pending(unauth_client, relay_key):
+    from app.services import sync_service
+
+    resp = unauth_client.get(RELAY_STATUS_PATH, headers={"X-Relay-Key": relay_key})
+
+    assert resp.status_code == 200
+    assert resp.json()["manual_sync_pending"] is False
+
+    db = unauth_client.testing_sessionmaker()
+    try:
+        assert sync_service.get_relay_last_seen_at(db) is not None
+    finally:
+        db.close()
+
+
+def test_relay_status_reports_pending_when_manual_sync_requested(unauth_client, relay_key):
+    from app.services import sync_service
+
+    db = unauth_client.testing_sessionmaker()
+    try:
+        sync_service.request_manual_sync(db)
+    finally:
+        db.close()
+
+    resp = unauth_client.get(RELAY_STATUS_PATH, headers={"X-Relay-Key": relay_key})
+
+    assert resp.status_code == 200
+    assert resp.json()["manual_sync_pending"] is True

@@ -11,17 +11,27 @@ background task and the "Sync Now" API route can treat every outcome uniformly.
 
 Two ways raw production-brief data reaches process_issues_payload() (the shared
 mapping/dedup/upsert logic):
-  1. run_sync() - fetch_issues() pulls it directly over HTTP. This is the hourly
-     background sync and the "Sync Now" API route. Render's servers cannot reach
-     the production brief directly (firewalled on the production brief's side), so
-     this path fails there and that's expected.
+  1. run_sync() - fetch_issues() pulls it directly over HTTP. Render's servers
+     cannot reach the production brief directly (firewalled on the production
+     brief's side), so this path always fails there - which is why app.main's
+     lifespan no longer schedules run_periodic_sync() automatically. run_sync()
+     and the manual "Sync Now" debug route (POST /api/v1/sync/customer-issues)
+     are kept for local-network/debugging use.
   2. POST /api/v1/sync/customer-issues/ingest-raw (app/routers/sync.py) - a local
      relay script (scripts/relay_customer_issues.py), running on a machine that CAN
      reach the production brief, fetches the same data and forwards the raw JSON
      body here. This path skips fetch_issues() entirely but calls the exact same
      process_issues_payload(), so mapping/dedup/category logic is never duplicated.
      SyncLog rows from this path are distinguished by a "relay:" prefix on
-     source_url.
+     source_url. This is the ONLY path that actually runs in production now.
+
+The "Sync Now" button on the Customer Issues tab no longer calls run_sync()
+directly (Render can't reach the production brief). Instead it calls POST
+/api/v1/sync/customer-issues/request-manual-sync, which just sets
+MANUAL_SYNC_REQUESTED_SETTING_KEY and returns instantly. A second local script
+(scripts/relay_poll.py), polling GET /api/v1/sync/customer-issues/relay-status
+about once a minute, notices the pending flag and performs the real fetch+ingest
+via the exact same code path as #2 above. See the AppSetting keys/helpers below.
 """
 
 from __future__ import annotations
@@ -38,12 +48,35 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.database import SessionLocal
-from app.models import CustomerIssue, CustomerIssueCategory, SyncLog
+from app.models import AppSetting, CustomerIssue, CustomerIssueCategory, SyncLog
 from app.services import customer_issue_service
 
 logger = logging.getLogger("sync_service")
 
 QUALITY_ISSUES_PATH = "/api/quality-issues"
+
+# Singleton state (see app/models.py AppSetting docstring - "intentionally generic
+# so a future setting doesn't need its own table/migration"), following the exact
+# pattern app/services/auth_service.py already uses for AUTH_USERNAME_SETTING_KEY
+# etc. Both are stored as ISO datetime strings; empty/missing means "never".
+#
+# Background: Render cannot reach the production brief directly (confirmed
+# firewalled), so the "Sync Now" button no longer triggers a direct fetch from
+# Render (that always failed there). Instead it just records that a sync is
+# wanted (MANUAL_SYNC_REQUESTED_SETTING_KEY) and returns instantly; the local
+# relay (scripts/relay_poll.py), polling every ~1 minute via GET
+# /api/v1/sync/customer-issues/relay-status, notices the pending flag and performs
+# the real fetch+ingest. That same endpoint call is also the heartbeat the
+# Customer Issues tab's connected/disconnected status line is computed from
+# (RELAY_LAST_SEEN_SETTING_KEY).
+MANUAL_SYNC_REQUESTED_SETTING_KEY = "sync_manual_requested_at"
+RELAY_LAST_SEEN_SETTING_KEY = "sync_relay_last_seen_at"
+
+# How stale the relay's last heartbeat can be before the UI reports it as
+# disconnected. The relay's frequent check-in polls roughly every minute (see
+# scripts/relay_poll.py) - 2 minutes allows exactly one missed cycle before
+# flipping the status line red.
+RELAY_HEARTBEAT_STALE_AFTER = dt.timedelta(minutes=2)
 
 # The brief's classifier can take up to ~1 day to finish processing an email and
 # add it to /api/quality-issues, tagged with the day it was *received* rather
@@ -276,6 +309,100 @@ def _default_since(db: Session) -> dt.date:
     return dt.date.today() - dt.timedelta(days=90)
 
 
+def _get_setting_datetime(db: Session, key: str) -> dt.datetime | None:
+    """Generic ISO-datetime-string reader for the AppSetting rows above, mirroring
+    app/services/auth_service.py's get_app_username()/get_app_password_hash() -
+    small dedicated helpers over the generic key-value table rather than a bespoke
+    column. Missing row or empty string both mean "never"."""
+    setting = db.get(AppSetting, key)
+    if setting is None or not setting.value:
+        return None
+    try:
+        value = dt.datetime.fromisoformat(setting.value)
+    except ValueError:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=dt.timezone.utc)
+    return value
+
+
+def _set_setting_datetime(db: Session, key: str, value: dt.datetime | None) -> None:
+    """Write (or clear, with value=None) one of the ISO-datetime AppSetting rows
+    above. Does not commit - callers compose this into their own transaction, same
+    as auth_service.sync_credentials_from_env()."""
+    raw = value.astimezone(dt.timezone.utc).isoformat() if value is not None else ""
+    setting = db.get(AppSetting, key)
+    if setting is None:
+        db.add(AppSetting(key=key, value=raw))
+    else:
+        setting.value = raw
+
+
+def get_manual_sync_requested_at(db: Session) -> dt.datetime | None:
+    return _get_setting_datetime(db, MANUAL_SYNC_REQUESTED_SETTING_KEY)
+
+
+def is_manual_sync_pending(db: Session) -> bool:
+    return get_manual_sync_requested_at(db) is not None
+
+
+def request_manual_sync(db: Session) -> dt.datetime:
+    """ "Sync Now" button (POST /api/v1/sync/customer-issues/request-manual-sync):
+    record that a manual sync is wanted and return immediately - no network call,
+    just a DB write, so this always succeeds instantly. The actual fetch+ingest
+    happens later, asynchronously, when the local relay's frequent heartbeat (GET
+    /api/v1/sync/customer-issues/relay-status) next sees this flag set and performs
+    a full relay pass. Cleared by process_issues_payload() on the next successful
+    ingest, whichever path that comes through."""
+    now = dt.datetime.now(dt.timezone.utc)
+    _set_setting_datetime(db, MANUAL_SYNC_REQUESTED_SETTING_KEY, now)
+    db.commit()
+    return now
+
+
+def clear_manual_sync_request(db: Session) -> None:
+    """Clear the pending-manual-sync flag. Called unconditionally from
+    process_issues_payload() on every successful sync (relay-ingested or direct) -
+    a clear when nothing was pending is a harmless no-op, and doing it here (rather
+    than as a separate step the relay/UI has to remember) guarantees the flag can
+    never get stuck showing "pending" after the work it asked for already
+    happened. Does not commit - composes into the caller's transaction."""
+    _set_setting_datetime(db, MANUAL_SYNC_REQUESTED_SETTING_KEY, None)
+
+
+def get_relay_last_seen_at(db: Session) -> dt.datetime | None:
+    return _get_setting_datetime(db, RELAY_LAST_SEEN_SETTING_KEY)
+
+
+def record_relay_heartbeat(db: Session) -> bool:
+    """GET /api/v1/sync/customer-issues/relay-status side effect: stamp
+    sync_relay_last_seen_at as now (this call IS the heartbeat the Customer Issues
+    tab's connected/disconnected status line is computed from - see
+    relay_connection_status), then report whether a manual sync is currently
+    pending so the relay's frequent check-in knows whether to also run a full
+    fetch+ingest this cycle. Cheap and fast - no network call to the production
+    brief happens here, just a DB read+write."""
+    _set_setting_datetime(db, RELAY_LAST_SEEN_SETTING_KEY, dt.datetime.now(dt.timezone.utc))
+    pending = is_manual_sync_pending(db)
+    db.commit()
+    return pending
+
+
+def relay_connection_status(db: Session, *, now: dt.datetime | None = None) -> dict[str, Any]:
+    """Shared computation behind the Customer Issues tab's heartbeat status line:
+    connected iff the relay's last heartbeat (record_relay_heartbeat) was within
+    RELAY_HEARTBEAT_STALE_AFTER of `now`; never-seen counts as not connected, same
+    as a stale one. `now` is injectable for tests."""
+    last_seen = get_relay_last_seen_at(db)
+    effective_now = now or dt.datetime.now(dt.timezone.utc)
+    connected = last_seen is not None and (effective_now - last_seen) <= RELAY_HEARTBEAT_STALE_AFTER
+    return {
+        "relay_last_seen_at": last_seen,
+        "relay_connected": connected,
+        "manual_sync_pending": is_manual_sync_pending(db),
+    }
+
+
 def process_issues_payload(
     db: Session,
     data: dict[str, Any],
@@ -346,6 +473,10 @@ def process_issues_payload(
     log.errors = "; ".join(error_messages) or None
     log.status = "success"
     log.sync_completed_at = dt.datetime.now(dt.timezone.utc)
+    # A successful sync (whichever path produced it) is the actual work a pending
+    # "Sync Now" request was asking for - clear it here rather than leaving it to
+    # the relay/UI to remember as a separate step.
+    clear_manual_sync_request(db)
     db.add(log)
     db.commit()
     db.refresh(log)
@@ -395,10 +526,14 @@ async def run_sync(db: Session, *, since: dt.date | None = None) -> SyncLog:
 
 async def run_periodic_sync(interval_minutes: int, session_factory=None) -> None:
     """Runs one sync immediately, then repeats every interval_minutes, forever.
-    Intended to be wrapped in asyncio.create_task() from app.main's lifespan and
-    cancelled on shutdown. Never raises - errors are logged and the loop continues
-    (matching the spec: "If the production brief is unreachable, log the error and
-    retry on the next interval").
+
+    No longer scheduled automatically by app.main's lifespan - Render cannot reach
+    the production brief directly, so every automatic run of this on Render always
+    failed. Left in place (not deleted) for a future local-network deployment or
+    manual debugging; call it yourself (e.g. from a shell) if you need it. Never
+    raises - errors are logged and the loop continues (matching the original spec:
+    "If the production brief is unreachable, log the error and retry on the next
+    interval").
     """
     factory = session_factory or SessionLocal
     while True:

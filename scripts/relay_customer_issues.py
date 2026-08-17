@@ -13,6 +13,13 @@ This script is deliberately a dumb pipe - it must never contain any field-mappin
 dedup, or category logic of its own. If you're tempted to add any, it belongs in
 app/services/sync_service.py instead, shared by both sync paths.
 
+This module's run()/_log() are also imported directly by scripts/relay_poll.py (a
+companion script, run on a much more frequent ~1 minute Task Scheduler interval)
+so that its "a manual Sync Now was requested - do a full relay pass right now"
+behavior reuses this exact fetch+ingest code path instead of duplicating it. This
+script's own unconditional hourly schedule is unaffected by that and keeps running
+exactly as before.
+
 Usage:
     python scripts/relay_customer_issues.py
 

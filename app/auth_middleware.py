@@ -33,6 +33,13 @@ PUBLIC_EXACT_PATHS: set[str] = {
     # _verify_relay_key) - same security bar as the login, different credential.
     # Exempting this ONE exact path only - nothing broader.
     "/api/v1/sync/customer-issues/ingest-raw",
+    # Same reasoning: the local relay's frequent (~1 minute) heartbeat check-in
+    # (scripts/relay_poll.py) is also an unattended script that can't hold a
+    # browser session - protected by the same RELAY_API_KEY header check instead
+    # (see _verify_relay_key). Exempting this ONE exact path only - nothing
+    # broader. Note GET .../relay-connection (what the logged-in browser UI polls
+    # for its status line) is a DIFFERENT path and stays behind the normal login.
+    "/api/v1/sync/customer-issues/relay-status",
 }
 
 # Path prefixes reachable with no session (static assets only - no shop data lives
