@@ -5,6 +5,8 @@ Run with: uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 from __future__ import annotations
 
+import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -37,6 +39,34 @@ from app.seed_data import seed_master_data
 settings = get_settings()
 APP_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
+
+logger = logging.getLogger("app.startup")
+
+
+def _warn_if_env_var_missing_for_persistent_path(env_var_name: str, resolved_path: object) -> None:
+    """Incident follow-up: a 2026-08-17 photo-upload 404 traced back to UPLOADS_DIR
+    being declared in render.yaml with a plain default value, but never actually
+    entered in Render's dashboard for the already-existing service - Render does
+    not retroactively apply a newly-added render.yaml env var to a service that
+    wasn't just (re)created via its Blueprint flow. The app silently fell back to
+    a path that doesn't survive a redeploy, with nothing in the logs to say so.
+    This makes that specific failure mode loud instead of silent, for this and any
+    future persistent-disk-dependent setting (see DATABASE_URL below too)."""
+    if not os.getenv(env_var_name):
+        logger.warning(
+            "%s is not set in the environment - falling back to %s, which is only "
+            "safe if this path happens to already sit on a persistent disk. If "
+            "photos/data uploaded here need to survive a redeploy, set %s "
+            "explicitly (see render.yaml) and confirm it's actually present in "
+            "the host's dashboard, not just declared in render.yaml.",
+            env_var_name,
+            resolved_path,
+            env_var_name,
+        )
+
+
+_warn_if_env_var_missing_for_persistent_path("DATABASE_URL", settings.database_url)
+_warn_if_env_var_missing_for_persistent_path("UPLOADS_DIR", settings.uploads_dir)
 
 
 def static_version(relative_path: str) -> int:

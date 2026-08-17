@@ -224,6 +224,40 @@ def test_duplicate_category_in_same_request_merges_not_double_counted(client, ma
     assert body["items"][0]["affected_drawer_quantity"] == 3
 
 
+def test_uploaded_photo_can_be_fetched_back(client, master_data):
+    """Regression test for a 2026-08-17 incident: a freshly uploaded photo 404'd
+    when its /uploads/... link was opened. The root cause was a live-deployment
+    configuration gap (UPLOADS_DIR declared in render.yaml but never actually set
+    in Render's dashboard for the already-existing service), not a save/serve path
+    mismatch in the code - but this specific class of bug (upload "succeeds" yet
+    the file can never be fetched back afterward) is exactly what this test guards
+    against going forward, independent of any one deployment's configuration."""
+    case = _create_case(client, master_data).json()
+    tiny_png = bytes.fromhex(
+        "89504e470d0a1a0a0000000d49484452000000010000000108020000009077"
+        "53de0000000c4944415478da6360000002000155a3c5330000000049454e44ae426082"
+    )
+    upload_resp = client.post(
+        f"/api/v1/defect-cases/{case['id']}/photos",
+        files={"file": ("regression_test.png", io.BytesIO(tiny_png), "image/png")},
+    )
+    assert upload_resp.status_code == 200
+    stored_filename = upload_resp.json()["stored_filename"]
+
+    from app.config import get_settings
+
+    settings = get_settings()
+    saved_path = settings.uploads_dir / stored_filename
+    try:
+        assert saved_path.exists(), "upload reported success but the file isn't on disk"
+
+        fetch_resp = client.get(f"/uploads/{stored_filename}")
+        assert fetch_resp.status_code == 200
+        assert fetch_resp.content == tiny_png
+    finally:
+        saved_path.unlink(missing_ok=True)
+
+
 def test_oversized_photo_upload_is_rejected(client, master_data):
     case = _create_case(client, master_data).json()
     big_bytes = b"\xff\xd8\xff" + b"0" * (9 * 1024 * 1024)  # ~9 MB, over the 8 MB default limit
