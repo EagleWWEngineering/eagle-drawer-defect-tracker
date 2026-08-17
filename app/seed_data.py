@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.models import AppSetting, CustomerIssueCategory, DefectCategory, Station
+from app.services.auth_service import sync_credentials_from_env
 
 # Phase 4: cost tracking settings (app_settings key-value table).
 COST_PER_DRAWER_SETTING_KEY = "cost_per_drawer"
@@ -134,5 +135,10 @@ def seed_master_data(db: Session) -> None:
                 value=str(get_settings().default_cost_per_drawer),
             )
         )
+
+    # Phase 5 incident fix: re-sync the shared-login credential from the
+    # environment on every startup, not just once against an empty database -
+    # see app/services/auth_service.py sync_credentials_from_env().
+    sync_credentials_from_env(db)
 
     db.commit()

@@ -52,7 +52,7 @@ def _set_session_cookie(response: Response, token: str) -> None:
 
 @router.post("/login", response_model=OkOut)
 def login(payload: LoginIn, response: Response, db: Session = Depends(get_db)) -> OkOut:
-    if not auth_service.verify_credentials(payload.username, payload.password):
+    if not auth_service.verify_credentials(db, payload.username, payload.password):
         raise ValidationError("Incorrect username or password.", field="password")
     token = auth_service.create_session(db)
     _set_session_cookie(response, token)
@@ -77,7 +77,7 @@ def logout_everywhere(
     including this one - the caller must re-authenticate afterward. Requires
     re-entering the current shared password to confirm (this middleware already
     guarantees the caller is currently logged in on at least this device)."""
-    if not auth_service.verify_credentials(auth_service.get_app_username(), payload.password):
+    if not auth_service.verify_credentials(db, auth_service.get_app_username(db), payload.password):
         raise ValidationError("Incorrect password.", field="password")
     count = auth_service.delete_all_sessions(db)
     response.delete_cookie(auth_service.SESSION_COOKIE_NAME, path="/")

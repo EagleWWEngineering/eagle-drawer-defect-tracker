@@ -34,12 +34,39 @@ browser knows the one shared password", nothing more.
 ## Credentials
 
 `APP_USERNAME` and `APP_PASSWORD_HASH` (a bcrypt hash, **never** the plaintext
-password) are read directly from the environment (`.env`) on every call in
-`app/services/auth_service.py` — not through the process-wide cached
-`app.config.get_settings()` — so tests can set per-test credentials with
-`monkeypatch.setenv` without fighting a cached singleton. `.env.example` ships
-obviously-placeholder values (`changeme`); the real `.env` (gitignored, never
-committed) holds the real generated username and bcrypt hash.
+password) originate as environment variables (`.env` locally; Render dashboard env
+vars in production). `.env.example` ships obviously-placeholder values
+(`changeme`); the real `.env` (gitignored, never committed) holds the real
+generated username and bcrypt hash.
+
+**Post-incident redesign:** the value actually checked at login time is *not* read
+from the environment directly. It lives in the `app_settings` table (`AppSetting`,
+Phase 4's generic key/value store) under `auth_username` / `auth_password_hash`.
+`app/services/auth_service.py sync_credentials_from_env()` copies the environment
+into those two rows — stripped of surrounding whitespace — and is called from
+`app/seed_data.py seed_master_data()` on **every** app startup, not only when the
+database is first created. `get_app_username(db)` / `get_app_password_hash(db)` /
+`verify_credentials(db, ...)` all read from the DB rows, never from `os.getenv`
+directly.
+
+This replaced an earlier version that read `os.getenv("APP_PASSWORD_HASH")`
+directly at check time on every call, with no stored copy at all. That was
+correct in principle (no caching, no stale seed) but broke in practice: after
+generating a new hash and updating `APP_PASSWORD_HASH` in Render's dashboard
+followed by a redeploy, login kept failing. There was no seed-once bug to find —
+credentials were never persisted anywhere — so the most likely real cause was a
+stray leading/trailing newline or space introduced when pasting the hash into
+Render's dashboard text field, which makes `bcrypt.checkpw` raise on a malformed
+hash; `_verify_password` catches that and returns `False`, indistinguishable from
+a genuinely wrong password. `sync_credentials_from_env()` strips both values
+before storing them specifically to close that hole, and moving the check to a
+DB row also means the credential is now something you can directly inspect/repair
+via a DB query if it ever looks wrong again, instead of trusting an unlogged
+`os.getenv` call.
+
+Changing the credential does **not** touch `auth_sessions` — an already-logged-in
+device stays logged in after a credential change, exactly as before. Only "Log out
+everywhere" invalidates sessions.
 
 ## Session cookie
 

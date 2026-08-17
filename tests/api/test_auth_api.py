@@ -160,6 +160,68 @@ def test_login_with_missing_credentials_returns_422(raw_client):
 
 
 # ---------------------------------------------------------------------------
+# Credential resync on restart (regression test for the incident where
+# updating APP_PASSWORD_HASH in Render's dashboard and redeploying had no
+# effect on an already-existing database)
+# ---------------------------------------------------------------------------
+
+
+def test_changing_env_credential_has_no_effect_until_the_next_resync(raw_client, monkeypatch):
+    resp = _login(raw_client)
+    assert resp.status_code == 200
+    raw_client.post("/api/v1/auth/logout")
+
+    new_password = "a-brand-new-shared-password"
+    new_hash = bcrypt.hashpw(new_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    monkeypatch.setenv("APP_PASSWORD_HASH", new_hash)
+
+    # No restart/resync has happened yet - the stored credential (checked at
+    # login time) is still the original one.
+    still_old = _login(raw_client, password=TEST_PASSWORD)
+    assert still_old.status_code == 200
+    raw_client.post("/api/v1/auth/logout")
+
+
+def test_restart_resyncs_credential_from_changed_env_var(raw_client, monkeypatch):
+    """The fix: app startup (seed_master_data -> sync_credentials_from_env) reruns
+    on every boot, not just against an empty database, so redeploying after
+    changing the env var always takes effect."""
+    new_password = "a-brand-new-shared-password"
+    new_hash = bcrypt.hashpw(new_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    monkeypatch.setenv("APP_PASSWORD_HASH", new_hash)
+
+    # Simulate a restart against the already-existing database.
+    db = raw_client.testing_sessionmaker()
+    seed_master_data(db)
+    db.close()
+
+    old_rejected = _login(raw_client, password=TEST_PASSWORD)
+    assert old_rejected.status_code == 400
+
+    new_accepted = _login(raw_client, password=new_password)
+    assert new_accepted.status_code == 200
+
+
+def test_resyncing_credential_does_not_invalidate_existing_sessions(raw_client, monkeypatch):
+    _login(raw_client)
+    still_ok = raw_client.get("/api/v1/reports/summary")
+    assert still_ok.status_code == 200
+
+    monkeypatch.setenv(
+        "APP_PASSWORD_HASH",
+        bcrypt.hashpw(b"a-different-password", bcrypt.gensalt()).decode("utf-8"),
+    )
+    db = raw_client.testing_sessionmaker()
+    seed_master_data(db)
+    db.close()
+
+    # The credential changed, but this already-logged-in session is untouched -
+    # only "Log out everywhere" invalidates sessions.
+    still_ok_after_resync = raw_client.get("/api/v1/reports/summary")
+    assert still_ok_after_resync.status_code == 200
+
+
+# ---------------------------------------------------------------------------
 # Sessions never expire based on time
 # ---------------------------------------------------------------------------
 

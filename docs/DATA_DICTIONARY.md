@@ -224,7 +224,8 @@ Full addendum: [`PROJECT_SPEC_PHASE4.md`](PROJECT_SPEC_PHASE4.md).
 | value | string | |
 | updated_at | datetime (UTC) | |
 
-Generic key-value settings store; not cost-specific by design.
+Generic key-value settings store; not cost-specific by design. Phase 5 reuses it
+for the shared-login credential — see `auth_username` / `auth_password_hash` below.
 
 ### DailyProductionSummary additions
 | Field | Type | Notes |
@@ -281,8 +282,12 @@ no time-based expiry check anywhere. It's deleted only by an explicit "Log out"
 
 ### Configuration
 `APP_USERNAME`, `APP_PASSWORD_HASH` (a bcrypt hash, never the plaintext password) —
-see `.env.example`. Read directly from the environment on every call, not through
-the cached `Settings` singleton.
+see `.env.example`. These are the environment-variable *source*; the value actually
+checked at login lives in `app_settings` under the keys `auth_username` /
+`auth_password_hash` (both `string`), kept in sync with the environment on every
+app startup by `sync_credentials_from_env()` — not just once against an empty
+database. See "Credentials" in `PROJECT_SPEC_PHASE5.md` for why this is DB-backed
+rather than a direct `os.getenv` read.
 
 ### API (`/api/v1/auth`) — all unauthenticated except `/login`
 `POST /login` (`{"username", "password"}` → sets the `eagle_session` cookie,
