@@ -1,0 +1,50 @@
+# Render Blueprint for the Eagle Drawer Defect Tracker.
+# https://render.com/docs/blueprint-spec
+#
+# "New Blueprint" in the Render dashboard reads this file and configures the
+# service automatically. Env vars marked `sync: false` are secrets/sensitive
+# values Render will prompt for in its dashboard instead of storing here —
+# never put real values for those directly in this file or commit them.
+#
+# This repo has no requirements.txt — it uses pyproject.toml (setuptools),
+# so the build command installs from that instead.
+
+services:
+  - type: web
+    name: eagle-drawer-defect-tracker
+    env: python
+    plan: starter # persistent disks require a paid plan, not the free tier
+    buildCommand: pip install .
+    startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    disk:
+      name: defect-tracker-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      # Pins the Python runtime. This repo requires >=3.11 (pyproject.toml).
+      - key: PYTHON_VERSION
+        value: 3.11.10
+
+      # App config (app/config.py) — not secret, safe to default here.
+      # Points the SQLite file at the persistent disk mounted above, rather
+      # than the app's own relative-path default (which would land inside
+      # the ephemeral container filesystem and be lost on every deploy).
+      - key: DATABASE_URL
+        value: sqlite:////var/data/defect_tracker.db
+      - key: DISPLAY_TIMEZONE
+        value: America/New_York
+      - key: MAX_UPLOAD_MB
+        value: "8"
+      - key: SYNC_INTERVAL_MINUTES
+        value: "60"
+
+      # Secrets / sensitive values — Rodolfo enters the real value in
+      # Render's dashboard after the Blueprint creates the service.
+      - key: APP_USERNAME
+        sync: false
+      - key: APP_PASSWORD_HASH
+        sync: false
+      - key: PRODUCTION_BRIEF_URL
+        sync: false
+      - key: DEFAULT_COST_PER_DRAWER
+        sync: false
