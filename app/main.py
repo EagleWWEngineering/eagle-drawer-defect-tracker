@@ -22,7 +22,6 @@ from app.database import SessionLocal
 from app.dependencies import get_db
 from app.errors import InvalidTransitionError, NotFoundError, ServiceError, ValidationError
 from app.routers import (
-    admin,
     auth,
     customer_issues,
     daily_production,
@@ -123,8 +122,6 @@ app.include_router(customer_issues.router)
 app.include_router(customer_issues.export_router)
 app.include_router(sync.router)
 app.include_router(settings_router.router)
-# TEMPORARY - see app/routers/admin.py docstring for the removal plan.
-app.include_router(admin.router)
 
 app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
 settings.uploads_dir.mkdir(parents=True, exist_ok=True)

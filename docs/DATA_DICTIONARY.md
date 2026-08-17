@@ -305,22 +305,8 @@ Every other route (UI pages and API endpoints) requires a valid session cookie,
 enforced once by `LoginRequiredMiddleware`, except `GET /api/v1/health` and static
 assets under `/static/`.
 
-## TEMPORARY: one-time real-data migration endpoint
-
-`POST /api/v1/admin/import-data` (`app/routers/admin.py`,
-`app/services/migration_service.py`, `scripts/export_real_data.py`) exists solely
-to move real production data from the local dev SQLite database to the live
-Render database, once, over HTTPS, using Rodolfo's real login. Protected like
-every route by `LoginRequiredMiddleware`, plus requires re-entering the current
-shared password in the request body (same pattern as
-`POST /api/v1/auth/logout-everywhere`). Exports/imports `DefectCase`,
-`DefectItem`, `DefectPhoto` (including file bytes, base64-encoded),
-`StatusHistory`, `CustomerIssue`, and `DailyProductionSummary` only — never
-`Station`/`DefectCategory`/`CustomerIssueCategory` (master data, seeded
-identically by name on both sides) or `AuditLog`/`SyncLog` (environment-specific
-operational logs). Every foreign key into a master-data table is carried across
-by name and re-resolved to the target database's own id, since the two
-databases' seeded ids are not guaranteed to match. Idempotent — safe to re-run.
-This endpoint, the service module, and the export script are all slated for
-**removal** in a follow-up commit once the real migration has been confirmed
-successful on the live instance.
+A one-time real-data migration endpoint (`POST /api/v1/admin/import-data`) existed
+briefly to move real production data from the local dev SQLite database to the
+live Render database; it has been removed now that the migration is complete (see
+git history around the commit removing `app/routers/admin.py` if this ever needs
+to be understood again).

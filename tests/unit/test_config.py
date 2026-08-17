@@ -1,6 +1,6 @@
 """UPLOADS_DIR environment override (app/config.py) - needed so uploaded photos
 survive on Render's persistent disk instead of the ephemeral container filesystem
-(see render.yaml and the migration work in app/services/migration_service.py)."""
+(see render.yaml)."""
 
 from __future__ import annotations
 

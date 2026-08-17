@@ -17,10 +17,6 @@ data/backups/
 uploads/*
 !uploads/.gitkeep
 
-# Belt-and-suspenders: scripts/export_real_data.py defaults to writing outside the
-# repo, but never allow a *.export.json file to be committed even if one lands here.
-*.export.json
-
 # Secrets / env
 .env
 
