@@ -55,6 +55,22 @@ SESSION_COOKIE_NAME = "eagle_session"
 SESSION_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365 * 10  # 10 years
 
 
+def _clean_env_value(raw: str) -> str:
+    """Strip whitespace, then a single matching pair of surrounding quotes.
+
+    Render's dashboard (and most other host env-var UIs) stores whatever is typed
+    completely literally - there is no shell or dotenv-style parsing. Typing
+    `APP_PASSWORD_HASH="$2b$12$..."` the way you would in a shell script or a
+    quoted .env example stores the quote characters as part of the value.
+    python-dotenv strips quotes like this automatically when parsing a local
+    .env file, which is exactly why this was easy to miss locally and only bite
+    in production."""
+    value = raw.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        value = value[1:-1].strip()
+    return value
+
+
 def sync_credentials_from_env(db: Session) -> None:
     """Copy APP_USERNAME / APP_PASSWORD_HASH from the environment into the
     app_settings table, creating the rows if missing or updating them if the
@@ -65,11 +81,12 @@ def sync_credentials_from_env(db: Session) -> None:
     Does not touch auth_sessions - changing the credential does not force any
     existing session to re-authenticate. Only "Log out everywhere" does that.
 
-    Values are stripped of surrounding whitespace before being stored - see the
-    module docstring for why that specifically matters here.
+    Values are cleaned (whitespace, then a matching pair of surrounding quotes)
+    before being stored - see _clean_env_value and the module docstring for why
+    that specifically matters here.
     """
-    env_username = os.getenv("APP_USERNAME", "").strip()
-    env_password_hash = os.getenv("APP_PASSWORD_HASH", "").strip()
+    env_username = _clean_env_value(os.getenv("APP_USERNAME", ""))
+    env_password_hash = _clean_env_value(os.getenv("APP_PASSWORD_HASH", ""))
 
     username_setting = db.get(AppSetting, AUTH_USERNAME_SETTING_KEY)
     if username_setting is None:

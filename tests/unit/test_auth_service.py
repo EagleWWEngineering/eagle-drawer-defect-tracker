@@ -59,6 +59,34 @@ def test_sync_strips_whitespace_from_env_values(db_session, monkeypatch):
     assert auth_service.get_app_password_hash(db_session) == "fake-hash-1"
 
 
+def test_sync_strips_surrounding_quotes_from_env_values(db_session, monkeypatch):
+    """Render's dashboard (and most host env-var UIs) stores values completely
+    literally - typing APP_PASSWORD_HASH="$2b$12$..." the way you would in a
+    shell script or a quoted .env example stores the quote characters as part of
+    the value. python-dotenv strips this automatically for a local .env file,
+    which is exactly why this was easy to miss locally."""
+    monkeypatch.setenv("APP_USERNAME", '"shop"')
+    monkeypatch.setenv("APP_PASSWORD_HASH", "'fake-hash-1'")
+    auth_service.sync_credentials_from_env(db_session)
+    db_session.commit()
+
+    assert auth_service.get_app_username(db_session) == "shop"
+    assert auth_service.get_app_password_hash(db_session) == "fake-hash-1"
+
+
+def test_sync_leaves_a_lone_quote_character_alone(db_session, monkeypatch):
+    """Only strip a matching pair of surrounding quotes - never touch a quote
+    character that's genuinely part of the value (e.g. a mismatched pair, or a
+    single stray character), so a real credential containing a quote can't be
+    silently mangled."""
+    monkeypatch.setenv("APP_USERNAME", "o'brien")
+    monkeypatch.setenv("APP_PASSWORD_HASH", "fake-hash-1")
+    auth_service.sync_credentials_from_env(db_session)
+    db_session.commit()
+
+    assert auth_service.get_app_username(db_session) == "o'brien"
+
+
 def test_sync_is_a_no_op_when_env_already_matches_stored_value(db_session, monkeypatch):
     monkeypatch.setenv("APP_USERNAME", "shop")
     monkeypatch.setenv("APP_PASSWORD_HASH", "fake-hash-1")

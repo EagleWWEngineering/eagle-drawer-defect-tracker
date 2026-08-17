@@ -58,11 +58,13 @@ credentials were never persisted anywhere — so the most likely real cause was 
 stray leading/trailing newline or space introduced when pasting the hash into
 Render's dashboard text field, which makes `bcrypt.checkpw` raise on a malformed
 hash; `_verify_password` catches that and returns `False`, indistinguishable from
-a genuinely wrong password. `sync_credentials_from_env()` strips both values
-before storing them specifically to close that hole, and moving the check to a
-DB row also means the credential is now something you can directly inspect/repair
-via a DB query if it ever looks wrong again, instead of trusting an unlogged
-`os.getenv` call.
+a genuinely wrong password. `sync_credentials_from_env()` cleans both values (whitespace, then a matching
+pair of surrounding quotes — a host env-var dashboard stores whatever is typed
+completely literally, unlike `python-dotenv`'s automatic quote-stripping for a
+local `.env` file) before storing them specifically to close that hole, and
+moving the check to a DB row also means the credential is now something you can
+directly inspect/repair via a DB query if it ever looks wrong again, instead of
+trusting an unlogged `os.getenv` call.
 
 Changing the credential does **not** touch `auth_sessions` — an already-logged-in
 device stays logged in after a credential change, exactly as before. Only "Log out
