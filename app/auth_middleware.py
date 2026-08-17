@@ -27,6 +27,12 @@ PUBLIC_EXACT_PATHS: set[str] = {
     "/login",
     "/api/v1/health",
     "/api/v1/auth/login",
+    # Phase 3 relay ingest: an unattended local script (scripts/relay_customer_
+    # issues.py) can't hold a browser session. Protected instead by its own
+    # RELAY_API_KEY header check inside the route itself (app/routers/sync.py
+    # _verify_relay_key) - same security bar as the login, different credential.
+    # Exempting this ONE exact path only - nothing broader.
+    "/api/v1/sync/customer-issues/ingest-raw",
 }
 
 # Path prefixes reachable with no session (static assets only - no shop data lives

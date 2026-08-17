@@ -44,6 +44,14 @@ class Settings:
             "PRODUCTION_BRIEF_URL", "http://127.0.0.1:8094"
         ).rstrip("/")
         self.sync_interval_minutes: int = int(os.getenv("SYNC_INTERVAL_MINUTES", "60"))
+        # Separate secret from APP_USERNAME/APP_PASSWORD_HASH (the human shared
+        # login), checked by POST /api/v1/sync/customer-issues/ingest-raw via the
+        # X-Relay-Key header (see app/routers/sync.py). Deliberately independent so
+        # a human password rotation never breaks the automated local relay script
+        # (scripts/relay_customer_issues.py) and vice versa. Empty by default -
+        # an unset key means the endpoint rejects every request (see
+        # _verify_relay_key), never accepts one by accident.
+        self.relay_api_key: str = os.getenv("RELAY_API_KEY", "")
         # Seed value only (app/seed_data.py writes this into the app_settings table
         # once, on first run). After that, the DB row is authoritative and editable
         # via Admin - see app/services/settings_service.py. Changing this env var

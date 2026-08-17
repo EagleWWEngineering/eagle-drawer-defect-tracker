@@ -8,6 +8,20 @@ CustomerIssue.source_thread_id (the brief's thread_id).
 CRITICAL: sync failures must never crash the app. run_sync() always returns a
 SyncLog (status "success" or "failed") instead of raising, so both the hourly
 background task and the "Sync Now" API route can treat every outcome uniformly.
+
+Two ways raw production-brief data reaches process_issues_payload() (the shared
+mapping/dedup/upsert logic):
+  1. run_sync() - fetch_issues() pulls it directly over HTTP. This is the hourly
+     background sync and the "Sync Now" API route. Render's servers cannot reach
+     the production brief directly (firewalled on the production brief's side), so
+     this path fails there and that's expected.
+  2. POST /api/v1/sync/customer-issues/ingest-raw (app/routers/sync.py) - a local
+     relay script (scripts/relay_customer_issues.py), running on a machine that CAN
+     reach the production brief, fetches the same data and forwards the raw JSON
+     body here. This path skips fetch_issues() entirely but calls the exact same
+     process_issues_payload(), so mapping/dedup/category logic is never duplicated.
+     SyncLog rows from this path are distinguished by a "relay:" prefix on
+     source_url.
 """
 
 from __future__ import annotations
@@ -83,6 +97,26 @@ def _build_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(base_url=settings.production_brief_url, timeout=30.0)
 
 
+def validate_raw_payload(data: Any) -> dict[str, Any]:
+    """Validate that `data` has the shape the rest of this module expects: a dict
+    with an "issues" list. Shared by fetch_issues() (validating a freshly-fetched
+    HTTP response body from the production brief) and the relay ingest endpoint
+    (POST /api/v1/sync/customer-issues/ingest-raw, app/routers/sync.py), which
+    receives this exact same shape as a request body - already fetched by the local
+    relay script (scripts/relay_customer_issues.py) from a machine that can reach
+    the production brief.
+
+    Raises ProductionBriefError on any shape mismatch. The ingest endpoint catches
+    this and turns it into a clean 400, since a malformed *request body* is a caller
+    error, not a "the production brief is unreachable" sync failure.
+    """
+    if not isinstance(data, dict) or "issues" not in data:
+        raise ProductionBriefError("Payload is missing the expected 'issues' field.")
+    if not isinstance(data["issues"], list):
+        raise ProductionBriefError("Payload's 'issues' field must be a list.")
+    return data
+
+
 async def fetch_issues(since: dt.date, *, client: httpx.AsyncClient) -> dict[str, Any]:
     """GET /api/quality-issues?since=...&include_ignored=false&limit=500."""
     try:
@@ -109,12 +143,7 @@ async def fetch_issues(since: dt.date, *, client: httpx.AsyncClient) -> dict[str
     except ValueError as exc:
         raise ProductionBriefError("Production brief returned malformed JSON.") from exc
 
-    if not isinstance(data, dict) or "issues" not in data:
-        raise ProductionBriefError(
-            "Production brief response is missing the expected 'issues' field."
-        )
-
-    return data
+    return validate_raw_payload(data)
 
 
 def _parse_piece_count(cost_note: str | None) -> int:
@@ -247,36 +276,36 @@ def _default_since(db: Session) -> dt.date:
     return dt.date.today() - dt.timedelta(days=90)
 
 
-async def run_sync(db: Session, *, since: dt.date | None = None) -> SyncLog:
-    """Pull issues since the last successful sync minus a lookback buffer (see
-    SINCE_LOOKBACK_BUFFER_DAYS), or a 90-day bootstrap window on the first run,
-    upsert them by source_thread_id, and record the outcome as a SyncLog row.
+def process_issues_payload(
+    db: Session,
+    data: dict[str, Any],
+    *,
+    source_url: str,
+    sync_started_at: dt.datetime | None = None,
+) -> SyncLog:
+    """Turn an already-fetched raw payload (the same shape fetch_issues() returns -
+    a dict with an "issues" list) into CustomerIssue rows: map, dedup by
+    source_thread_id, upsert, and record the outcome as a SyncLog row.
 
-    Never raises - a failure to reach the production brief is recorded in the
-    returned SyncLog (status="failed", errors=<message>) so callers (the hourly
-    background task, the "Sync Now" API route) can treat every outcome uniformly.
+    This is the ONE place the per-issue mapping/dedup/upsert logic lives. Both
+    run_sync() (the hourly direct-fetch path and the "Sync Now" API route) and the
+    relay ingest endpoint (POST /api/v1/sync/customer-issues/ingest-raw) call this
+    after obtaining `data` by different means (a direct HTTP fetch vs. a request
+    body forwarded by the local relay script) - neither duplicates this loop.
+
+    Does NOT validate `data`'s shape itself (see validate_raw_payload) - callers
+    that receive `data` from an untrusted source (e.g. an API request body) should
+    validate it first and turn a shape mismatch into their own clean error response,
+    rather than have it show up here as a merely-logged, per-record skip.
+
+    Never raises for a bad individual record - it's skipped, counted, and logged in
+    SyncLog.errors so one malformed issue can't abort the whole batch.
     """
-    settings = get_settings()
-    source_url = f"{settings.production_brief_url}{QUALITY_ISSUES_PATH}"
-    effective_since = since if since is not None else _default_since(db)
-
     log = SyncLog(
-        sync_started_at=dt.datetime.now(dt.timezone.utc),
+        sync_started_at=sync_started_at or dt.datetime.now(dt.timezone.utc),
         source_url=source_url,
         status="failed",
     )
-
-    try:
-        async with _build_client() as client:
-            data = await fetch_issues(effective_since, client=client)
-    except ProductionBriefError as exc:
-        logger.error("Customer issue sync failed: %s", exc)
-        log.errors = str(exc)
-        log.sync_completed_at = dt.datetime.now(dt.timezone.utc)
-        db.add(log)
-        db.commit()
-        db.refresh(log)
-        return log
 
     issues = data.get("issues") or []
     created = updated = skipped = 0
@@ -328,6 +357,40 @@ async def run_sync(db: Session, *, since: dt.date | None = None) -> SyncLog:
         skipped,
     )
     return log
+
+
+async def run_sync(db: Session, *, since: dt.date | None = None) -> SyncLog:
+    """Pull issues since the last successful sync minus a lookback buffer (see
+    SINCE_LOOKBACK_BUFFER_DAYS), or a 90-day bootstrap window on the first run, then
+    hand off to process_issues_payload() for the mapping/dedup/upsert work.
+
+    Never raises - a failure to reach the production brief is recorded in the
+    returned SyncLog (status="failed", errors=<message>) so callers (the hourly
+    background task, the "Sync Now" API route) can treat every outcome uniformly.
+    """
+    settings = get_settings()
+    source_url = f"{settings.production_brief_url}{QUALITY_ISSUES_PATH}"
+    effective_since = since if since is not None else _default_since(db)
+    sync_started_at = dt.datetime.now(dt.timezone.utc)
+
+    try:
+        async with _build_client() as client:
+            data = await fetch_issues(effective_since, client=client)
+    except ProductionBriefError as exc:
+        logger.error("Customer issue sync failed: %s", exc)
+        log = SyncLog(
+            sync_started_at=sync_started_at,
+            source_url=source_url,
+            status="failed",
+            errors=str(exc),
+            sync_completed_at=dt.datetime.now(dt.timezone.utc),
+        )
+        db.add(log)
+        db.commit()
+        db.refresh(log)
+        return log
+
+    return process_issues_payload(db, data, source_url=source_url, sync_started_at=sync_started_at)
 
 
 async def run_periodic_sync(interval_minutes: int, session_factory=None) -> None:

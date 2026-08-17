@@ -230,6 +230,102 @@ def test_map_issue_fields_null_order_number_preserved(db_session, customer_categ
 
 
 # ---------------------------------------------------------------------------
+# validate_raw_payload
+# ---------------------------------------------------------------------------
+
+
+def test_validate_raw_payload_accepts_well_formed_dict():
+    data = {"ok": True, "issues": []}
+    assert sync_service.validate_raw_payload(data) is data
+
+
+@pytest.mark.parametrize(
+    "bad_payload",
+    [
+        "not-a-dict",
+        [],
+        {},
+        {"count": 0},
+        {"issues": "not-a-list"},
+        {"issues": None},
+        {"issues": {"nope": True}},
+    ],
+)
+def test_validate_raw_payload_rejects_malformed(bad_payload):
+    with pytest.raises(sync_service.ProductionBriefError):
+        sync_service.validate_raw_payload(bad_payload)
+
+
+# ---------------------------------------------------------------------------
+# process_issues_payload: the shared mapping/dedup/upsert logic, used directly
+# (independent of HTTP fetching) by the relay ingest endpoint.
+# ---------------------------------------------------------------------------
+
+
+def test_process_issues_payload_creates_new_issue_and_logs_success(db_session):
+    payload = {"ok": True, "count": 1, "issues": [_issue_payload()]}
+
+    log = sync_service.process_issues_payload(
+        db_session, payload, source_url="relay:http://fake-brief/api/quality-issues"
+    )
+
+    assert log.status == "success"
+    assert log.source_url == "relay:http://fake-brief/api/quality-issues"
+    assert log.records_fetched == 1
+    assert log.records_created == 1
+    assert log.records_updated == 0
+    assert log.records_skipped == 0
+
+    issue = (
+        db_session.query(CustomerIssue).filter(CustomerIssue.source_thread_id == "thread-1").first()
+    )
+    assert issue is not None
+    assert issue.issue_number.startswith("CI-20260725-")
+    assert issue.customer_name == "Armadio IQC"
+
+
+def test_process_issues_payload_twice_does_not_duplicate(db_session):
+    payload = {"issues": [_issue_payload()]}
+
+    log1 = sync_service.process_issues_payload(db_session, payload, source_url="relay:x")
+    log2 = sync_service.process_issues_payload(db_session, payload, source_url="relay:x")
+
+    assert log1.records_created == 1
+    assert log2.records_created == 0
+    assert log2.records_updated == 1
+
+    count = (
+        db_session.query(CustomerIssue).filter(CustomerIssue.source_thread_id == "thread-1").count()
+    )
+    assert count == 1
+
+
+def test_process_issues_payload_skips_bad_record_but_processes_others(db_session):
+    bad = _issue_payload(thread_id=None)
+    good = _issue_payload(thread_id="thread-good")
+    payload = {"issues": [bad, good]}
+
+    log = sync_service.process_issues_payload(db_session, payload, source_url="relay:x")
+
+    assert log.records_skipped == 1
+    assert log.records_created == 1
+    assert log.errors is not None
+    assert (
+        db_session.query(CustomerIssue)
+        .filter(CustomerIssue.source_thread_id == "thread-good")
+        .count()
+        == 1
+    )
+
+
+def test_process_issues_payload_empty_issues_list_is_a_success(db_session):
+    log = sync_service.process_issues_payload(db_session, {"issues": []}, source_url="relay:x")
+    assert log.status == "success"
+    assert log.records_fetched == 0
+    assert log.records_created == 0
+
+
+# ---------------------------------------------------------------------------
 # run_sync: dedup, create-vs-update, preserving local edits, error handling
 # ---------------------------------------------------------------------------
 

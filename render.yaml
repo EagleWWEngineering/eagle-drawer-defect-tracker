@@ -54,3 +54,9 @@ services:
         sync: false
       - key: DEFAULT_COST_PER_DRAWER
         sync: false
+      # Phase 3 relay: checked against the X-Relay-Key header on
+      # POST /api/v1/sync/customer-issues/ingest-raw (app/routers/sync.py). Must
+      # match the value scripts/relay_customer_issues.py sends from Rodolfo's
+      # local machine. Separate secret from APP_USERNAME/APP_PASSWORD_HASH above.
+      - key: RELAY_API_KEY
+        sync: false
