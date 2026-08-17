@@ -35,6 +35,13 @@ services:
       # this, uploaded defect photos default to a path inside the container's
       # ephemeral filesystem (app/config.py) and are wiped on every redeploy. The
       # app creates this subdirectory automatically on startup if it doesn't exist.
+      #
+      # 2026-08-17 incident: this line alone did NOT make photos persistent - a
+      # plain `value:` here is only read on a service's initial Blueprint
+      # creation, not retroactively applied to an already-existing service. This
+      # had to also be entered directly in Render's dashboard before it took
+      # effect. See app/main.py's startup warning, added the same day, which now
+      # makes this failure mode visible in logs instead of silent.
       - key: UPLOADS_DIR
         value: /var/data/uploads
       - key: DISPLAY_TIMEZONE
