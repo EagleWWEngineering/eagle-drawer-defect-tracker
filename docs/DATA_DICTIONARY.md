@@ -69,6 +69,11 @@ duplicate categories into one item instead of creating a second row.
 ### DefectPhoto (`defect_photos`)
 id, defect_case_id, stored_filename, original_filename, content_type, uploaded_at.
 Allowed types: image/jpeg, image/png, image/webp. Max size: `MAX_UPLOAD_MB` (default 8 MB).
+Files live on disk at `settings.uploads_dir / stored_filename` (`UPLOADS_DIR` env var,
+default `./uploads` inside the project — see `app/config.py`). On Render this is set
+to a subdirectory of the mounted persistent disk (`render.yaml`) rather than the
+default, since the default path would sit on the ephemeral container filesystem and
+be wiped on every redeploy.
 
 ### StatusHistory (`status_history`)
 id, defect_case_id, from_status, to_status, note, changed_at.
@@ -299,3 +304,23 @@ deletes every session row at once).
 Every other route (UI pages and API endpoints) requires a valid session cookie,
 enforced once by `LoginRequiredMiddleware`, except `GET /api/v1/health` and static
 assets under `/static/`.
+
+## TEMPORARY: one-time real-data migration endpoint
+
+`POST /api/v1/admin/import-data` (`app/routers/admin.py`,
+`app/services/migration_service.py`, `scripts/export_real_data.py`) exists solely
+to move real production data from the local dev SQLite database to the live
+Render database, once, over HTTPS, using Rodolfo's real login. Protected like
+every route by `LoginRequiredMiddleware`, plus requires re-entering the current
+shared password in the request body (same pattern as
+`POST /api/v1/auth/logout-everywhere`). Exports/imports `DefectCase`,
+`DefectItem`, `DefectPhoto` (including file bytes, base64-encoded),
+`StatusHistory`, `CustomerIssue`, and `DailyProductionSummary` only — never
+`Station`/`DefectCategory`/`CustomerIssueCategory` (master data, seeded
+identically by name on both sides) or `AuditLog`/`SyncLog` (environment-specific
+operational logs). Every foreign key into a master-data table is carried across
+by name and re-resolved to the target database's own id, since the two
+databases' seeded ids are not guaranteed to match. Idempotent — safe to re-run.
+This endpoint, the service module, and the export script are all slated for
+**removal** in a follow-up commit once the real migration has been confirmed
+successful on the live instance.

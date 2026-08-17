@@ -28,7 +28,11 @@ class Settings:
         self.app_port: int = int(os.getenv("APP_PORT", "8000"))
         self.display_timezone: str = os.getenv("DISPLAY_TIMEZONE", "America/New_York")
         self.max_upload_mb: int = int(os.getenv("MAX_UPLOAD_MB", "8"))
-        self.uploads_dir: Path = PROJECT_ROOT / "uploads"
+        # Defaults to a folder inside the project (unchanged local-dev behavior).
+        # On Render, UPLOADS_DIR is set to a subdirectory of the mounted persistent
+        # disk (see render.yaml) - without this override, uploaded photos would live
+        # on the container's ephemeral filesystem and be wiped on every redeploy.
+        self.uploads_dir: Path = Path(os.getenv("UPLOADS_DIR", str(PROJECT_ROOT / "uploads")))
         self.data_dir: Path = PROJECT_ROOT / "data"
         self.defect_api_url: str = os.getenv("DEFECT_API_URL", "http://127.0.0.1:8000")
         # Temporary local-testing default while a local production brief instance is

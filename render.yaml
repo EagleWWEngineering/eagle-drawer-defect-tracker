@@ -31,6 +31,12 @@ services:
       # the ephemeral container filesystem and be lost on every deploy).
       - key: DATABASE_URL
         value: sqlite:////var/data/defect_tracker.db
+      # Same persistent disk as DATABASE_URL above, different subdirectory - without
+      # this, uploaded defect photos default to a path inside the container's
+      # ephemeral filesystem (app/config.py) and are wiped on every redeploy. The
+      # app creates this subdirectory automatically on startup if it doesn't exist.
+      - key: UPLOADS_DIR
+        value: /var/data/uploads
       - key: DISPLAY_TIMEZONE
         value: America/New_York
       - key: MAX_UPLOAD_MB
