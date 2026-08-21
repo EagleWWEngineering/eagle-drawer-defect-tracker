@@ -130,7 +130,19 @@ const Api = {
     request("PUT", `/api/v1/daily-production/${date}`, { body: payload }),
   listDailySummaries: (params) => request("GET", "/api/v1/daily-production", { params }),
 
+  // Daily schedule (Phase 6)
+  getSchedule: (params) => request("GET", "/api/v1/daily-production/schedule", { params }),
+  putSchedule: (payload) => request("PUT", "/api/v1/daily-production/schedule", { body: payload }),
+  getScheduleAttainment: (params) =>
+    request("GET", "/api/v1/daily-production/schedule-attainment", { params }),
+
   // Reports
+  // Phase 6: resolves a Dashboard date-preset button (Today/Yesterday/Last 7
+  // days/Last 30 days/Month to date) to {start_date, end_date} server-side, in
+  // DISPLAY_TIMEZONE - see app/timezone_utils.py resolve_date_preset(). Never
+  // recompute this boundary logic in JS - that's exactly the kind of drift this
+  // call avoids.
+  getDatePreset: (preset) => request("GET", "/api/v1/reports/date-preset", { params: { preset } }),
   getReworkQueue: (params) => request("GET", "/api/v1/rework-queue", { params }),
   getSummary: (params) => request("GET", "/api/v1/reports/summary", { params }),
   getPareto: (params) => request("GET", "/api/v1/reports/pareto", { params }),

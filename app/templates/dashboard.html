@@ -22,15 +22,31 @@
   </form>
   <div class="btn-row" style="margin-top:0.75rem;">
     <button type="button" class="secondary" data-range="today">Today</button>
-    <button type="button" class="secondary" data-range="this_week">This Week</button>
-    <button type="button" class="secondary" data-range="this_month">This Month</button>
+    <button type="button" class="secondary" data-range="yesterday">Yesterday</button>
+    <button type="button" class="secondary" data-range="last_7_days">Last 7 Days</button>
     <button type="button" class="secondary" data-range="last_30_days">Last 30 Days</button>
+    <button type="button" class="secondary" data-range="month_to_date">Month to Date</button>
   </div>
 </section>
 
 <section class="card">
   <h2>Summary</h2>
   <div id="summary-kpis" class="kpi-grid"><p>Loading...</p></div>
+</section>
+
+<section class="card">
+  <h2>Scheduled vs Completed</h2>
+  <p class="hint">Scheduled comes from the production brief (or a manual override on the
+    Daily Summary form); Completed is drawers inspected, summed across shifts. A day with a
+    scheduled bar and no completed bar is the gap worth investigating.</p>
+  <div id="schedule-attainment-tile" class="kpi-grid"></div>
+  <div class="chart-container"><canvas id="schedule-canvas" class="chart-canvas"></canvas></div>
+  <div class="table-scroll">
+    <table id="schedule-table">
+      <thead><tr><th>Date</th><th>Scheduled</th><th>Completed (inspected)</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
 </section>
 
 <section class="card">
@@ -161,22 +177,6 @@ function currentFilters() {
   return params;
 }
 
-function computeQuickRange(kind) {
-  const today = new Date();
-  const end = new Date(today);
-  const start = new Date(today);
-  if (kind === "this_week") {
-    const diffToMonday = (today.getDay() + 6) % 7;
-    start.setDate(today.getDate() - diffToMonday);
-  } else if (kind === "this_month") {
-    start.setDate(1);
-  } else if (kind === "last_30_days") {
-    start.setDate(today.getDate() - 29);
-  }
-  // "today" needs no adjustment: start === end === today already.
-  return { start_date: start.toISOString().slice(0, 10), end_date: end.toISOString().slice(0, 10) };
-}
-
 function updateUrlDateRange(range) {
   const url = new URL(window.location.href);
   url.searchParams.set("start_date", range.start_date);
@@ -221,6 +221,33 @@ async function loadQualityCost(range) {
     kpiTile("Total quality cost (internal + external)", formatCurrency(combinedTotal)),
   ].join("");
   document.getElementById("quality-cost-basis").textContent = costBasisLabel(internal);
+}
+
+/** Phase 6: Scheduled vs Completed card - grouped bar chart + Schedule
+ * Attainment % tile, over the SAME date range as the rest of the dashboard
+ * (see PROJECT_SPEC.md Phase 6 addendum 5b - the date filter controls the whole
+ * dashboard, not just this card). */
+async function loadScheduleCard(range) {
+  const result = await Api.getScheduleAttainment(range);
+
+  document.getElementById("schedule-attainment-tile").innerHTML = [
+    kpiTile("Total scheduled", result.total_scheduled === null ? "—" : result.total_scheduled),
+    kpiTile("Total completed (inspected)", result.total_inspected),
+    kpiTile("Schedule attainment", formatRate(result.attainment_pct)),
+  ].join("");
+
+  renderScheduleVsCompletedChart(document.getElementById("schedule-canvas"), result.days);
+
+  const tbody = document.querySelector("#schedule-table tbody");
+  tbody.innerHTML = result.days
+    .map(
+      (d) => `<tr>
+        <td>${d.production_date}</td>
+        <td>${d.drawers_scheduled === null ? "—" : d.drawers_scheduled}</td>
+        <td>${d.drawers_inspected}</td>
+      </tr>`
+    )
+    .join("") || `<tr><td colspan="3">No dates in the selected range.</td></tr>`;
 }
 
 async function loadPeriod() {
@@ -295,6 +322,7 @@ async function reloadDashboard() {
     loadSummaryKpis(range),
     loadCustomerIssuesSummary(range),
     loadQualityCost(range),
+    loadScheduleCard(range),
     loadPeriod(),
   ]);
 }
@@ -315,10 +343,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   document.querySelectorAll("[data-range]").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      const range = computeQuickRange(btn.dataset.range);
-      document.getElementById("dr-start-date").value = range.start_date;
-      document.getElementById("dr-end-date").value = range.end_date;
-      try { await reloadDashboard(); } catch (err) { showToast(err.message, "error"); }
+      try {
+        const range = await Api.getDatePreset(btn.dataset.range);
+        document.getElementById("dr-start-date").value = range.start_date;
+        document.getElementById("dr-end-date").value = range.end_date;
+        await reloadDashboard();
+      } catch (err) {
+        showToast(err.message, "error");
+      }
     });
   });
   document.getElementById("filter-form").addEventListener("submit", async (e) => {

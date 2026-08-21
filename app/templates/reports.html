@@ -83,6 +83,12 @@
     <select id="trend-group-by"><option value="day">Day</option><option value="week">Week</option></select>
   </div>
   <div class="chart-container"><canvas id="trend-canvas" class="chart-canvas"></canvas></div>
+  <div class="table-scroll">
+    <table id="trend-schedule-table">
+      <thead><tr><th>Period</th><th>Scheduled</th><th>Completed (inspected)</th><th>Attainment</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
 </section>
 
 <section class="card">
@@ -164,7 +170,17 @@ async function populateMasterDataFilters() {
 }
 
 async function loadSummary(params) {
-  const kpis = await Api.getSummary(params);
+  const [kpis, schedule] = await Promise.all([
+    Api.getSummary(params),
+    // Phase 6: Schedule attainment is a whole-day, date-range-only figure (see
+    // app/services/schedule_service.py) - it ignores the defect-specific filters
+    // (work order/category/station/etc.), using only the date range. Falls back
+    // to N/A tiles when no date range is set (start_date/end_date both optional
+    // on this page).
+    params.start_date && params.end_date
+      ? Api.getScheduleAttainment({ start_date: params.start_date, end_date: params.end_date })
+      : Promise.resolve({ total_scheduled: null, attainment_pct: null }),
+  ]);
   document.getElementById("summary-kpis").innerHTML = [
     kpiTile("Drawers inspected", kpis.drawers_inspected),
     kpiTile("Defect events", kpis.defect_events),
@@ -181,6 +197,8 @@ async function loadSummary(params) {
       "Queued rework closed w/o recheck",
       formatRate(kpis.pct_queued_rework_closed_without_recheck)
     ),
+    kpiTile("Drawers scheduled", schedule.total_scheduled === null ? "—" : schedule.total_scheduled),
+    kpiTile("Schedule attainment", formatRate(schedule.attainment_pct)),
   ].join("");
   document.getElementById("summary-cost-basis").textContent = costBasisLabel(kpis);
 }
@@ -212,6 +230,20 @@ async function loadTrend(params) {
   const trend = await Api.getTrend({ start_date: params.start_date, end_date: params.end_date, group_by: groupBy });
   renderTrendChart(document.getElementById("trend-canvas"), trend);
   renderCostTrendChart(document.getElementById("cost-trend-canvas"), trend);
+
+  // Phase 6: Scheduled + Attainment % per bucket, straight from the same trend
+  // response (see app/routers/reports.py get_trend) - no extra request needed.
+  const tbody = document.querySelector("#trend-schedule-table tbody");
+  tbody.innerHTML = trend
+    .map(
+      (t) => `<tr>
+        <td>${escapeHtml(t.period)}</td>
+        <td>${t.drawers_scheduled === null ? "—" : t.drawers_scheduled}</td>
+        <td>${t.drawers_inspected}</td>
+        <td>${formatRate(t.schedule_attainment_pct)}</td>
+      </tr>`
+    )
+    .join("") || `<tr><td colspan="4">No data in the selected date range.</td></tr>`;
 }
 
 async function loadRecords(params) {
