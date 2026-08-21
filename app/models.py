@@ -96,6 +96,44 @@ class DailyProductionSummary(Base):
     )
 
 
+class DailySchedule(Base):
+    """One row per calendar date: how many drawers the production brief scheduled
+    to finish that day (Phase 6 - see docs/PRODUCTION_BRIEF_SCHEDULE_SOURCE.md and
+    the PROJECT_SPEC.md Phase 6 addendum).
+
+    Deliberately a separate table from DailyProductionSummary, not a column on it:
+    DailyProductionSummary is unique on (production_date, shift), but "scheduled"
+    is a whole-day figure - a two-shift day would either double-count on SUM() or
+    force every query to dedupe by date. Keying this table by production_date alone
+    makes the correct query the easy query.
+
+    source distinguishes where the value came from:
+      - "sync": written by the relay ingest endpoint from the production brief.
+      - "manual": a human typed/edited it on the Daily Production Summary form.
+    Manual-wins: once a date's row has source="manual", the sync must skip that
+    date entirely (see app/services/schedule_service.py upsert_schedule) until a
+    human clears it - a later sync must never silently overwrite a human's number.
+    """
+
+    __tablename__ = "daily_schedules"
+    __table_args__ = (
+        CheckConstraint("drawers_scheduled >= 0", name="ck_schedule_nonneg"),
+        CheckConstraint("source IN ('sync', 'manual')", name="ck_schedule_source"),
+    )
+
+    production_date: Mapped[dt.date] = mapped_column(primary_key=True)
+    drawers_scheduled: Mapped[int] = mapped_column(Integer, nullable=False)
+    source: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Last successful relay write, UTC. Null for a row that has never been synced
+    # (a pure manual entry with no prior sync). Not updated by a manual edit - that
+    # only touches source/updated_at - so it still reflects the last time the relay
+    # actually wrote something, even if a human has since overridden the value.
+    synced_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
 class DefectCase(Base):
     """One QC finding for one work order: header for one or more DefectItems."""
 
