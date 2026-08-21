@@ -355,6 +355,75 @@ class DailyProductionSummaryOut(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Daily schedule (Phase 6) — see app/services/schedule_service.py
+# ---------------------------------------------------------------------------
+
+
+class DailyScheduleOut(BaseModel):
+    production_date: dt.date
+    drawers_scheduled: int
+    source: str
+    synced_at: dt.datetime | None
+    updated_at: dt.datetime
+
+    @computed_field
+    @property
+    def is_synced(self) -> bool:
+        """True = "from production brief", False = "entered manually" - the
+        Daily Summary form's synced-vs-manual indicator (see
+        docs/PROJECT_SPEC.md Phase 6 addendum)."""
+        return self.source == "sync"
+
+    @computed_field
+    @property
+    def synced_at_local(self) -> str | None:
+        return to_display_string(self.synced_at)
+
+    model_config = {"from_attributes": True}
+
+
+class DailyScheduleIn(BaseModel):
+    """PUT /api/v1/daily-production/schedule body - manual entry/override. Always
+    sets source="manual" (see schedule_service.upsert_schedule) and pins the date
+    against future sync overwrites."""
+
+    production_date: dt.date
+    drawers_scheduled: int = Field(ge=0)
+
+
+class DailyScheduleListOut(BaseModel):
+    schedules: list[DailyScheduleOut]
+
+
+class ScheduleAttainmentDayOut(BaseModel):
+    """One bar-pair on the Dashboard's Scheduled vs Completed chart.
+    drawers_scheduled is None (renders as "—") when no daily_schedules row exists
+    for that date - never 0, which would mean "the brief scheduled zero drawers"."""
+
+    production_date: dt.date
+    drawers_scheduled: int | None
+    drawers_inspected: int
+
+
+class ScheduleAttainmentOut(BaseModel):
+    """GET /api/v1/daily-production/schedule-attainment - see
+    app/services/metrics_service.py build_schedule_vs_completed()."""
+
+    days: list[ScheduleAttainmentDayOut]
+    total_scheduled: int | None
+    total_inspected: int
+    attainment_pct: float | None
+
+
+class DatePresetOut(BaseModel):
+    """GET /api/v1/reports/date-preset - see
+    app/timezone_utils.py resolve_date_preset()."""
+
+    start_date: dt.date
+    end_date: dt.date
+
+
+# ---------------------------------------------------------------------------
 # Reports / rework queue
 # ---------------------------------------------------------------------------
 
@@ -405,6 +474,11 @@ class TrendPointOut(BaseModel):
     drawers_inspected: int
     unique_drawers_rejected: int
     internal_rework_cost: float = 0.0
+    # Phase 6: None (not 0) when no daily_schedules row falls in this bucket at
+    # all - see app/services/metrics_service.py build_schedule_vs_completed's
+    # docstring for why a real "scheduled zero" must stay distinguishable.
+    drawers_scheduled: int | None = None
+    schedule_attainment_pct: float | None = None
 
 
 class ReworkQueueItemOut(BaseModel):

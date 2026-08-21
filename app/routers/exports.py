@@ -10,7 +10,13 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.dependencies import get_actor_role, get_db
 from app.models import DailyProductionSummary, DefectCase, DefectItem
-from app.services import audit_service, export_service, metrics_service, settings_service
+from app.services import (
+    audit_service,
+    export_service,
+    metrics_service,
+    schedule_service,
+    settings_service,
+)
 
 router = APIRouter(prefix="/api/v1/exports", tags=["exports"])
 
@@ -80,7 +86,31 @@ def export_defects_csv(
                 "rework_cost": rework_cost,
             }
 
-    csv_text = export_service.build_defect_items_csv(rows, daily_cost_by_date=daily_cost_by_date)
+    # Phase 6: same-day schedule + attainment context, joined by production_date
+    # exactly like daily_cost_by_date above - reuses rows_by_date (this date's
+    # DailyProductionSummary rows, already grouped above) to sum drawers_inspected
+    # across shifts before computing attainment, so a two-shift day is never
+    # double-counted against the whole-day scheduled figure.
+    daily_schedule_by_date: dict = {}
+    if involved_dates:
+        schedule_rows = schedule_service.list_schedules(
+            db, min(involved_dates), max(involved_dates)
+        )
+        for schedule_row in schedule_rows:
+            if schedule_row.production_date not in involved_dates:
+                continue
+            date_rows = rows_by_date.get(schedule_row.production_date, [])
+            inspected = sum(r.drawers_inspected for r in date_rows)
+            daily_schedule_by_date[schedule_row.production_date] = {
+                "drawers_scheduled": schedule_row.drawers_scheduled,
+                "attainment_pct": metrics_service.compute_schedule_attainment_pct(
+                    total_inspected=inspected, total_scheduled=schedule_row.drawers_scheduled
+                ),
+            }
+
+    csv_text = export_service.build_defect_items_csv(
+        rows, daily_cost_by_date=daily_cost_by_date, daily_schedule_by_date=daily_schedule_by_date
+    )
 
     audit_service.record(
         db,

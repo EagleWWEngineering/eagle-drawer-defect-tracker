@@ -35,7 +35,7 @@ from app.schemas import (
     RelayHeartbeatOut,
     SyncLogOut,
 )
-from app.services import sync_service
+from app.services import schedule_service, sync_service
 
 router = APIRouter(prefix="/api/v1/sync", tags=["sync"])
 
@@ -103,6 +103,42 @@ async def ingest_raw_customer_issues(
     settings = get_settings()
     source_url = f"relay:{settings.production_brief_url}{sync_service.QUALITY_ISSUES_PATH}"
     log = sync_service.process_issues_payload(db, payload, source_url=source_url)
+    return SyncLogOut.model_validate(log)
+
+
+@router.post("/daily-schedule/ingest-raw", response_model=SyncLogOut)
+async def ingest_raw_daily_schedule(
+    payload: dict[str, Any] = Body(...),
+    x_relay_key: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> SyncLogOut:
+    """Phase 6: receive the relay's already-scraped drawers-scheduled figures
+    (scripts/relay_customer_issues.py's second, independent forward this run -
+    see docs/PRODUCTION_BRIEF_SCHEDULE_SOURCE.md for why this has to be scraped
+    HTML rather than a JSON API call). Same auth/shape as
+    /customer-issues/ingest-raw above, reusing RELAY_API_KEY - no new secret.
+
+    Body: {"schedules": [{"date": "YYYY-MM-DD", "drawers_scheduled": <int|null>}, ...]}.
+    A null/missing drawers_scheduled means the brief had no "Today's plan" fact for
+    that date - skipped, not written, not an error.
+
+    Same sync_logs behavior as /customer-issues/ingest-raw: a missing/wrong key
+    (401) or a malformed body (400, before any DB write) writes no sync_logs row
+    at all - only a well-shaped, correctly-authed payload reaches
+    process_schedule_payload() and gets one logged row (individual bad dates
+    inside a well-shaped payload are skipped-and-counted within that one row,
+    never a separate failure).
+    """
+    _verify_relay_key(x_relay_key)
+
+    try:
+        schedule_service.validate_raw_schedule_payload(payload)
+    except schedule_service.ScheduleIngestError as exc:
+        raise ValidationError(str(exc)) from exc
+
+    settings = get_settings()
+    source_url = f"relay:{settings.production_brief_url}/drawers.html"
+    log = schedule_service.process_schedule_payload(db, payload, source_url=source_url)
     return SyncLogOut.model_validate(log)
 
 

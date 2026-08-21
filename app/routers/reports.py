@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.dependencies import get_db
 from app.models import DailyProductionSummary, DefectCase, DefectItem, StatusHistory
 from app.schemas import (
+    DatePresetOut,
     KpiOut,
     ParetoRowOut,
     ReworkQueueItemOut,
@@ -21,10 +22,23 @@ from app.schemas import (
     WorkOrderHistoryOut,
     defect_case_to_out,
 )
-from app.services import metrics_service, settings_service
+from app.services import metrics_service, schedule_service, settings_service
+from app.timezone_utils import resolve_date_preset
 
 router = APIRouter(prefix="/api/v1/reports", tags=["reports"])
 rework_router = APIRouter(prefix="/api/v1", tags=["rework-queue"])
+
+
+@router.get("/date-preset", response_model=DatePresetOut)
+def get_date_preset(preset: str) -> DatePresetOut:
+    """Resolve one of the Dashboard's date-range preset buttons (Today/Yesterday/
+    Last 7 days/Last 30 days/Month to date) to concrete {start_date, end_date},
+    in DISPLAY_TIMEZONE - see app/timezone_utils.py resolve_date_preset(). The
+    dashboard calls this rather than computing the boundary itself in JavaScript,
+    so there is exactly one implementation of "what does 'Yesterday' mean" to get
+    right and test."""
+    start_date, end_date = resolve_date_preset(preset)
+    return DatePresetOut(start_date=start_date, end_date=end_date)
 
 
 def _daily_summary_rows(
@@ -250,7 +264,17 @@ def get_trend(
             fallback_rate
         )
 
-    all_labels = sorted(set(events_by_bucket) | set(inspected_by_bucket))
+    # Phase 6: Scheduled + Schedule Attainment % per bucket, alongside the other
+    # per-date rollups above - same bucketing helper, so a "week" grouping sums
+    # schedule the same way it sums everything else.
+    scheduled_by_bucket: dict[str, int] = {}
+    for schedule_row in schedule_service.list_schedules(db, start_date, end_date):
+        label = metrics_service.trend_bucket_label(schedule_row.production_date, group_by)
+        scheduled_by_bucket[label] = (
+            scheduled_by_bucket.get(label, 0) + schedule_row.drawers_scheduled
+        )
+
+    all_labels = sorted(set(events_by_bucket) | set(inspected_by_bucket) | set(scheduled_by_bucket))
     return [
         TrendPointOut(
             period=label,
@@ -258,6 +282,11 @@ def get_trend(
             drawers_inspected=inspected_by_bucket.get(label, 0),
             unique_drawers_rejected=rejected_by_bucket.get(label, 0),
             internal_rework_cost=round(rework_cost_by_bucket.get(label, 0.0), 2),
+            drawers_scheduled=scheduled_by_bucket.get(label),
+            schedule_attainment_pct=metrics_service.compute_schedule_attainment_pct(
+                total_inspected=inspected_by_bucket.get(label, 0),
+                total_scheduled=scheduled_by_bucket.get(label),
+            ),
         )
         for label in all_labels
     ]

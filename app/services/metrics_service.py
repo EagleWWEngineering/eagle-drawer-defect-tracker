@@ -203,6 +203,65 @@ def compute_kpis(
     )
 
 
+def compute_schedule_attainment_pct(
+    *, total_inspected: int, total_scheduled: int | None
+) -> float | None:
+    """PROJECT_SPEC.md Phase 6 addendum 5b: total_inspected / total_scheduled * 100
+    over a date range. None (-> "N/A" in the UI) when total_scheduled is 0 or
+    unknown (None) - matching how compute_kpis already treats
+    drawers_inspected == 0. A falsy total_scheduled (None or 0) is exactly the
+    "unknown or zero" case, so one check covers both."""
+    if not total_scheduled:
+        return None
+    return round_rate((total_inspected / total_scheduled) * 100)
+
+
+def build_schedule_vs_completed(
+    *,
+    start_date: dt.date,
+    end_date: dt.date,
+    scheduled_by_date: dict[dt.date, int],
+    inspected_by_date: dict[dt.date, int],
+) -> dict:
+    """Pure function behind the Dashboard's Scheduled vs Completed card
+    (PROJECT_SPEC.md Phase 6 addendum 5b): one row per calendar day in
+    [start_date, end_date] inclusive, pairing that day's known schedule (None if
+    no daily_schedules row - never 0, a real "scheduled zero" fact must stay
+    distinguishable) with drawers_inspected already summed across every shift
+    that date (0 if no DailyProductionSummary rows exist for it - "the gap is
+    exactly the signal Rodolfo wants to see"). Also returns the range totals and
+    the Schedule Attainment % tile, computed from those same totals so the card
+    and the tile can never disagree.
+
+    total_scheduled is the sum of only the KNOWN days' figures - None if not a
+    single day in the range has a daily_schedules row at all, distinct from a
+    real total of 0.
+    """
+    days: list[dict] = []
+    total_scheduled: int | None = None
+    total_inspected = 0
+    day = start_date
+    while day <= end_date:
+        scheduled = scheduled_by_date.get(day)
+        inspected = inspected_by_date.get(day, 0)
+        days.append(
+            {"production_date": day, "drawers_scheduled": scheduled, "drawers_inspected": inspected}
+        )
+        if scheduled is not None:
+            total_scheduled = (total_scheduled or 0) + scheduled
+        total_inspected += inspected
+        day += dt.timedelta(days=1)
+
+    return {
+        "days": days,
+        "total_scheduled": total_scheduled,
+        "total_inspected": total_inspected,
+        "attainment_pct": compute_schedule_attainment_pct(
+            total_inspected=total_inspected, total_scheduled=total_scheduled
+        ),
+    }
+
+
 def compute_resolved_on_the_spot_rate(
     *, total_cases: int, resolved_on_the_spot_count: int
 ) -> float | None:

@@ -30,6 +30,11 @@ CSV_COLUMNS = [
     # app entirely (docs/PROJECT_SPEC_PHASE4.md "Scrap removal") - no scrap column.
     "day_cost_per_drawer",
     "day_internal_rework_cost",
+    # Phase 6: same-day schedule context, joined by production_date the same way.
+    # Blank (not 0) if that date has no daily_schedules row - see
+    # docs/PRODUCTION_BRIEF_SCHEDULE_SOURCE.md.
+    "day_drawers_scheduled",
+    "day_schedule_attainment_pct",
 ]
 
 
@@ -37,13 +42,21 @@ def build_defect_items_csv(
     rows: list[tuple[DefectItem, DefectCase]],
     *,
     daily_cost_by_date: dict[dt.date, dict] | None = None,
+    daily_schedule_by_date: dict[dt.date, dict] | None = None,
 ) -> str:
     """daily_cost_by_date: production_date -> {"rate": Decimal|float, "rework_cost":
     float}, one entry per date (already summed across shifts if a date has more
     than one). Missing/empty for a date with no Daily Production Summary saved yet
     - those context columns are left blank, not zero.
+
+    daily_schedule_by_date: production_date -> {"drawers_scheduled": int,
+    "attainment_pct": float|None}, one entry per date that has a daily_schedules
+    row. Missing for a date with no row at all - left blank, not zero, same rule.
+    attainment_pct is itself None (blank) when that date's schedule is 0 (see
+    metrics_service.compute_schedule_attainment_pct).
     """
     daily_cost_by_date = daily_cost_by_date or {}
+    daily_schedule_by_date = daily_schedule_by_date or {}
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow(CSV_COLUMNS)
@@ -54,6 +67,14 @@ def build_defect_items_csv(
             day_internal_rework_cost = str(day_cost["rework_cost"])
         else:
             day_cost_per_drawer = day_internal_rework_cost = ""
+
+        day_schedule = daily_schedule_by_date.get(case.production_date)
+        if day_schedule is not None:
+            day_drawers_scheduled = str(day_schedule["drawers_scheduled"])
+            attainment = day_schedule.get("attainment_pct")
+            day_schedule_attainment_pct = str(attainment) if attainment is not None else ""
+        else:
+            day_drawers_scheduled = day_schedule_attainment_pct = ""
 
         writer.writerow(
             [
@@ -75,6 +96,8 @@ def build_defect_items_csv(
                 (case.notes or "").replace("\n", " "),
                 day_cost_per_drawer,
                 day_internal_rework_cost,
+                day_drawers_scheduled,
+                day_schedule_attainment_pct,
             ]
         )
     return buffer.getvalue()

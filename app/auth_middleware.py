@@ -40,6 +40,11 @@ PUBLIC_EXACT_PATHS: set[str] = {
     # broader. Note GET .../relay-connection (what the logged-in browser UI polls
     # for its status line) is a DIFFERENT path and stays behind the normal login.
     "/api/v1/sync/customer-issues/relay-status",
+    # Phase 6: same reasoning again - the relay's independent second forward
+    # (scraped drawers-scheduled figures) is also an unattended script call,
+    # protected by the same RELAY_API_KEY header check (_verify_relay_key).
+    # Exempting this ONE exact path only - nothing broader.
+    "/api/v1/sync/daily-schedule/ingest-raw",
 }
 
 # Path prefixes reachable with no session (static assets only - no shop data lives
