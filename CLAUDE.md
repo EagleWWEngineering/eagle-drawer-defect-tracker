@@ -5,9 +5,10 @@ definitions, phases). Phase 2 addendum (Customer Issues tab):
 `docs/PROJECT_SPEC_PHASE2.md`. Phase 3 addendum (production brief sync):
 `docs/PROJECT_SPEC_PHASE3.md`. Phase 4 addendum (internal defect cost tracking,
 plus the later "Scrap removal" section): `docs/PROJECT_SPEC_PHASE4.md`. Phase 5
-addendum (single shared login): `docs/PROJECT_SPEC_PHASE5.md`. Field-level detail:
-`docs/DATA_DICTIONARY.md`. This file is the short version for coding agents working
-in this repo.
+addendum (single shared login): `docs/PROJECT_SPEC_PHASE5.md`. Phase 6 addendum
+(scheduled vs completed drawers, synced from the production brief):
+`docs/PROJECT_SPEC_PHASE6.md`. Field-level detail: `docs/DATA_DICTIONARY.md`. This
+file is the short version for coding agents working in this repo.
 
 Internal quality cost (`AppSetting`/`cost_per_drawer`,
 `app/services/settings_service.py`, `/api/v1/settings/cost-per-drawer`) is a flat
@@ -35,6 +36,13 @@ Customer Issues are synced hourly from the production brief
 before changing dedup/mapping logic. `source_thread_id` null = manual entry, never
 touched by sync. A synced issue's `linked_defect_case_id` and any status past `Open`
 are local staff decisions and must never be overwritten by a later sync.
+
+Daily schedule (`DailySchedule`, `app/services/schedule_service.py`,
+`/api/v1/daily-production/schedule*`) is also synced from the production brief, via
+the same relay script — see `docs/PROJECT_SPEC_PHASE6.md` and
+`docs/PRODUCTION_BRIEF_SCHEDULE_SOURCE.md` before changing it. `source == "manual"`
+means a human edited it on the Daily Summary form; the relay must never overwrite
+that row (manual-wins rule in `schedule_service.upsert_schedule`).
 
 ## What this is
 

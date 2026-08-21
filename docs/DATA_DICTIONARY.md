@@ -310,3 +310,45 @@ briefly to move real production data from the local dev SQLite database to the
 live Render database; it has been removed now that the migration is complete (see
 git history around the commit removing `app/routers/admin.py` if this ever needs
 to be understood again).
+
+## Phase 6: Scheduled vs Completed Drawers
+
+Full addendum: `PROJECT_SPEC_PHASE6.md`. Source discovery writeup (why this is an
+HTML scrape, not a JSON API call): `PRODUCTION_BRIEF_SCHEDULE_SOURCE.md`.
+
+### DailySchedule (`daily_schedules`)
+| Field | Type | Notes |
+|---|---|---|
+| production_date | date, primary key | one row per calendar date - a whole-day figure, unlike `daily_production_summaries` (per-shift) |
+| drawers_scheduled | int >= 0 | |
+| source | string, `"sync"` \| `"manual"` | manual always wins - a sync write is skipped entirely against a `"manual"` row |
+| synced_at | datetime (UTC), nullable | last successful relay write; null if never synced |
+| updated_at | datetime (UTC) | |
+
+### API (`/api/v1/daily-production`, `/api/v1/sync`, `/api/v1/reports`)
+- `GET /daily-production/schedule` (`?date=` or `?start_date=&end_date=`) - a date
+  with no row is simply absent from the response, never a `0`.
+- `PUT /daily-production/schedule` - manual entry/override, always `source="manual"`.
+- `GET /daily-production/schedule-attainment` (`?start_date=&end_date=`) -
+  `{days: [{production_date, drawers_scheduled, drawers_inspected}], total_scheduled,
+  total_inspected, attainment_pct}`. `attainment_pct` is `null` when `total_scheduled`
+  is `0` or unknown (no known day in range).
+- `POST /sync/daily-schedule/ingest-raw` (`X-Relay-Key`, reuses `RELAY_API_KEY`) -
+  relay ingest, mirrors `/sync/customer-issues/ingest-raw`'s auth/shape exactly.
+- `GET /reports/date-preset` (`?preset=today|yesterday|last_7_days|last_30_days|month_to_date`)
+  - resolves a Dashboard preset button to `{start_date, end_date}` in
+  `DISPLAY_TIMEZONE`, server-side (`app/timezone_utils.py resolve_date_preset`).
+
+### `TrendPointOut` additions (`/api/v1/reports/trend`)
+`drawers_scheduled` (int, nullable) and `schedule_attainment_pct` (float, nullable),
+bucketed the same way (`day`/`week`) as every other field on this response.
+
+### Defect CSV export additions (`/api/v1/exports/defects.csv`)
+`day_drawers_scheduled`, `day_schedule_attainment_pct` - joined by `production_date`
+exactly like the existing Phase 4 `day_cost_per_drawer` / `day_internal_rework_cost`
+columns; blank (not `0`) for a date with no `daily_schedules` row.
+
+### Configuration
+No new environment variable - the relay's schedule-scrape pass reuses
+`PRODUCTION_BRIEF_URL` and `RELAY_API_KEY`, both already present for the Phase 3
+customer-issues relay.
