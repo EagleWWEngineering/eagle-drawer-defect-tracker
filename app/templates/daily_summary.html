@@ -25,6 +25,11 @@
       <input type="number" id="drawers_inspected" name="drawers_inspected" min="0" value="0" required>
     </div>
     <div class="field">
+      <label for="drawers_scheduled">Drawers scheduled <span class="hint">(from the production brief; edit to override)</span></label>
+      <input type="number" id="drawers_scheduled" name="drawers_scheduled" min="0" placeholder="—">
+      <p id="schedule-source-indicator" class="hint"></p>
+    </div>
+    <div class="field">
       <label for="drawers_rejected_unique">Unique drawers rejected</label>
       <input type="number" id="drawers_rejected_unique" name="drawers_rejected_unique" min="0" value="0" required>
       <p id="rejected-suggestion" class="hint"></p>
@@ -75,6 +80,59 @@
 // auto-fill only ever applies to a brand-new entry (or an explicit "Recalculate"
 // click), never overwriting an already-saved summary just by opening the page.
 let currentRowIsSaved = false;
+
+// The drawers-scheduled value as last loaded from the server for the current
+// production date (number, or null if no daily_schedules row exists at all).
+// Compared against the form on save so submitting the form WITHOUT touching this
+// field never re-writes it as source="manual" - see saveScheduleIfChanged below.
+let loadedScheduleValue = null;
+
+/** Phase 6: load daily_schedules for the selected production date (schedule is
+ * per-date, not per-shift, so this doesn't depend on the shift field). Blank/
+ * unknown renders as "—" (the input's placeholder), never "0" - a real zero-
+ * scheduled day and an unknown day must never look the same. */
+async function loadScheduleForCurrentDate() {
+  const date = document.getElementById("production_date").value;
+  const input = document.getElementById("drawers_scheduled");
+  const indicator = document.getElementById("schedule-source-indicator");
+  if (!date) {
+    input.value = "";
+    loadedScheduleValue = null;
+    indicator.textContent = "";
+    return;
+  }
+  try {
+    const result = await Api.getSchedule({ date });
+    const row = result.schedules[0];
+    if (row) {
+      input.value = row.drawers_scheduled;
+      loadedScheduleValue = row.drawers_scheduled;
+      indicator.textContent = row.is_synced
+        ? `from production brief (synced ${row.synced_at_local || "recently"})`
+        : "entered manually";
+    } else {
+      input.value = "";
+      loadedScheduleValue = null;
+      indicator.textContent = "No schedule on file for this date.";
+    }
+  } catch (err) {
+    input.value = "";
+    loadedScheduleValue = null;
+    indicator.textContent = "";
+    showToast(err.message, "error");
+  }
+}
+
+/** Save drawers_scheduled ONLY if it actually differs from what was loaded -
+ * otherwise every Daily Summary save would silently flip an untouched
+ * synced value to source="manual" and pin it against future syncs, which the
+ * user never asked for. A blank field is never sent (no "clear" action here). */
+async function saveScheduleIfChanged(date, rawValue) {
+  const value = rawValue === "" || rawValue === null || rawValue === undefined ? null : Number(rawValue);
+  if (value === loadedScheduleValue || value === null) return;
+  await Api.putSchedule({ production_date: date, drawers_scheduled: value });
+  await loadScheduleForCurrentDate();
+}
 
 function computeRatesLocally(form) {
   const val = (name) => Number(form.querySelector(`[name="${name}"]`).value || 0);
@@ -157,6 +215,7 @@ async function loadForCurrentDateAndShift() {
   const date = document.getElementById("production_date").value;
   const shift = document.getElementById("shift").value;
   document.getElementById("post-save-cost").style.display = "none";
+  await loadScheduleForCurrentDate();
   const rows = await Api.listDailySummaries({ start_date: date, end_date: date });
   const existing = rows.find((r) => r.shift === shift);
   if (existing) {
@@ -217,6 +276,13 @@ document.addEventListener("DOMContentLoaded", async () => {
       try {
         const result = await Api.upsertDailySummary(date, payload);
         currentRowIsSaved = true;
+
+        try {
+          await saveScheduleIfChanged(date, fd.get("drawers_scheduled"));
+        } catch (scheduleErr) {
+          showToast(`Saved, but drawers scheduled did not save: ${scheduleErr.message}`, "error");
+        }
+
         showToast(`Saved ${date} (${payload.shift}).` + (result.warnings.length ? " " + result.warnings.join(" ") : ""), "success");
 
         document.getElementById("post-save-cost").style.display = "block";
