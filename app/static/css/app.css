@@ -164,26 +164,6 @@ main {
   margin-top: 0.15rem;
 }
 
-/* Secondary stat riding inside a tile (e.g. Scrap rate inside Rework rate -
-   PROJECT_SPEC.md section 3.2) - visible and accurate, just not equal-size with
-   the primary stat above it. */
-.kpi-tile .kpi-substat {
-  font-size: 0.75rem;
-  color: var(--color-muted);
-  margin-top: 0.3rem;
-}
-
-/* Quality Cost / Reports Summary source note (app/static/js/app.js
-   costBasisLabel()) - this is the single source of truth for the reworked/scrapped
-   drawer counts behind the cost figures above it, so it needs to read clearly, not
-   disappear as small gray "hint" text. */
-.cost-basis-note {
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--color-text);
-  margin-top: 0.75rem;
-}
-
 /* ---------------------------------------------------------------------- */
 /* Forms                                                                   */
 /* ---------------------------------------------------------------------- */

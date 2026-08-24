@@ -40,9 +40,10 @@ let queueBulkSelect;
 
 // The primary action for every queue row: close the case directly, no intermediate
 // "mark ready for recheck" step. Every non-closed status has a full set of direct
-// close targets now (see app/services/defect_service.py direct_close_statuses) - the
-// shop floor has no real recheck moment, a repaired part just continues down the
-// line and gets caught at the next station if something's still wrong.
+// close targets now (see app/services/defect_service.py direct_close_statuses) -
+// PROJECT_SPEC_PHASE7.md's two closed statuses (Repaired / Use As Is) - the shop
+// floor has no real recheck moment, a repaired part just continues down the line
+// and gets caught at the next station if something's still wrong.
 function closeFormHtml(item) {
   const options = item.direct_close_statuses
     .map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`)
@@ -57,15 +58,14 @@ function closeFormHtml(item) {
   </div>`;
 }
 
-// Secondary, collapsed by default: editing root cause/corrective action, or the
-// rare move between open states (e.g. into Waiting). "Ready for QC Recheck" is
-// filtered out of the offered next statuses - it's kept valid for historical data
-// (see item.status itself, still shown correctly if a legacy case is sitting in
-// it) but is no longer presented as an expected step to move a case into.
+// Secondary, collapsed by default: editing root cause/corrective action, or (for
+// a closed case shown via an explicit closed-status filter) reopening it back to
+// Open - the one status option besides item.status itself that
+// item.allowed_next_statuses can ever offer now (PROJECT_SPEC_PHASE7.md: there is
+// no more generic "move between open states" transition at all).
 function moreOptionsFormHtml(item) {
   const statusOptions = [item.status, ...item.allowed_next_statuses]
     .filter((v, i, arr) => arr.indexOf(v) === i)
-    .filter((s) => s === item.status || s !== "Ready for QC Recheck")
     .map((s) => `<option value="${escapeHtml(s)}" ${s === item.status ? "selected" : ""}>${escapeHtml(s)}</option>`)
     .join("");
   const dispositionOptions = ["", ...masterData.dispositions]
@@ -190,10 +190,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   try {
     masterData = await Api.getMasterData();
+    // Open is the only actionable/open status now (PROJECT_SPEC_PHASE7.md) - the
+    // legacy In Rework/Waiting/Ready for QC Recheck options are gone from this
+    // filter since the Phase 7 migration moves every currently-open case in one
+    // of them to Open; none should exist going forward.
     const statusSelect = document.getElementById("f-status");
-    ["Open", "In Rework", "Waiting", "Ready for QC Recheck"].forEach((s) =>
-      statusSelect.insertAdjacentHTML("beforeend", `<option>${s}</option>`)
-    );
+    statusSelect.insertAdjacentHTML("beforeend", "<option>Open</option>");
     await loadQueue();
   } catch (err) {
     showToast(err.message, "error");

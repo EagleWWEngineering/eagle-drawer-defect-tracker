@@ -59,8 +59,10 @@
 
 <section class="card">
   <h2>Quality Cost</h2>
+  <p class="hint">One cost unit per defect case (not per category/item), snapshotted at the
+    rate active when the case was created. A case closed "Use As Is" contributes to Cost
+    Avoided instead of Internal Rework Cost.</p>
   <div id="quality-cost-kpis" class="kpi-grid"><p>Loading...</p></div>
-  <p id="quality-cost-basis" class="cost-basis-note"></p>
 </section>
 
 <section class="card">
@@ -217,10 +219,10 @@ async function loadQualityCost(range) {
   const combinedTotal = internal.total_internal_quality_cost + external.total_estimated_cost;
   document.getElementById("quality-cost-kpis").innerHTML = [
     kpiTile("Internal rework cost", formatCurrency(internal.internal_rework_cost)),
+    kpiTile("Cost avoided (Use As Is)", formatCurrency(internal.cost_avoided)),
     kpiTile("Total internal quality cost", formatCurrency(internal.total_internal_quality_cost)),
     kpiTile("Total quality cost (internal + external)", formatCurrency(combinedTotal)),
   ].join("");
-  document.getElementById("quality-cost-basis").textContent = costBasisLabel(internal);
 }
 
 /** Phase 6: Scheduled vs Completed card - grouped bar chart + Schedule

@@ -58,14 +58,14 @@
     <label>Disposition <span class="hint">(most defects get reworked — that's why Rework is picked for you)</span></label>
     <div id="disposition-primary"></div>
     <div id="disposition-secondary" class="button-grid button-grid-2" role="group" aria-label="Other disposition" style="margin-top:0.4rem;"></div>
-    <button type="button" id="disposition-more-btn" class="secondary" style="margin-top:0.4rem;">More options... (Scrap)</button>
-    <div id="disposition-more" class="button-grid" role="group" aria-label="Additional dispositions" style="display:none; margin-top:0.4rem;"></div>
   </div>
 
   <div class="field" id="repair-preset-field" style="display:none;">
     <label>What was done? <span class="hint">(quick pick — the case closes as soon as you save)</span></label>
     <div id="repair-preset-grid" class="button-grid" role="group" aria-label="Repair action preset"></div>
     <input type="text" id="repair-preset-other-text" placeholder="Describe what was done" style="display:none; margin-top:0.5rem;">
+    <label style="margin-top:0.6rem; display:block;">Outcome</label>
+    <div id="instant-close-outcome" class="button-grid button-grid-2" role="group" aria-label="Instant close outcome"></div>
   </div>
 
   <div class="field" id="leave-open-field">
@@ -73,7 +73,7 @@
       <input type="checkbox" id="leave-open-checkbox">
       Not resolved yet — leave this case open
     </label>
-    <p id="hold-hint" class="hint" style="display:none;">Hold cases are saved as Waiting until a decision is made — nothing else to fill in here.</p>
+    <p id="set-aside-hint" class="hint" style="display:none;">Set Aside cases are saved as Open until someone works them — nothing else to fill in here.</p>
   </div>
 
   <div class="field">
@@ -123,19 +123,22 @@
 // Admin) - "More stations..." always has the complete, authoritative list.
 const COMMON_STATION_NAMES = ["Prep Sanding", "Assembly", "QC / Sorting / Shipping", "Top Coat", "Notch & Bore"];
 const PRIORITY_OVERRIDE_ORDER = ["Urgent", "High"];
-// Rework is the default/primary disposition (PROJECT_SPEC.md section 3.2) - almost
+// Rework is the default/primary disposition (PROJECT_SPEC_PHASE7.md) - almost
 // every defect gets reworked or re-cut on the spot, so it's pre-selected and shown
-// as one big button. Use As Is / Hold are secondary. Scrap is genuinely rare and
-// tucked behind "More options..." - still fully functional, just one extra tap away
-// instead of competing visually with Rework.
+// as one big button. Set Aside (the only other option now - it replaces the old
+// Use As Is / Hold / Scrap, which all collapse into "not being worked right now")
+// is secondary.
 const DISPOSITION_PRIMARY = "Rework";
-const DISPOSITION_SECONDARY_ORDER = ["Use As Is", "Hold"];
-const DISPOSITION_MORE_ORDER = ["Scrap"];
-// Dispositions with a closed status to jump to (see app/services/defect_service.py
-// INSTANT_CLOSE_STATUS_BY_DISPOSITION) - these default to closing the case
-// immediately (see leaveOpen below). Hold is deliberately excluded: Hold means the
-// disposition itself isn't decided yet, so there's nothing to have "already fixed".
-const INSTANT_CLOSE_DISPOSITIONS = new Set(["Rework", "Scrap", "Use As Is"]);
+const DISPOSITION_SECONDARY = "Set Aside";
+// Only Rework has an instant-close path (Set Aside means "waiting to be worked",
+// the opposite of "already done") - see leaveOpen below.
+const INSTANT_CLOSE_DISPOSITIONS = new Set(["Rework"]);
+// Which closed status the instant-close path lands on - "Repaired" (default) or
+// "Use As Is" (how "defect exists, we're shipping it as is" gets recorded now
+// that Use As Is is no longer its own disposition - see
+// app/services/defect_service.py INSTANT_CLOSE_OUTCOMES).
+const INSTANT_CLOSE_OUTCOMES = ["Repaired", "Use As Is"];
+const DEFAULT_INSTANT_CLOSE_OUTCOME = "Repaired";
 const REPAIR_PRESETS = [
   "Resanded",
   "Replaned/re-cut",
@@ -160,7 +163,7 @@ let qty = 1;
 // rare case where nothing's decided yet (PROJECT_SPEC.md section 3.3).
 let leaveOpen = false;
 let selectedRepairPreset = null;
-let dispositionMoreExpanded = false;
+let selectedInstantCloseOutcome = DEFAULT_INSTANT_CLOSE_OUTCOME;
 
 function dispositionSupportsInstantClose(disposition) {
   return INSTANT_CLOSE_DISPOSITIONS.has(disposition);
@@ -200,32 +203,23 @@ function renderDispositionButtons() {
     "tap-btn-primary"
   );
 
-  // Secondary: Use As Is, Hold - same size as every other tap button, just not
-  // competing visually with the primary Rework button above.
-  const secondary = DISPOSITION_SECONDARY_ORDER.filter((d) => masterData.dispositions.includes(d));
-  document.getElementById("disposition-secondary").innerHTML = secondary
-    .map((d) => dispositionButtonHtml(d))
-    .join("");
-
-  // "More options...": Scrap. Auto-expand if it's already selected (e.g. after a
-  // validation error) so its selected state is never hidden behind a collapsed panel.
-  const more = DISPOSITION_MORE_ORDER.filter((d) => masterData.dispositions.includes(d));
-  if (more.includes(selectedDisposition)) dispositionMoreExpanded = true;
-  document.getElementById("disposition-more").innerHTML = more.map((d) => dispositionButtonHtml(d)).join("");
-  document.getElementById("disposition-more").style.display = dispositionMoreExpanded ? "grid" : "none";
-  document.getElementById("disposition-more-btn").textContent = dispositionMoreExpanded
-    ? "Show fewer options"
-    : "More options... (Scrap)";
+  // Secondary: Set Aside - same size as every other tap button, just not
+  // competing visually with the primary Rework button above. Only two
+  // dispositions exist now (PROJECT_SPEC_PHASE7.md), so no "more options"
+  // disclosure is needed at all anymore.
+  document.getElementById("disposition-secondary").innerHTML = dispositionButtonHtml(
+    DISPOSITION_SECONDARY
+  );
 }
 
 function renderResolutionFields() {
-  const isHold = selectedDisposition === "Hold";
+  const isSetAside = selectedDisposition === "Set Aside";
 
-  // Hold has no "resolved" concept of its own - it's always saved as Waiting, so
-  // there's nothing to decide here; show a short explanatory hint instead of the
-  // leave-open checkbox / repair preset.
-  document.getElementById("leave-open-field").style.display = isHold ? "none" : "block";
-  document.getElementById("hold-hint").style.display = isHold ? "block" : "none";
+  // Set Aside has no "resolved" concept of its own - it's always saved as Open,
+  // so there's nothing to decide here; show a short explanatory hint instead of
+  // the leave-open checkbox / repair preset.
+  document.getElementById("leave-open-field").style.display = isSetAside ? "none" : "block";
+  document.getElementById("set-aside-hint").style.display = isSetAside ? "block" : "none";
   document.getElementById("leave-open-checkbox").checked = leaveOpen;
 
   const showRepairPreset = isInstantClose();
@@ -237,6 +231,14 @@ function renderResolutionFields() {
   }).join("");
   const otherInput = document.getElementById("repair-preset-other-text");
   otherInput.style.display = selectedRepairPreset === "Other" ? "block" : "none";
+
+  // Outcome toggle: which closed status this instant-close lands on - "Repaired"
+  // (default) or "Use As Is" (the DECISION-FLAGGED entry point for recording
+  // "defect exists, we're shipping it as is" - see docs/PROJECT_SPEC_PHASE7.md).
+  document.getElementById("instant-close-outcome").innerHTML = INSTANT_CLOSE_OUTCOMES.map((o) => {
+    const isSelected = selectedInstantCloseOutcome === o;
+    return `<button type="button" class="tap-btn${isSelected ? " selected" : ""}" data-value="${escapeHtml(o)}" aria-pressed="${isSelected}">${escapeHtml(o)}</button>`;
+  }).join("");
 }
 
 function renderPriorityButtons() {
@@ -370,6 +372,7 @@ function collectPayload() {
     })),
     disposition: selectedDisposition,
     resolved_on_the_spot: instantClose,
+    instant_close_outcome: instantClose ? selectedInstantCloseOutcome : null,
     repair_action: repairAction,
     notes: document.getElementById("notes").value || null,
   };
@@ -439,7 +442,7 @@ function resetFormForNextEntry() {
   selectedPriority = "Normal";
   leaveOpen = false;
   selectedRepairPreset = null;
-  dispositionMoreExpanded = false;
+  selectedInstantCloseOutcome = DEFAULT_INSTANT_CLOSE_OUTCOME;
   qty = 1;
   document.getElementById("drawer_part_reference").value = "";
   document.getElementById("notes").value = "";
@@ -494,28 +497,24 @@ document.addEventListener("DOMContentLoaded", async () => {
   function handleDispositionClick(e) {
     const btn = e.target.closest(".tap-btn");
     if (!btn) return;
-    // Disposition is always exactly one of the four values now - Rework by
+    // Disposition is always exactly one of the two values now - Rework by
     // default - not an optional "leave blank if undecided" field; "undecided"
-    // is what Hold is for.
+    // is what Set Aside is for.
     selectedDisposition = btn.dataset.value;
     leaveOpen = false;
     selectedRepairPreset = null;
+    selectedInstantCloseOutcome = DEFAULT_INSTANT_CLOSE_OUTCOME;
     document.getElementById("repair-preset-other-text").value = "";
     renderDispositionButtons();
     renderResolutionFields();
   }
   document.getElementById("disposition-primary").addEventListener("click", handleDispositionClick);
   document.getElementById("disposition-secondary").addEventListener("click", handleDispositionClick);
-  document.getElementById("disposition-more").addEventListener("click", handleDispositionClick);
-
-  document.getElementById("disposition-more-btn").addEventListener("click", () => {
-    dispositionMoreExpanded = !dispositionMoreExpanded;
-    renderDispositionButtons();
-  });
 
   document.getElementById("leave-open-checkbox").addEventListener("change", (e) => {
     leaveOpen = e.target.checked;
     selectedRepairPreset = null;
+    selectedInstantCloseOutcome = DEFAULT_INSTANT_CLOSE_OUTCOME;
     document.getElementById("repair-preset-other-text").value = "";
     renderResolutionFields();
   });
@@ -525,6 +524,13 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!btn) return;
     const value = btn.dataset.value;
     selectedRepairPreset = selectedRepairPreset === value ? null : value;
+    renderResolutionFields();
+  });
+
+  document.getElementById("instant-close-outcome").addEventListener("click", (e) => {
+    const btn = e.target.closest(".tap-btn");
+    if (!btn) return;
+    selectedInstantCloseOutcome = btn.dataset.value;
     renderResolutionFields();
   });
 

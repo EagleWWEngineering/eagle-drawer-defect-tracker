@@ -55,7 +55,6 @@
 <section class="card">
   <h2>Summary</h2>
   <div id="summary-kpis" class="kpi-grid"></div>
-  <p id="summary-cost-basis" class="cost-basis-note"></p>
 </section>
 
 <section class="card">
@@ -142,19 +141,6 @@ function kpiTile(label, value) {
   return `<div class="kpi-tile"><div class="kpi-label">${escapeHtml(label)}</div><div class="kpi-value">${value}</div></div>`;
 }
 
-// Recheck is no longer the standard closing path (PROJECT_SPEC.md section 3.3), so
-// that rate rides as a small inline substat instead of an equal-size card, so it
-// stays accurate and visible without competing for attention with a number that's
-// usually 0%. (Scrap Rate/Cost were dropped from Reports entirely - scrap
-// essentially doesn't happen on this floor - see docs/PROJECT_SPEC_PHASE4.md.)
-function kpiTileWithSubstat(label, value, substatLabel, substatValue) {
-  return `<div class="kpi-tile">
-    <div class="kpi-label">${escapeHtml(label)}</div>
-    <div class="kpi-value">${value}</div>
-    <div class="kpi-substat">${escapeHtml(substatLabel)}: ${substatValue}</div>
-  </div>`;
-}
-
 async function populateMasterDataFilters() {
   const md = await Api.getMasterData();
   const catSelect = document.getElementById("f-category");
@@ -190,17 +176,12 @@ async function loadSummary(params) {
     kpiTile("First pass yield", formatRate(kpis.first_pass_yield)),
     kpiTile("Rework rate", formatRate(kpis.rework_rate)),
     kpiTile("Rework cost", formatCurrency(kpis.internal_rework_cost)),
+    kpiTile("Cost avoided (Use As Is)", formatCurrency(kpis.cost_avoided)),
     kpiTile("Total internal quality cost", formatCurrency(kpis.total_internal_quality_cost)),
-    kpiTileWithSubstat(
-      "% Resolved on the spot",
-      formatRate(kpis.pct_resolved_on_the_spot),
-      "Queued rework closed w/o recheck",
-      formatRate(kpis.pct_queued_rework_closed_without_recheck)
-    ),
+    kpiTile("% Resolved on the spot", formatRate(kpis.pct_resolved_on_the_spot)),
     kpiTile("Drawers scheduled", schedule.total_scheduled === null ? "—" : schedule.total_scheduled),
     kpiTile("Schedule attainment", formatRate(schedule.attainment_pct)),
   ].join("");
-  document.getElementById("summary-cost-basis").textContent = costBasisLabel(kpis);
 }
 
 async function loadPareto(params) {
