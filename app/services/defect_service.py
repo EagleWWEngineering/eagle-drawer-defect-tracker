@@ -27,79 +27,67 @@ from app.services import settings_service
 
 VALID_PRIORITIES: list[str] = ["Urgent", "High", "Normal"]
 
-VALID_STATUSES: list[str] = [
-    "Open",
-    "In Rework",
-    "Waiting",
-    "Ready for QC Recheck",
-    "Closed - Repaired",
-    "Closed - Scrapped",
-    "Closed - Use As Is",
-]
+# PROJECT_SPEC_PHASE7.md: statuses/dispositions simplified to a small vocabulary
+# for new entry. Retired values remain valid STORED data (never dropped/rewritten
+# on existing rows - see the Phase 7 migration) and must still render/filter/export
+# correctly, but nothing new is ever written with them - see ALL_KNOWN_STATUSES /
+# ALL_KNOWN_DISPOSITIONS below, used only for filter/display surfaces, never for
+# write validation.
+VALID_STATUSES: list[str] = ["Open", "Closed - Repaired", "Closed - Use As Is"]
+RETIRED_STATUSES: list[str] = ["In Rework", "Waiting", "Ready for QC Recheck", "Closed - Scrapped"]
+ALL_KNOWN_STATUSES: list[str] = VALID_STATUSES + RETIRED_STATUSES
 
-# Rework is the default/primary disposition (PROJECT_SPEC.md section 3.2): on the
-# shop floor, an operator who finds a problem almost always either re-cuts a new
-# component or reworks the part in hand. Scrap is genuinely rare and is deliberately
-# listed last - list order here drives the New Defect form's button order/prominence
-# (Rework big and pre-selected, Use As Is/Hold secondary, Scrap tucked behind "More
-# options...").
-VALID_DISPOSITIONS: list[str] = ["Rework", "Use As Is", "Hold", "Scrap"]
+# Rework is the default/primary disposition (PROJECT_SPEC.md section 3.2 /
+# PROJECT_SPEC_PHASE7.md): on the shop floor, an operator who finds a problem
+# almost always either re-cuts a new component or reworks the part in hand -
+# that's the whole point of the two-option model. Set Aside is everything else
+# (the old Use As Is / Hold / Scrap all collapse into "not being worked right
+# now"). List order drives the New Defect form's button order/prominence.
+VALID_DISPOSITIONS: list[str] = ["Rework", "Set Aside"]
+RETIRED_DISPOSITIONS: list[str] = ["Use As Is", "Hold", "Scrap"]
+ALL_KNOWN_DISPOSITIONS: list[str] = VALID_DISPOSITIONS + RETIRED_DISPOSITIONS
 
+# Every historically-possible closed status, including the retired "Closed -
+# Scrapped" - a case already sitting there (untouched by the Phase 7 migration,
+# which only ever moves NON-closed cases) must still behave as closed everywhere
+# this set is consulted (is_reopen, cost calc, etc.).
 CLOSED_STATUSES: set[str] = {"Closed - Repaired", "Closed - Scrapped", "Closed - Use As Is"}
 
-# The allowed-transition map from PROJECT_SPEC.md section 3.1 for every transition
-# that does NOT close the case. Kept as one table so the pilot can adjust it without
-# touching any router or template code. Closing (moving into any CLOSED_STATUSES
-# member) is handled uniformly by direct_close_statuses()/is_direct_close below
-# instead of listed here - see that function's docstring for why. Reopening a closed
-# case back to Open (see is_reopen in update_case_status) is the one transition that
-# still always requires a note - a normal closure's note is optional supplementary
-# detail, but reopening a "done" case is rare and audit-worthy enough to require one.
-#
-# "Ready for QC Recheck" remains a valid status (kept for backward compatibility with
-# existing historical data and any direct API/MCP caller that still uses it), and the
-# legacy In Rework -> Ready for QC Recheck -> Closed path below still works end to
-# end, but the shop floor has no real "QC recheck" moment - a repaired part just
-# continues down the line and gets caught at the next station if something's still
-# wrong - so nothing here presents moving a case INTO "Ready for QC Recheck" as an
-# expected step going forward (see app/templates/rework_queue.html).
+# The two closed statuses any NEW closure can target going forward. Deliberately
+# excludes the retired "Closed - Scrapped" - no code path writes a case into it
+# anymore (Scrap was retired as a disposition), though one already sitting there
+# from before this change is untouched and can still be reopened (is_reopen below
+# doesn't care which closed status a case is reopened FROM).
+NEW_CLOSE_STATUSES: set[str] = {"Closed - Repaired", "Closed - Use As Is"}
+
+# PROJECT_SPEC_PHASE7.md: the new status map has exactly two kinds of transition -
+# direct-close (see direct_close_statuses below) and reopen (is_reopen in
+# update_case_status). There is no more generic "move to an intermediate open
+# status" transition at all (no more Waiting/In Rework/Ready for QC Recheck to
+# move into), so every entry here is empty. Kept as an explicit table (rather than
+# just falling through allowed_next_statuses' .get default) purely for
+# documentation/parity with the historical map in PROJECT_SPEC.md section 3.1.
 STATUS_TRANSITIONS: dict[str, set[str]] = {
-    "Open": {"In Rework", "Waiting"},
-    "In Rework": {"Ready for QC Recheck", "Waiting"},
-    "Waiting": {"In Rework"},
-    "Ready for QC Recheck": {"In Rework"},
+    "Open": set(),
+    "In Rework": set(),
+    "Waiting": set(),
+    "Ready for QC Recheck": set(),
     "Closed - Repaired": set(),
     "Closed - Scrapped": set(),
     "Closed - Use As Is": set(),
 }
 
-# PROJECT_SPEC.md section 3.2: choosing a disposition implies a target status, UNLESS
-# the case is also resolved on the spot at entry (see INSTANT_CLOSE_STATUS_BY_DISPOSITION
-# below) - a disposition that's been decided but not yet physically carried out always
-# lands in an open/queued status, never a closed one, so someone still has to confirm
-# the rework/scrap/use-as-is actually happened before the case can close.
-DISPOSITION_TO_STATUS: dict[str, str] = {
-    "Rework": "In Rework",
-    "Hold": "Waiting",
-    "Scrap": "Open",
-    "Use As Is": "Open",
-}
-
-# PROJECT_SPEC.md section 3.3: resolving on the spot is now the New Defect form's
-# DEFAULT flow, not an explicit toggle - pick a disposition (Rework is pre-selected),
-# pick a repair-action preset, submit, and the case is created directly in this
-# terminal closed status, skipping Open/In Rework/Ready for QC Recheck entirely,
-# because the shop-floor reality is that most rework/use-as-is/(rare) scrap decisions
-# are carried out in the same ~60 seconds as the QC catch, not in a separate trip
-# back to the system. Never offered for Hold, since Hold means the disposition itself
-# isn't decided yet - see create_defect_case's resolved_on_the_spot validation. The
-# form's secondary "Not resolved yet - leave open" checkbox is what opts OUT of this
-# default and back into the queue.
-INSTANT_CLOSE_STATUS_BY_DISPOSITION: dict[str, str] = {
-    "Rework": "Closed - Repaired",
-    "Scrap": "Closed - Scrapped",
+# PROJECT_SPEC_PHASE7.md "Cost model"/entry flow: when disposition="Rework" and
+# resolved_on_the_spot=True, the New Defect form chooses which terminal status the
+# case closes into - "Repaired" (default, pre-selected) or "Use As Is" (the
+# DECISION-FLAGGED entry point for recording "defect exists, we're shipping it as
+# is" without a separate disposition - see docs/PROJECT_SPEC_PHASE7.md). Any other
+# disposition (Set Aside) has no instant-close path at all - it always lands Open.
+INSTANT_CLOSE_OUTCOMES: dict[str, str] = {
+    "Repaired": "Closed - Repaired",
     "Use As Is": "Closed - Use As Is",
 }
+DEFAULT_INSTANT_CLOSE_OUTCOME = "Repaired"
 
 # StatusHistory note written for the instant-close fast path, instead of the generic
 # "Case created" note every other new case gets - this is how the audit trail (and
@@ -107,14 +95,13 @@ INSTANT_CLOSE_STATUS_BY_DISPOSITION: dict[str, str] = {
 # distinguish a case that skipped the queue entirely from one that went through it.
 RESOLVED_ON_THE_SPOT_NOTE = "Resolved on the spot at entry"
 
-# PROJECT_SPEC.md section 3.3: every non-closed status can close DIRECTLY to any of
-# the three closed statuses - this is now the standard way to close a case from the
-# Rework Queue (there is no real "QC recheck" moment on the floor to gate it
-# behind), not a narrow "skip recheck" exception for cases that happened to reach
-# "In Rework" first. A case sitting in the legacy "Ready for QC Recheck" status can
-# close directly too, for the same reason. The note is optional here (unlike
-# reopening a closed case, which always requires one) - the repair-action preset is
-# the primary structured record of what was done; the note is supplementary detail.
+# PROJECT_SPEC_PHASE7.md: every non-closed status can close DIRECTLY to either of
+# the two new closed statuses - the standard (only) way to close a case now. Still
+# includes the retired open-ish statuses (In Rework/Waiting/Ready for QC Recheck)
+# defensively: the Phase 7 migration moves every currently-open legacy-status case
+# to Open, so none of these should exist going forward, but a case that somehow
+# still carries one of them must still be closeable rather than stuck. The note is
+# optional here (unlike reopening a closed case, which always requires one).
 DIRECT_CLOSE_SOURCE_STATUSES: set[str] = {"Open", "In Rework", "Waiting", "Ready for QC Recheck"}
 
 
@@ -123,14 +110,14 @@ def allowed_next_statuses(current_status: str) -> set[str]:
 
 
 def direct_close_statuses(current_status: str) -> set[str]:
-    """Closed statuses `current_status` can jump straight to (PROJECT_SPEC.md
-    section 3.3) - the standard way to close a queued case now, with an optional
-    note (unlike reopening a closed case, which always requires one). Non-empty for
-    every non-closed status (Open, In Rework, Waiting, and the legacy Ready for QC
-    Recheck); empty once already closed. Kept separate from allowed_next_statuses()
+    """Closed statuses `current_status` can jump straight to (PROJECT_SPEC_PHASE7.md)
+    - the standard way to close a case now, with an optional note (unlike reopening
+    a closed case, which always requires one). Non-empty for every non-closed
+    status; empty once already closed. Only ever offers the two NEW closed
+    statuses - see NEW_CLOSE_STATUSES. Kept separate from allowed_next_statuses()
     so the UI can offer this as the primary "close this case" action rather than
     folding it into a generic status dropdown."""
-    return CLOSED_STATUSES if current_status in DIRECT_CLOSE_SOURCE_STATUSES else set()
+    return NEW_CLOSE_STATUSES if current_status in DIRECT_CLOSE_SOURCE_STATUSES else set()
 
 
 def _get_active_or_any_station(db: Session, station_id: int, *, field: str) -> Station:
@@ -241,11 +228,17 @@ def create_defect_case(
     items: list[dict],
     disposition: str | None = None,
     resolved_on_the_spot: bool = False,
+    instant_close_outcome: str | None = None,
     repair_action: str | None = None,
     root_cause: str | None = None,
     corrective_action: str | None = None,
     notes: str | None = None,
 ) -> DefectCase:
+    """instant_close_outcome: only meaningful when resolved_on_the_spot=True and
+    disposition="Rework" - "Repaired" (default) or "Use As Is", see
+    INSTANT_CLOSE_OUTCOMES. This is how "defect exists, we're shipping it as is"
+    gets recorded now that Use As Is is no longer its own disposition
+    (docs/PROJECT_SPEC_PHASE7.md - a DECISION FLAG at the time this shipped)."""
     if not work_order_number or not work_order_number.strip():
         raise ValidationError("Work order number is required.", field="work_order_number")
     if priority not in VALID_PRIORITIES:
@@ -257,18 +250,30 @@ def create_defect_case(
     if not items:
         raise ValidationError("At least one defect category is required.", field="items")
 
-    # "Fixed immediately?" fast path (PROJECT_SPEC.md section 3.3) - only meaningful
-    # for a disposition that has a closed status to jump to, and only trustworthy
-    # with a repair_action on record for what was actually done (also feeds the
-    # quick repair-action presets on the New Defect form).
-    if resolved_on_the_spot and disposition not in INSTANT_CLOSE_STATUS_BY_DISPOSITION:
+    # "Fixed immediately?" fast path (PROJECT_SPEC_PHASE7.md) - only Rework has an
+    # instant-close path now (Set Aside means "waiting to be worked", the opposite
+    # of "already done"), and only trustworthy with a repair_action on record for
+    # what was actually done (also feeds the quick repair-action presets on the
+    # New Defect form).
+    if resolved_on_the_spot and disposition != "Rework":
         raise ValidationError(
-            "Resolved on the spot only applies when disposition is Rework, Scrap, " "or Use As Is.",
+            "Resolved on the spot only applies when disposition is Rework.",
             field="resolved_on_the_spot",
         )
     if resolved_on_the_spot and not (repair_action and repair_action.strip()):
         raise ValidationError(
             "Describe what was done to resolve it on the spot.", field="repair_action"
+        )
+    if instant_close_outcome is not None and not resolved_on_the_spot:
+        raise ValidationError(
+            "instant_close_outcome only applies when resolved_on_the_spot is true.",
+            field="instant_close_outcome",
+        )
+    effective_outcome = instant_close_outcome or DEFAULT_INSTANT_CLOSE_OUTCOME
+    if resolved_on_the_spot and effective_outcome not in INSTANT_CLOSE_OUTCOMES:
+        raise ValidationError(
+            f"instant_close_outcome must be one of {list(INSTANT_CLOSE_OUTCOMES)}.",
+            field="instant_close_outcome",
         )
 
     _get_active_or_any_station(db, found_station_id, field="found_station_id")
@@ -283,12 +288,17 @@ def create_defect_case(
         if merged_items[category_id]["affected_drawer_quantity"] < 1:
             raise ValidationError("Affected drawer quantity must be at least 1.", field="items")
 
-    if resolved_on_the_spot:
-        initial_status = INSTANT_CLOSE_STATUS_BY_DISPOSITION[disposition]
-    elif disposition:
-        initial_status = DISPOSITION_TO_STATUS[disposition]
-    else:
-        initial_status = "Open"
+    # Every non-instant-close case lands on "Open" now, regardless of disposition -
+    # there is no more separate "In Rework"/"Waiting" queue status to route into
+    # (PROJECT_SPEC_PHASE7.md). The disposition column itself still records WHY a
+    # case is open (Rework in progress vs. Set Aside waiting); it just no longer
+    # picks a different status for it.
+    initial_status = INSTANT_CLOSE_OUTCOMES[effective_outcome] if resolved_on_the_spot else "Open"
+
+    # Phase 7 cost model: one unit of the currently-configured rate, snapshotted at
+    # creation, never re-priced later even if the Admin rate changes - see
+    # app/services/metrics_service.py compute_case_cost.
+    cost_per_drawer_at_time = settings_service.get_cost_per_drawer(db)
 
     case = DefectCase(
         case_number=generate_case_number(db, production_date),
@@ -306,6 +316,7 @@ def create_defect_case(
         root_cause=root_cause,
         corrective_action=corrective_action,
         notes=notes,
+        cost_per_drawer_at_time=cost_per_drawer_at_time,
         closed_at=dt.datetime.now(dt.timezone.utc) if initial_status in CLOSED_STATUSES else None,
     )
     case.items = [
@@ -432,12 +443,9 @@ def update_case_status(
         case.disposition = disposition
     if repair_action is not None:
         case.repair_action = repair_action
-    # "Skipped recheck" (feeds the "% Queued Rework Closed Without Recheck" KPI)
-    # means the case closed WITHOUT having gone through "Ready for QC Recheck" first
-    # - a case actually closing FROM that legacy status genuinely was rechecked, so
-    # it must not count as skipped even though it's also a direct-close source now.
-    if is_direct_close and current_status != "Ready for QC Recheck":
-        case.skipped_recheck = True
+    # skipped_recheck is retired (PROJECT_SPEC_PHASE7.md: no recheck status exists
+    # anymore) - the column and its historical True/False values stay on old rows,
+    # but nothing writes to it for new status changes anymore.
     case.closed_at = dt.datetime.now(dt.timezone.utc) if new_status in CLOSED_STATUSES else None
 
     db.add(
@@ -568,17 +576,19 @@ def upsert_daily_summary(
     shift: str,
     drawers_inspected: int,
     drawers_rejected_unique: int,
-    drawers_reworked: int,
+    drawers_reworked: int | None = None,
     drawers_scrapped: int | None = None,
     notes: str | None,
 ) -> tuple[DailyProductionSummary, list[str]]:
-    """drawers_scrapped is Optional because the Daily Summary form no longer has a
-    scrapped field at all (docs/PROJECT_SPEC_PHASE4.md "Scrap removal") - passing
-    None here means "leave whatever was already stored for this date/shift alone"
-    (0 for a brand new row), so re-saving a legacy row that does carry a scrap count
-    can never silently zero it out. Callers that DO still track scrap (the MCP
-    write tool, direct API/script use) can keep passing an explicit int exactly as
-    before.
+    """drawers_reworked and drawers_scrapped are both Optional because neither is a
+    field on the Daily Summary form anymore (drawers_reworked: PROJECT_SPEC_PHASE7.md
+    - Rework Rate is now computed from defect cases, not a hand-entered count;
+    drawers_scrapped: docs/PROJECT_SPEC_PHASE4.md "Scrap removal"). Passing None for
+    either here means "leave whatever was already stored for this date/shift alone"
+    (0 for a brand new row), so re-saving a legacy row that does carry a value can
+    never silently zero it out. Callers that DO still want to set one explicitly
+    (the MCP write tool, direct API/script use) can keep passing an explicit int
+    exactly as before.
     """
     row = (
         db.query(DailyProductionSummary)
@@ -587,6 +597,11 @@ def upsert_daily_summary(
             DailyProductionSummary.shift == shift,
         )
         .first()
+    )
+    effective_reworked = (
+        drawers_reworked
+        if drawers_reworked is not None
+        else (row.drawers_reworked if row is not None else 0)
     )
     effective_scrapped = (
         drawers_scrapped
@@ -597,7 +612,7 @@ def upsert_daily_summary(
     warnings = validate_daily_summary_input(
         drawers_inspected=drawers_inspected,
         drawers_rejected_unique=drawers_rejected_unique,
-        drawers_reworked=drawers_reworked,
+        drawers_reworked=effective_reworked,
         drawers_scrapped=effective_scrapped,
         notes=notes,
     )
@@ -608,7 +623,7 @@ def upsert_daily_summary(
 
     row.drawers_inspected = drawers_inspected
     row.drawers_rejected_unique = drawers_rejected_unique
-    row.drawers_reworked = drawers_reworked
+    row.drawers_reworked = effective_reworked
     row.drawers_scrapped = effective_scrapped
     row.notes = notes
     # Phase 4: snapshot the rate active right now. Never recomputed later even if
@@ -637,47 +652,42 @@ def get_daily_summary(
 
 
 def suggested_daily_counts(db: Session, production_date: dt.date) -> dict:
-    """Suggested "Unique Drawers Rejected" / "Drawers Reworked" counts for the Daily
-    Production Summary form, computed from real DefectCase data instead of typed by
-    hand (docs/PROJECT_SPEC_PHASE4.md "Scrap removal" / auto-calculation).
+    """Suggested "Unique Drawers Rejected" count for the Daily Production Summary
+    form, computed from real DefectCase data instead of typed by hand
+    (docs/PROJECT_SPEC_PHASE4.md "Scrap removal" / auto-calculation).
 
-    - Unique drawers rejected = count of distinct, non-deleted DefectCase rows for
-      this production_date, regardless of disposition. One DefectCase already IS
-      one defective drawer no matter how many DefectItem categories are on it
-      (PROJECT_SPEC.md section 2), so counting distinct cases - not items - is the
-      same dedup rule used everywhere else in the app (e.g.
-      app/routers/reports.py _distinct_cases, the section 3.3 KPIs); it already
-      guarantees a drawer flagged under two categories on one case is counted once.
-    - Drawers reworked = count of those cases with disposition "Rework" that are
-      closed as "Closed - Repaired" - this covers a case closed via the
-      resolved-on-the-spot fast path, "Close Directly", or the legacy
-      In Rework -> Ready for QC Recheck -> Closed path equally, since all three
-      land on the same disposition/status combination (see
-      app/services/defect_service.py create_defect_case / update_case_status and
-      PROJECT_SPEC.md section 3.3).
+    Unique drawers rejected = count of distinct, non-deleted DefectCase rows for
+    this production_date, regardless of disposition. One DefectCase already IS
+    one defective drawer no matter how many DefectItem categories are on it
+    (PROJECT_SPEC.md section 2), so counting distinct cases - not items - is the
+    same dedup rule used everywhere else in the app (e.g.
+    app/routers/reports.py _distinct_cases, the section 3.3 KPIs); it already
+    guarantees a drawer flagged under two categories on one case is counted once.
+
+    No longer also suggests a reworked count (PROJECT_SPEC_PHASE7.md): "Drawers
+    reworked" left the Daily Summary form entirely - Rework Rate is now computed
+    straight from cases with disposition "Rework" (see
+    app/services/metrics_service.py / app/routers/reports.py get_summary), not a
+    suggested-then-typed number.
 
     LIMITATION: DefectCase has no shift field, only production_date, so this
     suggestion is computed at the whole-day level and is identical no matter which
     shift the Daily Summary form is being filled out for. If a plant ever runs two
     shifts against the same production_date, both shifts' forms will suggest the
-    same day-level counts - matching this by shift would require adding a shift
+    same day-level count - matching this by shift would require adding a shift
     field to DefectCase, which is out of scope here.
     """
-    cases = (
-        db.query(DefectCase)
+    case_count = (
+        db.query(func.count(DefectCase.id))
         .filter(
             DefectCase.production_date == production_date,
             DefectCase.is_deleted.is_(False),
         )
-        .all()
-    )
-    suggested_rejected_unique = len(cases)
-    suggested_reworked = sum(
-        1 for case in cases if case.disposition == "Rework" and case.status == "Closed - Repaired"
+        .scalar()
+        or 0
     )
     return {
         "production_date": production_date,
-        "defect_case_count": suggested_rejected_unique,
-        "suggested_drawers_rejected_unique": suggested_rejected_unique,
-        "suggested_drawers_reworked": suggested_reworked,
+        "defect_case_count": case_count,
+        "suggested_drawers_rejected_unique": case_count,
     }

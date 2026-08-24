@@ -166,8 +166,21 @@ class DefectCase(Base):
     resolved_on_the_spot: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # "Close Directly (Skip Recheck)" fast path (PROJECT_SPEC.md section 3.3): true
     # when this case went In Rework -> Closed-* directly, bypassing Ready for QC
-    # Recheck. Set by app/services/defect_service.py update_case_status.
+    # Recheck. Retired (PROJECT_SPEC_PHASE7.md: no recheck status exists anymore) -
+    # kept for backward compatibility with historical rows; no longer written to.
     skipped_recheck: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Phase 7 cost model (PROJECT_SPEC_PHASE7.md "Cost model"): the app_settings
+    # cost_per_drawer rate active at CREATION time, snapshotted so a later Admin
+    # rate change never re-prices history - same discipline as
+    # DailyProductionSummary.cost_per_drawer_at_time. One unit of this rate is this
+    # case's contribution to Total Internal Quality Cost, UNLESS it closes
+    # "Closed - Use As Is" (contributes zero - see Cost Avoided instead). Nullable
+    # only because it predates this column on rows created before this migration -
+    # see app/services/metrics_service.py compute_case_cost for the read-time
+    # fallback to the currently-configured rate.
+    cost_per_drawer_at_time: Mapped[decimal.Decimal | None] = mapped_column(
+        Numeric(10, 2), nullable=True
+    )
 
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[dt.datetime] = mapped_column(

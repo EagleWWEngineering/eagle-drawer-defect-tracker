@@ -8,7 +8,11 @@ import datetime as dt
 
 from pydantic import BaseModel, Field, computed_field, field_validator
 
-from app.services.defect_service import allowed_next_statuses, direct_close_statuses
+from app.services.defect_service import (
+    CLOSED_STATUSES,
+    allowed_next_statuses,
+    direct_close_statuses,
+)
 from app.timezone_utils import to_display_string
 
 # ---------------------------------------------------------------------------
@@ -38,8 +42,16 @@ class MasterDataOut(BaseModel):
     stations: list[StationOut]
     defect_categories: list[DefectCategoryOut]
     priorities: list[str]
+    # Write-legal values only (PROJECT_SPEC_PHASE7.md) - what a case can be
+    # CREATED or CHANGED to. Use all_statuses/all_dispositions below for a
+    # filter/report dropdown that also needs to reach retired historical values.
     statuses: list[str]
     dispositions: list[str]
+    # Every historically-possible value, retired ones included - for filter
+    # dropdowns (Reports/Dashboard) only, so a historical case in a retired
+    # status/disposition can still be filtered to. Never used for write validation.
+    all_statuses: list[str]
+    all_dispositions: list[str]
 
 
 class StationCreate(BaseModel):
@@ -125,10 +137,15 @@ class DefectCaseCreate(BaseModel):
     priority: str = "Normal"
     items: list[DefectItemIn] = Field(min_length=1)
     disposition: str | None = None
-    # "Fixed immediately?" fast path (PROJECT_SPEC.md section 3.3) - New Defect
-    # form toggle. True creates the case already closed (see defect_service.py
-    # create_defect_case); only valid alongside disposition Rework/Scrap/Use As Is.
+    # "Fixed immediately?" fast path (PROJECT_SPEC_PHASE7.md) - New Defect form
+    # toggle. True creates the case already closed (see defect_service.py
+    # create_defect_case); only valid alongside disposition "Rework" now (Set
+    # Aside means "waiting to be worked", the opposite of "already done").
     resolved_on_the_spot: bool = False
+    # Which closed status resolved_on_the_spot lands the case in - "Repaired"
+    # (default) or "Use As Is". Only meaningful alongside resolved_on_the_spot;
+    # see defect_service.py INSTANT_CLOSE_OUTCOMES / create_defect_case.
+    instant_close_outcome: str | None = None
     repair_action: str | None = None
     root_cause: str | None = None
     corrective_action: str | None = None
@@ -180,6 +197,11 @@ class DefectCaseOut(BaseModel):
     disposition: str | None
     resolved_on_the_spot: bool
     skipped_recheck: bool
+    # Phase 7 cost model (PROJECT_SPEC_PHASE7.md): the cost_per_drawer rate
+    # snapshotted at creation. Null for a case created before this column existed
+    # - see app/services/metrics_service.py compute_case_cost for the read-time
+    # fallback used when computing actual cost figures.
+    cost_per_drawer_at_time: float | None
     repair_action: str | None
     root_cause: str | None
     corrective_action: str | None
@@ -216,15 +238,15 @@ class DefectCaseOut(BaseModel):
         this rule itself. Reopening a closed case to Open is always offered here too;
         the service layer still enforces that reopen requires a note."""
         options = sorted(allowed_next_statuses(self.status))
-        if self.status in {"Closed - Repaired", "Closed - Scrapped", "Closed - Use As Is"}:
+        if self.status in CLOSED_STATUSES:
             options = ["Open", *options]
         return options
 
     @computed_field
     @property
     def direct_close_statuses(self) -> list[str]:
-        """The 3 closed-status "close this case" targets (PROJECT_SPEC.md section
-        3.3) - non-empty for every non-closed status, always requiring a note. Kept
+        """The 2 closed-status "close this case" targets (PROJECT_SPEC_PHASE7.md)
+        - non-empty for every non-closed status, with an optional note. Kept
         separate from allowed_next_statuses so the UI renders it as the primary
         close action rather than a normal status dropdown option."""
         return sorted(direct_close_statuses(self.status))
@@ -252,6 +274,11 @@ def defect_case_to_out(case) -> DefectCaseOut:
         disposition=case.disposition,
         resolved_on_the_spot=case.resolved_on_the_spot,
         skipped_recheck=case.skipped_recheck,
+        cost_per_drawer_at_time=(
+            float(case.cost_per_drawer_at_time)
+            if case.cost_per_drawer_at_time is not None
+            else None
+        ),
         repair_action=case.repair_action,
         root_cause=case.root_cause,
         corrective_action=case.corrective_action,
@@ -300,7 +327,14 @@ class DailyProductionSummaryIn(BaseModel):
     shift: str = "Day"
     drawers_inspected: int = Field(ge=0)
     drawers_rejected_unique: int = Field(ge=0)
-    drawers_reworked: int = Field(ge=0)
+    # No longer a field on the Daily Summary form (PROJECT_SPEC_PHASE7.md: Rework
+    # Rate is now derived from defect cases, not a hand-entered count - a second
+    # number for the same fact was a contradiction waiting to happen). Optional and
+    # defaulting to None (not 0), same pattern as drawers_scrapped below, so
+    # upsert_daily_summary preserves whatever a legacy row already has instead of
+    # silently zeroing it. The MCP write tool and any direct API caller can still
+    # pass an explicit value.
+    drawers_reworked: int | None = Field(default=None, ge=0)
     # No longer a field on the Daily Summary form (scrap essentially doesn't happen
     # on this floor - see docs/PROJECT_SPEC_PHASE4.md "Scrap removal"). Optional and
     # defaulting to None (not 0) so upsert_daily_summary can tell "not provided by
@@ -312,14 +346,15 @@ class DailyProductionSummaryIn(BaseModel):
 
 
 class DailySummarySuggestionOut(BaseModel):
-    """Suggested "Unique Drawers Rejected"/"Drawers Reworked" values for the Daily
-    Summary form, computed from real DefectCase data - see
-    app/services/defect_service.py suggested_daily_counts()."""
+    """Suggested "Unique Drawers Rejected" value for the Daily Summary form,
+    computed from real DefectCase data - see
+    app/services/defect_service.py suggested_daily_counts(). No longer suggests a
+    reworked count (PROJECT_SPEC_PHASE7.md - that field left the form; Rework Rate
+    is computed straight from cases, not a suggested/typed number)."""
 
     production_date: dt.date
     defect_case_count: int
     suggested_drawers_rejected_unique: int
-    suggested_drawers_reworked: int
 
 
 class DailyProductionSummaryOut(BaseModel):
@@ -331,25 +366,15 @@ class DailyProductionSummaryOut(BaseModel):
     drawers_reworked: int
     drawers_scrapped: int
     notes: str | None
+    # Historical rate snapshot - kept for the record, but PROJECT_SPEC_PHASE7.md's
+    # cost model no longer derives any cost figure from this row (drawers_reworked/
+    # drawers_scrapped * this rate). Internal Quality Cost is entirely case-derived
+    # now - see app/services/metrics_service.py compute_internal_quality_cost. The
+    # internal_rework_cost/internal_scrap_cost computed fields that used to live
+    # here were removed for exactly that reason: they'd otherwise show a real
+    # dollar figure that has nothing to do with the actual reported cost anymore.
     cost_per_drawer_at_time: float | None
     warnings: list[str] = []
-
-    @computed_field
-    @property
-    def internal_rework_cost(self) -> float | None:
-        """Phase 4: null (not zero) when this row predates cost tracking and was
-        never re-saved since - a real $0 rework cost is indistinguishable from
-        "unknown rate" otherwise. See docs/PROJECT_SPEC_PHASE4.md."""
-        if self.cost_per_drawer_at_time is None:
-            return None
-        return round(self.drawers_reworked * self.cost_per_drawer_at_time, 2)
-
-    @computed_field
-    @property
-    def internal_scrap_cost(self) -> float | None:
-        if self.cost_per_drawer_at_time is None:
-            return None
-        return round(self.drawers_scrapped * self.cost_per_drawer_at_time, 2)
 
     model_config = {"from_attributes": True}
 
@@ -432,34 +457,30 @@ class KpiOut(BaseModel):
     drawers_inspected: int
     defect_events: int
     unique_drawers_rejected: int
+    # Phase 7 (PROJECT_SPEC_PHASE7.md): redefined - count of distinct cases with
+    # disposition "Rework" in the filtered range (Rework Rate's numerator), not a
+    # sum of the now-removed Daily Production Summary "Drawers reworked" field.
     drawers_reworked: int
     defects_per_100: float | None
     rejection_rate: float | None
     first_pass_yield: float | None
     rework_rate: float | None
+    # Phase 7 cost model: sum of one cost unit per non-"Closed - Use As Is" case in
+    # the filtered range. Scrap Rate / Internal Scrap Cost stay dropped from this
+    # app entirely (docs/PROJECT_SPEC_PHASE4.md "Scrap removal"). See
+    # app/services/metrics_service.py compute_internal_quality_cost.
     internal_rework_cost: float
+    # Phase 7, new: the cost that would have been incurred by every case in the
+    # filtered range that instead closed "Closed - Use As Is" - what "shipping as
+    # is instead of reworking" saved.
+    cost_avoided: float
     total_internal_quality_cost: float
     quality_cost_per_drawer_inspected: float | None
-    # Phase 4 cost fix: which source(s) actually drove internal_rework_cost above -
-    # "daily_summary", "defect_cases" (no summary existed for the period so cases
-    # were the only source), "blended" (some dates had a summary, some didn't), or
-    # "none" (no rework recorded either way). Scrap Rate / Internal Scrap Cost were
-    # dropped from this app entirely - see docs/PROJECT_SPEC_PHASE4.md
-    # "Scrap removal" - drawers_scrapped is no longer part of the KPI surface even
-    # though the underlying DailyProductionSummary.drawers_scrapped column and the
-    # Scrap disposition/status are both kept for backward compatibility.
-    # See app/services/metrics_service.py:compute_internal_quality_cost.
-    defect_case_rework_count: int
-    cost_basis: str
-    # PROJECT_SPEC.md section 3.3 KPIs (60-second-fix fast paths). total_cases /
-    # queued_rework_count are the respective denominators, exposed for transparency
-    # the same way defect_case_rework_count etc. are above.
+    # PROJECT_SPEC.md section 3.3 KPI (60-second-fix fast path). total_cases is its
+    # denominator, exposed for transparency the same way other counts here are.
     total_cases: int
     resolved_on_the_spot_count: int
     pct_resolved_on_the_spot: float | None
-    queued_rework_count: int
-    skipped_recheck_count: int
-    pct_queued_rework_closed_without_recheck: float | None
 
 
 class ParetoRowOut(BaseModel):
@@ -474,6 +495,9 @@ class TrendPointOut(BaseModel):
     drawers_inspected: int
     unique_drawers_rejected: int
     internal_rework_cost: float = 0.0
+    # Phase 7, new: see KpiOut.cost_avoided - same figure, bucketed the same way as
+    # every other field on this response.
+    cost_avoided: float = 0.0
     # Phase 6: None (not 0) when no daily_schedules row falls in this bucket at
     # all - see app/services/metrics_service.py build_schedule_vs_completed's
     # docstring for why a real "scheduled zero" must stay distinguishable.

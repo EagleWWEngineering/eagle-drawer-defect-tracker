@@ -67,6 +67,7 @@ def create_case(
         items=[i.model_dump() for i in payload.items],
         disposition=payload.disposition,
         resolved_on_the_spot=payload.resolved_on_the_spot,
+        instant_close_outcome=payload.instant_close_outcome,
         repair_action=payload.repair_action,
         root_cause=payload.root_cause,
         corrective_action=payload.corrective_action,

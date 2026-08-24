@@ -21,7 +21,13 @@ from app.schemas import (
     StationUpdate,
 )
 from app.services import audit_service
-from app.services.defect_service import VALID_DISPOSITIONS, VALID_PRIORITIES, VALID_STATUSES
+from app.services.defect_service import (
+    ALL_KNOWN_DISPOSITIONS,
+    ALL_KNOWN_STATUSES,
+    VALID_DISPOSITIONS,
+    VALID_PRIORITIES,
+    VALID_STATUSES,
+)
 
 router = APIRouter(prefix="/api/v1/master-data", tags=["master-data"])
 
@@ -38,6 +44,8 @@ def get_master_data(db: Session = Depends(get_db)) -> MasterDataOut:
         priorities=VALID_PRIORITIES,
         statuses=VALID_STATUSES,
         dispositions=VALID_DISPOSITIONS,
+        all_statuses=ALL_KNOWN_STATUSES,
+        all_dispositions=ALL_KNOWN_DISPOSITIONS,
     )
 
 
