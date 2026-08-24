@@ -6,7 +6,7 @@ import csv
 import io
 
 
-def _create_case(client, master_data, category_name, wo):
+def _create_case(client, master_data, category_name, wo, **overrides):
     payload = {
         "production_date": "2026-07-24",
         "detected_at": "2026-07-24T14:30:00Z",
@@ -20,6 +20,7 @@ def _create_case(client, master_data, category_name, wo):
             }
         ],
     }
+    payload.update(overrides)
     return client.post("/api/v1/defect-cases", json=payload).json()
 
 
@@ -48,38 +49,48 @@ def test_csv_export_all_rows_when_unfiltered(client, master_data):
     assert len(rows) - 1 == 2  # header + 2 data rows
 
 
-def test_csv_export_includes_same_day_cost_columns(client, master_data):
-    client.put(
-        "/api/v1/daily-production/2026-07-24",
-        json={
-            "shift": "Day",
-            "drawers_inspected": 100,
-            "drawers_rejected_unique": 10,
-            "drawers_reworked": 5,
-            "drawers_scrapped": 2,
-        },
-    )
+def test_csv_export_includes_case_cost_columns(client, master_data):
+    """PROJECT_SPEC_PHASE7.md "Cost model": cost is per-CASE now, not joined by
+    production_date from a Daily Production Summary row - so these columns are
+    populated from the case's own snapshot, independent of whether a summary
+    exists for that date at all."""
     _create_case(client, master_data, "Sanding / Surface", "WO-CSV-COST")
 
     resp = client.get("/api/v1/exports/defects.csv", params={"work_order_number": "WO-CSV-COST"})
     rows = list(csv.reader(io.StringIO(resp.text)))
     header, data_rows = rows[0], rows[1:]
-    assert "day_cost_per_drawer" in header
-    assert "day_internal_rework_cost" in header
+    assert "case_cost_per_drawer" in header
+    assert "case_internal_cost" in header
+    assert "case_cost_avoided" in header
     # Scrap cost was dropped from this app entirely (docs/PROJECT_SPEC_PHASE4.md
-    # "Scrap removal") - no scrap column in the CSV export.
+    # "Scrap removal") - no scrap column in the CSV export. The old date-joined
+    # columns are gone too.
+    assert "day_cost_per_drawer" not in header
+    assert "day_internal_rework_cost" not in header
     assert "day_internal_scrap_cost" not in header
     row = data_rows[0]
-    assert row[header.index("day_cost_per_drawer")] == "35.00"
-    assert row[header.index("day_internal_rework_cost")] == "175.0"  # 5 * 35.00
+    assert row[header.index("case_cost_per_drawer")] == "35.0"
+    assert row[header.index("case_internal_cost")] == "35.0"
+    assert row[header.index("case_cost_avoided")] == "0.0"
 
 
-def test_csv_export_cost_columns_blank_when_no_daily_summary(client, master_data):
-    _create_case(client, master_data, "Sanding / Surface", "WO-CSV-NOCOST")
-    resp = client.get("/api/v1/exports/defects.csv", params={"work_order_number": "WO-CSV-NOCOST"})
+def test_csv_export_use_as_is_case_cost_is_zero_and_avoided_is_populated(client, master_data):
+    _create_case(
+        client,
+        master_data,
+        "Sanding / Surface",
+        "WO-CSV-USEASIS",
+        disposition="Rework",
+        resolved_on_the_spot=True,
+        instant_close_outcome="Use As Is",
+        repair_action="Buyer accepted as-is",
+    )
+    resp = client.get("/api/v1/exports/defects.csv", params={"work_order_number": "WO-CSV-USEASIS"})
     rows = list(csv.reader(io.StringIO(resp.text)))
     header, data_rows = rows[0], rows[1:]
-    assert data_rows[0][header.index("day_cost_per_drawer")] == ""
+    row = data_rows[0]
+    assert row[header.index("case_internal_cost")] == "0.0"
+    assert row[header.index("case_cost_avoided")] == "35.0"
 
 
 def test_export_is_audited(client, master_data):

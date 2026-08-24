@@ -1,15 +1,15 @@
-"""PROJECT_SPEC.md section 3.3: immediate resolution is the standard path,
-queued/Hold is the exception.
+"""PROJECT_SPEC_PHASE7.md: immediate resolution is still the standard path for
+Rework. Set Aside (replacing the old Use As Is / Hold / Scrap) always queues as
+Open - "Close Directly" from the queue is the only way it ever closes.
 
 - "Resolved on the spot" at entry (create_defect_case resolved_on_the_spot=True) -
-  the New Defect form's default flow.
+  only valid with disposition "Rework"; instant_close_outcome picks which of the
+  two closed statuses it lands on ("Repaired" default, or "Use As Is" - the
+  DECISION-FLAGGED entry point for recording "shipping as is" without a separate
+  disposition).
 - "Close Directly" from the queue (update_case_status any non-closed status ->
-  Closed-* directly, with an optional note) - the standard closing action,
-  available from every non-closed status, not just In Rework. Reopening a closed
-  case is the one exception still requiring a note.
-
-Plus the metrics_service pure functions behind the two new KPIs, and the
-Rework-is-primary/Scrap-is-secondary disposition ordering (section 3.2).
+  Closed-* directly, with an optional note) - the standard closing action.
+  Reopening a closed case is the one exception still requiring a note.
 """
 
 from __future__ import annotations
@@ -49,49 +49,52 @@ def _make_case(db_session, stations, categories, today, **overrides):
 
 
 # ---------------------------------------------------------------------------
-# Rework primary / Scrap secondary (section 3.2)
+# Rework primary / Set Aside secondary (section 3.2 / PROJECT_SPEC_PHASE7.md)
 # ---------------------------------------------------------------------------
 
 
 def test_rework_is_the_default_primary_disposition():
     """VALID_DISPOSITIONS order drives the New Defect form's button order and
-    prominence - Rework must be first (big, pre-selected) and Scrap last (tucked
-    behind "More options...")."""
-    assert VALID_DISPOSITIONS[0] == "Rework"
-    assert VALID_DISPOSITIONS[-1] == "Scrap"
+    prominence - Rework must be first (big, pre-selected)."""
+    assert VALID_DISPOSITIONS == ["Rework", "Set Aside"]
 
 
 # ---------------------------------------------------------------------------
-# Resolved on the spot (all three eligible dispositions, including the now-rare
-# Scrap - it still has to work end to end when explicitly chosen)
+# Resolved on the spot: only Rework has an instant-close path, choosing between
+# the two closed outcomes.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "disposition,expected_status",
-    [
-        ("Rework", "Closed - Repaired"),
-        ("Scrap", "Closed - Scrapped"),
-        ("Use As Is", "Closed - Use As Is"),
-    ],
-)
-def test_instant_close_all_three_dispositions(
-    db_session, stations, categories, today, disposition, expected_status
-):
+def test_instant_close_default_outcome_is_repaired(db_session, stations, categories, today):
     case = _make_case(
         db_session,
         stations,
         categories,
         today,
-        disposition=disposition,
+        disposition="Rework",
         resolved_on_the_spot=True,
         repair_action="Resanded",
     )
-    assert case.status == expected_status
+    assert case.status == "Closed - Repaired"
     assert case.resolved_on_the_spot is True
     assert case.skipped_recheck is False
     assert case.closed_at is not None
     assert case.repair_action == "Resanded"
+
+
+def test_instant_close_use_as_is_outcome(db_session, stations, categories, today):
+    case = _make_case(
+        db_session,
+        stations,
+        categories,
+        today,
+        disposition="Rework",
+        resolved_on_the_spot=True,
+        instant_close_outcome="Use As Is",
+        repair_action="Buyer accepted as-is",
+    )
+    assert case.status == "Closed - Use As Is"
+    assert case.closed_at is not None
 
 
 def test_instant_close_writes_resolved_on_the_spot_audit_note(
@@ -119,17 +122,28 @@ def test_normal_entry_still_writes_case_created_note(db_session, stations, categ
     assert case.resolved_on_the_spot is False
 
 
-@pytest.mark.parametrize("disposition", [None, "Hold"])
-def test_resolved_on_the_spot_rejects_ineligible_disposition(
-    db_session, stations, categories, today, disposition
-):
+def test_resolved_on_the_spot_rejects_set_aside(db_session, stations, categories, today):
     with pytest.raises(ValidationError) as exc:
         _make_case(
             db_session,
             stations,
             categories,
             today,
-            disposition=disposition,
+            disposition="Set Aside",
+            resolved_on_the_spot=True,
+            repair_action="Resanded",
+        )
+    assert exc.value.field == "resolved_on_the_spot"
+
+
+def test_resolved_on_the_spot_rejects_no_disposition(db_session, stations, categories, today):
+    with pytest.raises(ValidationError) as exc:
+        _make_case(
+            db_session,
+            stations,
+            categories,
+            today,
+            disposition=None,
             resolved_on_the_spot=True,
             repair_action="Resanded",
         )
@@ -143,7 +157,7 @@ def test_resolved_on_the_spot_requires_repair_action(db_session, stations, categ
             stations,
             categories,
             today,
-            disposition="Scrap",
+            disposition="Rework",
             resolved_on_the_spot=True,
         )
     assert exc.value.field == "repair_action"
@@ -158,47 +172,61 @@ def test_resolved_on_the_spot_requires_non_blank_repair_action(
             stations,
             categories,
             today,
-            disposition="Scrap",
+            disposition="Rework",
             resolved_on_the_spot=True,
             repair_action="   ",
         )
     assert exc.value.field == "repair_action"
 
 
+def test_instant_close_outcome_rejected_without_resolved_on_the_spot(
+    db_session, stations, categories, today
+):
+    with pytest.raises(ValidationError) as exc:
+        _make_case(
+            db_session,
+            stations,
+            categories,
+            today,
+            disposition="Rework",
+            instant_close_outcome="Use As Is",
+        )
+    assert exc.value.field == "instant_close_outcome"
+
+
+def test_invalid_instant_close_outcome_rejected(db_session, stations, categories, today):
+    with pytest.raises(ValidationError) as exc:
+        _make_case(
+            db_session,
+            stations,
+            categories,
+            today,
+            disposition="Rework",
+            resolved_on_the_spot=True,
+            instant_close_outcome="Scrapped",
+            repair_action="Resanded",
+        )
+    assert exc.value.field == "instant_close_outcome"
+
+
 # ---------------------------------------------------------------------------
-# Leaving a case open (resolved_on_the_spot=False) - the secondary/exception path.
-# Rework/Hold routing unchanged, Scrap/Use As Is deliberately changed from
-# "auto-close" to "Open" (PROJECT_SPEC.md section 3.2).
+# Leaving a case open (resolved_on_the_spot=False): every non-instant case
+# lands on "Open" now, regardless of disposition - there is no more separate
+# "In Rework"/"Waiting" queue status to route into.
 # ---------------------------------------------------------------------------
 
 
-def test_disposition_rework_left_open_is_in_rework(db_session, stations, categories, today):
+def test_disposition_rework_left_open_is_open(db_session, stations, categories, today):
     """The New Defect form's "Not resolved yet - leave this case open" checkbox,
-    with Rework chosen, must still land the case in the queue as In Rework."""
+    with Rework chosen, lands the case on Open now (In Rework is retired)."""
     case = _make_case(db_session, stations, categories, today, disposition="Rework")
-    assert case.status == "In Rework"
+    assert case.status == "Open"
     assert case.resolved_on_the_spot is False
     assert case.closed_at is None
 
 
-def test_disposition_hold_is_always_left_open_as_waiting(db_session, stations, categories, today):
-    """Hold has no "resolved" concept of its own - picking it always leaves the
-    case open as Waiting, the same effect as the leave-open checkbox, without
-    needing the checkbox at all."""
-    case = _make_case(db_session, stations, categories, today, disposition="Hold")
-    assert case.status == "Waiting"
-    assert case.resolved_on_the_spot is False
-
-
-@pytest.mark.parametrize("disposition", ["Scrap", "Use As Is"])
-def test_disposition_scrap_and_use_as_is_left_open_stay_open(
-    db_session, stations, categories, today, disposition
-):
-    """Deliberate behavior change (PROJECT_SPEC.md section 3.2): these used to
-    auto-close at creation with no "was it actually done?" gate. Now they queue as
-    Open, same as an undecided case, until either resolved_on_the_spot=True at entry
-    or an explicit later Close Directly action closes them."""
-    case = _make_case(db_session, stations, categories, today, disposition=disposition)
+def test_disposition_set_aside_is_always_open(db_session, stations, categories, today):
+    case = _make_case(db_session, stations, categories, today, disposition="Set Aside")
     assert case.status == "Open"
     assert case.closed_at is None
 
@@ -210,45 +238,21 @@ def test_no_disposition_is_open(db_session, stations, categories, today):
 
 # ---------------------------------------------------------------------------
 # Close Directly from the Rework Queue - the standard closing action, available
-# from every non-closed status now, not a narrow "skip recheck" exception.
+# from every non-closed status.
 # ---------------------------------------------------------------------------
 
 
 def test_direct_close_statuses_available_from_every_non_closed_status(
     db_session, stations, categories, today
 ):
-    all_three = {"Closed - Repaired", "Closed - Scrapped", "Closed - Use As Is"}
+    new_closed = {"Closed - Repaired", "Closed - Use As Is"}
     for status in ["Open", "In Rework", "Waiting", "Ready for QC Recheck"]:
-        assert direct_close_statuses(status) == all_three
-    for status in all_three:
+        assert direct_close_statuses(status) == new_closed
+    for status in new_closed | {"Closed - Scrapped"}:
         assert direct_close_statuses(status) == set()
 
 
-@pytest.mark.parametrize(
-    "target_status", ["Closed - Repaired", "Closed - Scrapped", "Closed - Use As Is"]
-)
-def test_direct_close_from_in_rework_succeeds_with_note(
-    db_session, stations, categories, today, target_status
-):
-    case = _make_case(db_session, stations, categories, today, disposition="Rework")
-    assert case.status == "In Rework"
-
-    updated = update_case_status(
-        db_session,
-        case,
-        new_status=target_status,
-        note="Confirmed repaired at the bench, no recheck needed.",
-    )
-    assert updated.status == target_status
-    assert updated.skipped_recheck is True
-    assert updated.closed_at is not None
-    assert updated.status_history[-1].note == "Confirmed repaired at the bench, no recheck needed."
-
-
 def test_direct_close_from_open_succeeds_with_note(db_session, stations, categories, today):
-    """Open never reached In Rework, so this counts as a direct close but is
-    correctly excluded from the "% Queued Rework Closed Without Recheck"
-    denominator (see reports.py _reached_in_rework_case_ids)."""
     case = _make_case(db_session, stations, categories, today)
     assert case.status == "Open"
 
@@ -256,18 +260,6 @@ def test_direct_close_from_open_succeeds_with_note(db_session, stations, categor
         db_session, case, new_status="Closed - Repaired", note="Fixed immediately, no queue needed."
     )
     assert updated.status == "Closed - Repaired"
-    assert updated.skipped_recheck is True
-
-
-def test_direct_close_from_waiting_succeeds_with_note(db_session, stations, categories, today):
-    case = _make_case(db_session, stations, categories, today, disposition="Hold")
-    assert case.status == "Waiting"
-
-    updated = update_case_status(
-        db_session, case, new_status="Closed - Use As Is", note="Decided to use as is."
-    )
-    assert updated.status == "Closed - Use As Is"
-    assert updated.skipped_recheck is True
 
 
 def test_direct_close_succeeds_with_no_note(db_session, stations, categories, today):
@@ -277,7 +269,6 @@ def test_direct_close_succeeds_with_no_note(db_session, stations, categories, to
     case = _make_case(db_session, stations, categories, today, disposition="Rework")
     updated = update_case_status(db_session, case, new_status="Closed - Repaired")
     assert updated.status == "Closed - Repaired"
-    assert updated.skipped_recheck is True
     assert updated.status_history[-1].note is None
 
 
@@ -285,19 +276,6 @@ def test_direct_close_succeeds_with_blank_note(db_session, stations, categories,
     case = _make_case(db_session, stations, categories, today, disposition="Rework")
     updated = update_case_status(db_session, case, new_status="Closed - Repaired", note="   ")
     assert updated.status == "Closed - Repaired"
-
-
-def test_legacy_recheck_path_still_works_end_to_end(db_session, stations, categories, today):
-    """The full In Rework -> Ready for QC Recheck -> Closed path must stay valid
-    for backward compatibility, even though nothing in the UI presents "Ready for
-    QC Recheck" as an expected step anymore. The note is optional here too, same as
-    every other direct close, but this one must NOT count as "skipped recheck"
-    since it genuinely was rechecked."""
-    case = _make_case(db_session, stations, categories, today, disposition="Rework")
-    update_case_status(db_session, case, new_status="Ready for QC Recheck")
-    updated = update_case_status(db_session, case, new_status="Closed - Repaired")
-    assert updated.status == "Closed - Repaired"
-    assert updated.skipped_recheck is False
 
 
 def test_reopen_a_closed_case_still_requires_a_note(db_session, stations, categories, today):
@@ -317,17 +295,24 @@ def test_reopen_a_closed_case_still_requires_a_note(db_session, stations, catego
 
 
 def test_still_genuinely_invalid_transition_raises(db_session, stations, categories, today):
-    """Open -> Ready for QC Recheck is not a direct-close target and not in
-    STATUS_TRANSITIONS, so it's still rejected as an invalid transition, not
-    treated as a close needing a note."""
+    """Open -> Ready for QC Recheck is not a direct-close target (that status is
+    retired) and not in STATUS_TRANSITIONS, so it's rejected outright before even
+    reaching the InvalidTransitionError path - VALID_STATUSES itself rejects it."""
     case = _make_case(db_session, stations, categories, today)
     assert case.status == "Open"
-    with pytest.raises(InvalidTransitionError):
+    with pytest.raises(ValidationError):
         update_case_status(db_session, case, new_status="Ready for QC Recheck")
 
 
+def test_open_to_open_is_rejected_as_a_no_op_transition(db_session, stations, categories, today):
+    case = _make_case(db_session, stations, categories, today)
+    with pytest.raises(InvalidTransitionError):
+        update_case_status(db_session, case, new_status="Open")
+
+
 # ---------------------------------------------------------------------------
-# metrics_service pure functions behind the two new KPIs
+# % Resolved On The Spot (PROJECT_SPEC.md section 3.3) - kept, definition
+# unchanged by Phase 7.
 # ---------------------------------------------------------------------------
 
 
@@ -342,16 +327,5 @@ def test_compute_resolved_on_the_spot_rate():
         metrics_service.compute_resolved_on_the_spot_rate(
             total_cases=0, resolved_on_the_spot_count=0
         )
-        is None
-    )
-
-
-def test_compute_skip_recheck_rate():
-    assert (
-        metrics_service.compute_skip_recheck_rate(queued_rework_count=8, skipped_recheck_count=2)
-        == 25.0
-    )
-    assert (
-        metrics_service.compute_skip_recheck_rate(queued_rework_count=0, skipped_recheck_count=0)
         is None
     )

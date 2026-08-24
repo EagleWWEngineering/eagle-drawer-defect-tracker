@@ -13,7 +13,6 @@ from app.services.defect_service import (
     create_defect_case,
     get_daily_summary,
     suggested_daily_counts,
-    update_case_status,
     upsert_daily_summary,
 )
 
@@ -202,6 +201,53 @@ def test_omitting_scrapped_on_resave_preserves_existing_value(db_session, today)
 
 
 # ---------------------------------------------------------------------------
+# PROJECT_SPEC_PHASE7.md: drawers_reworked also left the Daily Summary form
+# (Rework Rate is now computed from defect cases, not this hand-entered count).
+# Same None-preserving rule as drawers_scrapped above.
+# ---------------------------------------------------------------------------
+
+
+def test_omitting_reworked_defaults_a_new_row_to_zero(db_session, today):
+    row, _ = upsert_daily_summary(
+        db_session,
+        production_date=today,
+        shift="Day",
+        drawers_inspected=100,
+        drawers_rejected_unique=10,
+        drawers_reworked=None,
+        drawers_scrapped=None,
+        notes=None,
+    )
+    assert row.drawers_reworked == 0
+
+
+def test_omitting_reworked_on_resave_preserves_existing_value(db_session, today):
+    upsert_daily_summary(
+        db_session,
+        production_date=today,
+        shift="Day",
+        drawers_inspected=100,
+        drawers_rejected_unique=10,
+        drawers_reworked=5,
+        drawers_scrapped=None,
+        notes=None,
+    )
+    # The (new) Daily Summary form re-saves this date/shift without ever sending a
+    # reworked value at all - the historical 5 must survive, not become 0.
+    row, _ = upsert_daily_summary(
+        db_session,
+        production_date=today,
+        shift="Day",
+        drawers_inspected=120,
+        drawers_rejected_unique=12,
+        drawers_reworked=None,
+        drawers_scrapped=None,
+        notes=None,
+    )
+    assert row.drawers_reworked == 5
+
+
+# ---------------------------------------------------------------------------
 # Auto-calculation of Rejected/Reworked from real DefectCase data
 # (docs/PROJECT_SPEC_PHASE4.md "Scrap removal" / auto-calculation).
 # ---------------------------------------------------------------------------
@@ -234,7 +280,6 @@ def test_get_daily_summary_returns_the_saved_row(db_session, today):
 def test_suggested_counts_are_zero_with_no_defect_cases(db_session, today):
     suggestion = suggested_daily_counts(db_session, today)
     assert suggestion["suggested_drawers_rejected_unique"] == 0
-    assert suggestion["suggested_drawers_reworked"] == 0
     assert suggestion["defect_case_count"] == 0
 
 
@@ -253,7 +298,7 @@ def test_suggested_rejected_counts_distinct_cases_regardless_of_disposition(
         priority="Normal",
         items=[{"defect_category_id": categories["Sanding / Surface"].id}],
     )
-    # ...another resolved on the spot as Use As Is (never reworked).
+    # ...another resolved on the spot as Rework/Use As Is outcome.
     create_defect_case(
         db_session,
         production_date=today,
@@ -264,76 +309,15 @@ def test_suggested_rejected_counts_distinct_cases_regardless_of_disposition(
         possible_source_station_id=None,
         priority="Normal",
         items=[{"defect_category_id": categories["Sanding / Surface"].id}],
-        disposition="Use As Is",
+        disposition="Rework",
         resolved_on_the_spot=True,
+        instant_close_outcome="Use As Is",
         repair_action="Buyer accepted as-is",
     )
 
     suggestion = suggested_daily_counts(db_session, today)
     assert suggestion["suggested_drawers_rejected_unique"] == 2
     assert suggestion["defect_case_count"] == 2
-    assert suggestion["suggested_drawers_reworked"] == 0
-
-
-def test_suggested_reworked_counts_only_closed_repaired_rework_cases(
-    db_session, stations, categories, today
-):
-    # Resolved-on-the-spot Rework -> Closed - Repaired: counts as reworked.
-    create_defect_case(
-        db_session,
-        production_date=today,
-        detected_at=_detected_at(today),
-        work_order_number="WO-REWORK-1",
-        drawer_part_reference=None,
-        found_station_id=stations["QC / Sorting / Shipping"].id,
-        possible_source_station_id=None,
-        priority="Normal",
-        items=[{"defect_category_id": categories["Sanding / Surface"].id}],
-        disposition="Rework",
-        resolved_on_the_spot=True,
-        repair_action="Resanded",
-    )
-    # Rework disposition that's still queued (In Rework, not yet closed) - must NOT
-    # count as reworked yet.
-    create_defect_case(
-        db_session,
-        production_date=today,
-        detected_at=_detected_at(today),
-        work_order_number="WO-REWORK-2",
-        drawer_part_reference=None,
-        found_station_id=stations["QC / Sorting / Shipping"].id,
-        possible_source_station_id=None,
-        priority="Normal",
-        items=[{"defect_category_id": categories["Sanding / Surface"].id}],
-        disposition="Rework",
-    )
-
-    suggestion = suggested_daily_counts(db_session, today)
-    assert suggestion["suggested_drawers_rejected_unique"] == 2
-    assert suggestion["suggested_drawers_reworked"] == 1
-
-
-def test_suggested_reworked_via_close_directly_from_queue_also_counts(
-    db_session, stations, categories, today
-):
-    """A case that started queued (In Rework) and was later closed via "Close
-    Directly" must count the same as one resolved on the spot at entry."""
-    case = create_defect_case(
-        db_session,
-        production_date=today,
-        detected_at=_detected_at(today),
-        work_order_number="WO-REWORK-3",
-        drawer_part_reference=None,
-        found_station_id=stations["QC / Sorting / Shipping"].id,
-        possible_source_station_id=None,
-        priority="Normal",
-        items=[{"defect_category_id": categories["Sanding / Surface"].id}],
-        disposition="Rework",
-    )
-    update_case_status(db_session, case, new_status="Closed - Repaired", disposition="Rework")
-
-    suggestion = suggested_daily_counts(db_session, today)
-    assert suggestion["suggested_drawers_reworked"] == 1
 
 
 def test_suggested_rejected_dedups_two_categories_on_one_case_as_one_drawer(

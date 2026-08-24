@@ -98,8 +98,10 @@ def test_suggested_counts_endpoint_reflects_real_defect_cases(client, master_dat
     assert resp.status_code == 200
     body = resp.json()
     assert body["suggested_drawers_rejected_unique"] == 2
-    assert body["suggested_drawers_reworked"] == 1
     assert body["defect_case_count"] == 2
+    # PROJECT_SPEC_PHASE7.md: no more suggested_drawers_reworked field - Rework
+    # Rate is computed straight from cases, not a suggested/typed number.
+    assert "suggested_drawers_reworked" not in body
 
 
 def test_suggested_counts_endpoint_never_writes_a_summary_row(client, master_data):

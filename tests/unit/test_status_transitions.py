@@ -1,4 +1,11 @@
-"""PROJECT_SPEC.md section 3.1/3.2: allowed status transitions and reopen rules."""
+"""PROJECT_SPEC_PHASE7.md: the simplified three-status transition map
+(Open / Closed - Repaired / Closed - Use As Is) and reopen rules.
+
+Retired statuses (In Rework, Waiting, Ready for QC Recheck, Closed - Scrapped)
+still exist as historical data - see tests/unit/test_phase7_migration.py for the
+migration that moves currently-open legacy cases, and the "legacy status still
+behaves sanely if seen again" coverage below.
+"""
 
 from __future__ import annotations
 
@@ -29,86 +36,137 @@ def _make_case(db_session, stations, categories, today, priority="Normal"):
     )
 
 
-@pytest.mark.parametrize(
-    "current,new_status",
-    [
-        ("Open", "In Rework"),
-        ("Open", "Waiting"),
-        ("In Rework", "Ready for QC Recheck"),
-        ("In Rework", "Waiting"),
-        ("Waiting", "In Rework"),
-        ("Ready for QC Recheck", "In Rework"),
-        # NOTE: every "-> Closed - *" transition used to be listed here too (some
-        # requiring no note, e.g. Open -> Closed - Scrapped). PROJECT_SPEC.md
-        # section 3.3 made closing directly - from ANY non-closed status, to ANY
-        # of the 3 closed statuses - the standard action instead, always gated on
-        # a required note. See tests/unit/test_resolved_on_the_spot.py for that
-        # coverage (with-note-succeeds / without-note-fails, from every source
-        # status).
-    ],
-)
-def test_allowed_transitions_succeed(db_session, stations, categories, today, current, new_status):
-    case = _make_case(db_session, stations, categories, today)
-    case.status = current
-    db_session.commit()
+# ---------------------------------------------------------------------------
+# Direct close is the ONLY way out of Open now - no intermediate open states.
+# ---------------------------------------------------------------------------
 
+
+@pytest.mark.parametrize("new_status", ["Closed - Repaired", "Closed - Use As Is"])
+def test_open_closes_directly_with_no_note_required(
+    db_session, stations, categories, today, new_status
+):
+    case = _make_case(db_session, stations, categories, today)
     updated = update_case_status(db_session, case, new_status=new_status)
     assert updated.status == new_status
+    assert updated.closed_at is not None
 
 
 @pytest.mark.parametrize(
-    "current,new_status",
-    [
-        ("Open", "Ready for QC Recheck"),
-        ("Closed - Repaired", "In Rework"),
-        ("Closed - Scrapped", "Waiting"),
-        # NOTE: Open/Waiting/Ready for QC Recheck -> a Closed status used to be
-        # disallowed here for some source/target combinations. They're all direct
-        # closes now (require a note instead of being flatly rejected) - see
-        # tests/unit/test_resolved_on_the_spot.py.
-    ],
+    "new_status",
+    ["In Rework", "Waiting", "Ready for QC Recheck", "Closed - Scrapped"],
 )
-def test_disallowed_transitions_raise(db_session, stations, categories, today, current, new_status):
+def test_retired_statuses_are_rejected_as_a_new_write(
+    db_session, stations, categories, today, new_status
+):
+    """Retired for new entry (PROJECT_SPEC_PHASE7.md) - the API must reject any
+    attempt to SET a case to one of these, even though they remain valid stored
+    values on historical rows."""
     case = _make_case(db_session, stations, categories, today)
-    case.status = current
-    db_session.commit()
-
-    with pytest.raises(InvalidTransitionError):
+    with pytest.raises(ValidationError) as exc:
         update_case_status(db_session, case, new_status=new_status)
+    assert exc.value.field == "new_status"
+
+
+def test_disposition_set_aside_is_accepted(db_session, stations, categories, today):
+    case = _make_case(db_session, stations, categories, today)
+    updated = update_case_status(
+        db_session, case, new_status="Closed - Repaired", disposition="Set Aside"
+    )
+    assert updated.disposition == "Set Aside"
+
+
+@pytest.mark.parametrize("retired", ["Use As Is", "Hold", "Scrap"])
+def test_retired_dispositions_are_rejected_as_a_new_write(
+    db_session, stations, categories, today, retired
+):
+    case = _make_case(db_session, stations, categories, today)
+    with pytest.raises(ValidationError) as exc:
+        update_case_status(db_session, case, new_status="Closed - Repaired", disposition=retired)
+    assert exc.value.field == "disposition"
+
+
+# ---------------------------------------------------------------------------
+# Terminal statuses have no next status except reopen.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("closed_status", ["Closed - Repaired", "Closed - Use As Is"])
+def test_closed_statuses_reject_every_transition_except_reopen(
+    db_session, stations, categories, today, closed_status
+):
+    case = _make_case(db_session, stations, categories, today)
+    update_case_status(db_session, case, new_status=closed_status)
+    with pytest.raises(InvalidTransitionError):
+        update_case_status(db_session, case, new_status="Closed - Use As Is")
 
 
 def test_reopen_closed_case_requires_note(db_session, stations, categories, today):
     case = _make_case(db_session, stations, categories, today)
-    case.status = "Closed - Repaired"
-    db_session.commit()
+    update_case_status(db_session, case, new_status="Closed - Repaired")
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError) as exc:
         update_case_status(db_session, case, new_status="Open")
+    assert exc.value.field == "note"
 
     reopened = update_case_status(
         db_session, case, new_status="Open", note="QC recheck found the repair failed."
     )
     assert reopened.status == "Open"
     assert reopened.status_history[-1].note == "QC recheck found the repair failed."
-
-
-def test_disposition_scrap_closes_case(db_session, stations, categories, today):
-    case = _make_case(db_session, stations, categories, today)
-    updated = update_case_status(
-        db_session,
-        case,
-        new_status="Closed - Scrapped",
-        disposition="Scrap",
-        note="Confirmed scrapped - not repairable.",
-    )
-    assert updated.status == "Closed - Scrapped"
-    assert updated.disposition == "Scrap"
-    assert updated.closed_at is not None
+    assert reopened.closed_at is None
 
 
 def test_status_change_writes_status_history(db_session, stations, categories, today):
     case = _make_case(db_session, stations, categories, today)
-    update_case_status(db_session, case, new_status="In Rework", note="Starting rework")
+    update_case_status(db_session, case, new_status="Closed - Repaired", note="Fixed at the bench")
     db_session.refresh(case)
-    assert [h.to_status for h in case.status_history] == ["Open", "In Rework"]
+    assert [h.to_status for h in case.status_history] == ["Open", "Closed - Repaired"]
     assert case.status_history[-1].from_status == "Open"
+
+
+def test_update_case_status_no_longer_writes_skipped_recheck(
+    db_session, stations, categories, today
+):
+    """skipped_recheck is retired (no recheck status exists anymore) - the column
+    stays on the model for historical rows, but new status changes must not
+    write to it."""
+    case = _make_case(db_session, stations, categories, today)
+    assert case.skipped_recheck is False
+    updated = update_case_status(db_session, case, new_status="Closed - Repaired")
+    assert updated.skipped_recheck is False
+
+
+# ---------------------------------------------------------------------------
+# A legacy status still on a case (e.g. seeded directly, or surviving from
+# before the Phase 7 migration ran) must still behave sanely: it's a valid
+# direct-close SOURCE (defensive - the migration should mean none exist for a
+# non-closed case in practice), but never a valid target.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("legacy_status", ["In Rework", "Waiting", "Ready for QC Recheck"])
+def test_a_case_still_in_a_legacy_open_status_can_still_be_closed_directly(
+    db_session, stations, categories, today, legacy_status
+):
+    case = _make_case(db_session, stations, categories, today)
+    case.status = legacy_status
+    db_session.commit()
+
+    updated = update_case_status(db_session, case, new_status="Closed - Repaired")
+    assert updated.status == "Closed - Repaired"
+
+
+def test_a_historically_scrapped_case_can_still_be_reopened(
+    db_session, stations, categories, today
+):
+    case = _make_case(db_session, stations, categories, today)
+    case.status = "Closed - Scrapped"
+    db_session.commit()
+
+    with pytest.raises(ValidationError):
+        update_case_status(db_session, case, new_status="Open")
+
+    reopened = update_case_status(
+        db_session, case, new_status="Open", note="Reconsidered - reworking instead."
+    )
+    assert reopened.status == "Open"

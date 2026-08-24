@@ -85,8 +85,8 @@ def test_filter_by_every_supported_dimension(client, master_data):
     assert count(start_date="2026-07-24", end_date="2026-07-24") == 2
     assert count(disposition="Rework") == 0
 
-    client.post(f"/api/v1/defect-cases/{c1['id']}/status", json={"new_status": "In Rework"})
-    assert count(status="In Rework") == 1
+    client.post(f"/api/v1/defect-cases/{c1['id']}/status", json={"new_status": "Closed - Repaired"})
+    assert count(status="Closed - Repaired") == 1
 
 
 def test_update_status_writes_status_history_and_audit(client, master_data):
@@ -94,12 +94,12 @@ def test_update_status_writes_status_history_and_audit(client, master_data):
 
     resp = client.post(
         f"/api/v1/defect-cases/{case['id']}/status",
-        json={"new_status": "In Rework", "note": "Starting rework"},
+        json={"new_status": "Closed - Repaired", "note": "Starting rework"},
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["status"] == "In Rework"
-    assert body["status_history"][-1]["to_status"] == "In Rework"
+    assert body["status"] == "Closed - Repaired"
+    assert body["status_history"][-1]["to_status"] == "Closed - Repaired"
     assert body["status_history"][-1]["note"] == "Starting rework"
 
     from app.models import AuditLog
@@ -112,10 +112,10 @@ def test_update_status_writes_status_history_and_audit(client, master_data):
 
 
 def test_invalid_transition_returns_400_with_field_error(client, master_data):
-    # "Closed - Repaired" is now reachable directly from Open (PROJECT_SPEC.md
-    # section 3.3 - Close Directly, requires a note instead of being rejected).
-    # "Ready for QC Recheck" is not a direct-close target and not in
-    # STATUS_TRANSITIONS for Open, so it's still a genuinely invalid transition.
+    # "Closed - Repaired" is reachable directly from Open (PROJECT_SPEC_PHASE7.md
+    # - Close Directly, optional note). "Ready for QC Recheck" is retired for new
+    # entry (not in VALID_STATUSES anymore) - still a clean 400 on field
+    # "new_status", just for a different reason now.
     case = _create_case(client, master_data).json()
     resp = client.post(
         f"/api/v1/defect-cases/{case['id']}/status",
