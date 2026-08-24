@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session, selectinload
 
 from app.dependencies import get_db
-from app.models import DailyProductionSummary, DefectCase, DefectItem, StatusHistory
+from app.models import DailyProductionSummary, DefectCase, DefectItem
 from app.schemas import (
     DatePresetOut,
     KpiOut,
@@ -23,6 +23,7 @@ from app.schemas import (
     defect_case_to_out,
 )
 from app.services import metrics_service, schedule_service, settings_service
+from app.services.defect_service import DIRECT_CLOSE_SOURCE_STATUSES
 from app.timezone_utils import resolve_date_preset
 
 router = APIRouter(prefix="/api/v1/reports", tags=["reports"])
@@ -56,7 +57,6 @@ def _daily_totals(rows: list[DailyProductionSummary]) -> dict:
     return {
         "drawers_inspected": sum(r.drawers_inspected for r in rows),
         "drawers_rejected_unique": sum(r.drawers_rejected_unique for r in rows),
-        "drawers_reworked": sum(r.drawers_reworked for r in rows),
     }
 
 
@@ -67,35 +67,6 @@ def _distinct_cases(items: list[tuple[DefectItem, DefectCase]]) -> list[DefectCa
     for _item, case in items:
         cases_by_id[case.id] = case
     return list(cases_by_id.values())
-
-
-def _reached_in_rework_case_ids(db: Session, case_ids: list[int]) -> set[int]:
-    """Case ids (within `case_ids`) whose status_history shows they reached "In
-    Rework" at some point - the denominator for the "% Queued Rework Closed Without
-    Recheck" KPI (PROJECT_SPEC.md section 3.3). Cases resolved on the spot at entry
-    never pass through "In Rework", so they're correctly excluded here."""
-    if not case_ids:
-        return set()
-    rows = (
-        db.query(StatusHistory.defect_case_id)
-        .filter(StatusHistory.defect_case_id.in_(case_ids), StatusHistory.to_status == "In Rework")
-        .distinct()
-        .all()
-    )
-    return {row[0] for row in rows}
-
-
-def _fallback_case_rework_count(
-    items: list[tuple[DefectItem, DefectCase]], summary_rows: list[DailyProductionSummary]
-) -> int:
-    """Defect-case-derived reworked count (Phase 4 cost fix), limited to cases whose
-    production_date has no DailyProductionSummary row at all - see
-    metrics_service.compute_internal_quality_cost for why that's the fallback rule."""
-    summary_dates = {r.production_date for r in summary_rows}
-    fallback_cases = [c for c in _distinct_cases(items) if c.production_date not in summary_dates]
-    return metrics_service.defect_case_derived_rework_count(
-        [(c.production_date, c.status, c.disposition) for c in fallback_cases]
-    )
 
 
 @router.get("/summary", response_model=KpiOut)
@@ -125,47 +96,40 @@ def get_summary(
     )
     items = items_query.all()
     defect_events = sum(item.affected_drawer_quantity for item, _case in items)
-    summary_rows = _daily_summary_rows(db, start_date, end_date)
-    totals = _daily_totals(summary_rows)
+    totals = _daily_totals(_daily_summary_rows(db, start_date, end_date))
+    cases = _distinct_cases(items)
 
+    # PROJECT_SPEC_PHASE7.md "Cost model": one cost unit per case in the filtered
+    # range (zero for "Closed - Use As Is", which instead feeds Cost Avoided) -
+    # the only cost source now, replacing Phase 4's dual daily-summary/defect-case
+    # model entirely.
     fallback_rate = settings_service.get_cost_per_drawer(db)
     cost_result = metrics_service.compute_internal_quality_cost(
-        daily_summary_entries=[
-            (r.drawers_reworked, r.cost_per_drawer_at_time) for r in summary_rows
-        ],
-        fallback_case_rework_count=_fallback_case_rework_count(items, summary_rows),
-        fallback_rate=fallback_rate,
-        has_daily_summary_rows=bool(summary_rows),
+        [(c.status, c.cost_per_drawer_at_time) for c in cases], fallback_rate=fallback_rate
     )
+
+    # PROJECT_SPEC_PHASE7.md: Rework Rate's numerator is now the count of cases
+    # with disposition "Rework" in the filtered range, full stop - no status
+    # qualifier, and no more reading DailyProductionSummary.drawers_reworked.
+    rework_case_count = sum(1 for c in cases if c.disposition == "Rework")
 
     kpis = metrics_service.compute_kpis(
         drawers_inspected=totals["drawers_inspected"],
         defect_events=defect_events,
         unique_drawers_rejected=totals["drawers_rejected_unique"],
-        drawers_reworked=totals["drawers_reworked"],
+        drawers_reworked=rework_case_count,
         internal_rework_cost=cost_result["internal_rework_cost"],
+        cost_avoided=cost_result["cost_avoided"],
     ).to_dict()
-    kpis["defect_case_rework_count"] = cost_result["defect_case_rework_count"]
-    kpis["cost_basis"] = cost_result["cost_basis"]
 
-    # PROJECT_SPEC.md section 3.3 KPIs (60-second-fix fast paths).
-    cases = _distinct_cases(items)
+    # PROJECT_SPEC.md section 3.3 KPI (60-second-fix fast path) - definition
+    # unchanged by Phase 7.
     total_cases = len(cases)
     resolved_on_the_spot_count = sum(1 for c in cases if c.resolved_on_the_spot)
-    reached_in_rework_ids = _reached_in_rework_case_ids(db, [c.id for c in cases])
-    queued_rework_count = len(reached_in_rework_ids)
-    skipped_recheck_count = sum(
-        1 for c in cases if c.id in reached_in_rework_ids and c.skipped_recheck
-    )
     kpis["total_cases"] = total_cases
     kpis["resolved_on_the_spot_count"] = resolved_on_the_spot_count
     kpis["pct_resolved_on_the_spot"] = metrics_service.compute_resolved_on_the_spot_rate(
         total_cases=total_cases, resolved_on_the_spot_count=resolved_on_the_spot_count
-    )
-    kpis["queued_rework_count"] = queued_rework_count
-    kpis["skipped_recheck_count"] = skipped_recheck_count
-    kpis["pct_queued_rework_closed_without_recheck"] = metrics_service.compute_skip_recheck_rate(
-        queued_rework_count=queued_rework_count, skipped_recheck_count=skipped_recheck_count
     )
     return KpiOut(**kpis)
 
@@ -230,38 +194,30 @@ def get_trend(
         events_by_bucket[label] = events_by_bucket.get(label, 0) + item.affected_drawer_quantity
 
     summary_rows = _daily_summary_rows(db, start_date, end_date)
-    summary_dates = {r.production_date for r in summary_rows}
     fallback_rate = settings_service.get_cost_per_drawer(db)
 
     inspected_by_bucket: dict[str, int] = {}
     rejected_by_bucket: dict[str, int] = {}
-    rework_cost_by_bucket: dict[str, float] = {}
     for row in summary_rows:
         label = metrics_service.trend_bucket_label(row.production_date, group_by)
         inspected_by_bucket[label] = inspected_by_bucket.get(label, 0) + row.drawers_inspected
         rejected_by_bucket[label] = rejected_by_bucket.get(label, 0) + row.drawers_rejected_unique
-        rework_cost = metrics_service.sum_internal_rework_cost(
-            [(row.drawers_reworked, row.cost_per_drawer_at_time)],
-            fallback_rate=fallback_rate,
-        )
-        rework_cost_by_bucket[label] = rework_cost_by_bucket.get(label, 0.0) + rework_cost
 
-    # Phase 4 cost fix: add defect-case-derived rework cost for buckets whose cases
-    # fall on a production_date with no DailyProductionSummary row at all, so this
-    # chart can never disagree with /reports/summary over the same date range
-    # (PROJECT_SPEC.md section 9: "chart totals must match the filtered record total").
-    fallback_cases_by_bucket: dict[str, list[tuple[dt.date, str, str | None]]] = {}
+    # PROJECT_SPEC_PHASE7.md "Cost model": one cost unit per case, bucketed the
+    # same way as every other per-date rollup here - replaces the old Phase 4
+    # dual-source (daily-summary + defect-case-fallback) model entirely.
+    rework_cost_by_bucket: dict[str, float] = {}
+    cost_avoided_by_bucket: dict[str, float] = {}
     for case in _distinct_cases(items):
-        if case.production_date in summary_dates:
-            continue
         label = metrics_service.trend_bucket_label(case.production_date, group_by)
-        fallback_cases_by_bucket.setdefault(label, []).append(
-            (case.production_date, case.status, case.disposition)
+        cost_result = metrics_service.compute_internal_quality_cost(
+            [(case.status, case.cost_per_drawer_at_time)], fallback_rate=fallback_rate
         )
-    for label, case_tuples in fallback_cases_by_bucket.items():
-        reworked = metrics_service.defect_case_derived_rework_count(case_tuples)
-        rework_cost_by_bucket[label] = rework_cost_by_bucket.get(label, 0.0) + reworked * float(
-            fallback_rate
+        rework_cost_by_bucket[label] = (
+            rework_cost_by_bucket.get(label, 0.0) + cost_result["internal_rework_cost"]
+        )
+        cost_avoided_by_bucket[label] = (
+            cost_avoided_by_bucket.get(label, 0.0) + cost_result["cost_avoided"]
         )
 
     # Phase 6: Scheduled + Schedule Attainment % per bucket, alongside the other
@@ -282,6 +238,7 @@ def get_trend(
             drawers_inspected=inspected_by_bucket.get(label, 0),
             unique_drawers_rejected=rejected_by_bucket.get(label, 0),
             internal_rework_cost=round(rework_cost_by_bucket.get(label, 0.0), 2),
+            cost_avoided=round(cost_avoided_by_bucket.get(label, 0.0), 2),
             drawers_scheduled=scheduled_by_bucket.get(label),
             schedule_attainment_pct=metrics_service.compute_schedule_attainment_pct(
                 total_inspected=inspected_by_bucket.get(label, 0),
@@ -326,8 +283,13 @@ def get_rework_queue(
     priority: str | None = None,
     status: str | None = None,
 ) -> list[ReworkQueueItemOut]:
-    """Open work only, sorted Urgent > High > Normal, oldest first within priority."""
-    open_statuses = {"Open", "In Rework", "Waiting", "Ready for QC Recheck"}
+    """Open work only, sorted Urgent > High > Normal, oldest first within priority.
+
+    open_statuses reuses defect_service.DIRECT_CLOSE_SOURCE_STATUSES rather than a
+    separately hardcoded set - "actionable/open" and "closeable" are the same set
+    of statuses now (PROJECT_SPEC_PHASE7.md), so one shared constant keeps them
+    from drifting apart."""
+    open_statuses = DIRECT_CLOSE_SOURCE_STATUSES
     query = (
         db.query(DefectCase)
         .options(

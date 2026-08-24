@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import csv
-import datetime as dt
+import decimal
 import io
 
 from app.models import CustomerIssue, DefectCase, DefectItem
+from app.services import metrics_service
 
 CSV_COLUMNS = [
     "case_number",
@@ -25,13 +26,19 @@ CSV_COLUMNS = [
     "root_cause",
     "corrective_action",
     "notes",
-    # Phase 4: same-day cost context, joined by production_date. Blank if that
-    # date has no Daily Production Summary saved. Scrap cost was dropped from this
-    # app entirely (docs/PROJECT_SPEC_PHASE4.md "Scrap removal") - no scrap column.
-    "day_cost_per_drawer",
-    "day_internal_rework_cost",
-    # Phase 6: same-day schedule context, joined by production_date the same way.
-    # Blank (not 0) if that date has no daily_schedules row - see
+    # Phase 7 "Cost model": one cost unit per CASE (repeated on every item-line for
+    # that case, same as production_date/work_order_number already are) - never
+    # multiplied by affected_drawer_quantity. case_cost_per_drawer is the resolved
+    # rate (this case's snapshot, or the fallback rate if it predates the
+    # snapshot column) regardless of outcome; case_internal_cost is 0 for
+    # "Closed - Use As Is" (that case's rate shows up in case_cost_avoided
+    # instead). Replaces the old Phase 4 day_cost_per_drawer/day_internal_rework_
+    # cost columns entirely - cost is per-case now, not per-date.
+    "case_cost_per_drawer",
+    "case_internal_cost",
+    "case_cost_avoided",
+    # Phase 6: same-day schedule context, joined by production_date. Blank (not
+    # 0) if that date has no daily_schedules row - see
     # docs/PRODUCTION_BRIEF_SCHEDULE_SOURCE.md.
     "day_drawers_scheduled",
     "day_schedule_attainment_pct",
@@ -41,13 +48,12 @@ CSV_COLUMNS = [
 def build_defect_items_csv(
     rows: list[tuple[DefectItem, DefectCase]],
     *,
-    daily_cost_by_date: dict[dt.date, dict] | None = None,
-    daily_schedule_by_date: dict[dt.date, dict] | None = None,
+    fallback_rate: decimal.Decimal | float,
+    daily_schedule_by_date: dict | None = None,
 ) -> str:
-    """daily_cost_by_date: production_date -> {"rate": Decimal|float, "rework_cost":
-    float}, one entry per date (already summed across shifts if a date has more
-    than one). Missing/empty for a date with no Daily Production Summary saved yet
-    - those context columns are left blank, not zero.
+    """fallback_rate: the currently-configured cost_per_drawer rate, used for any
+    case whose cost_per_drawer_at_time snapshot is null (it predates that column) -
+    see app/services/metrics_service.py compute_case_cost.
 
     daily_schedule_by_date: production_date -> {"drawers_scheduled": int,
     "attainment_pct": float|None}, one entry per date that has a daily_schedules
@@ -55,18 +61,26 @@ def build_defect_items_csv(
     attainment_pct is itself None (blank) when that date's schedule is 0 (see
     metrics_service.compute_schedule_attainment_pct).
     """
-    daily_cost_by_date = daily_cost_by_date or {}
     daily_schedule_by_date = daily_schedule_by_date or {}
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow(CSV_COLUMNS)
     for item, case in rows:
-        day_cost = daily_cost_by_date.get(case.production_date)
-        if day_cost is not None:
-            day_cost_per_drawer = str(day_cost["rate"])
-            day_internal_rework_cost = str(day_cost["rework_cost"])
-        else:
-            day_cost_per_drawer = day_internal_rework_cost = ""
+        case_cost_per_drawer = (
+            float(case.cost_per_drawer_at_time)
+            if case.cost_per_drawer_at_time is not None
+            else float(fallback_rate)
+        )
+        case_internal_cost = metrics_service.compute_case_cost(
+            status=case.status,
+            cost_per_drawer_at_time=case.cost_per_drawer_at_time,
+            fallback_rate=fallback_rate,
+        )
+        case_cost_avoided = metrics_service.compute_case_cost_avoided(
+            status=case.status,
+            cost_per_drawer_at_time=case.cost_per_drawer_at_time,
+            fallback_rate=fallback_rate,
+        )
 
         day_schedule = daily_schedule_by_date.get(case.production_date)
         if day_schedule is not None:
@@ -94,8 +108,9 @@ def build_defect_items_csv(
                 case.root_cause or "",
                 case.corrective_action or "",
                 (case.notes or "").replace("\n", " "),
-                day_cost_per_drawer,
-                day_internal_rework_cost,
+                case_cost_per_drawer,
+                case_internal_cost,
+                case_cost_avoided,
                 day_drawers_scheduled,
                 day_schedule_attainment_pct,
             ]

@@ -32,12 +32,24 @@ class Kpis:
     drawers_inspected: int
     defect_events: int
     unique_drawers_rejected: int
+    # Phase 7 (PROJECT_SPEC_PHASE7.md): repurposed. No longer a sum of the (now
+    # removed) Daily Production Summary "Drawers reworked" field - now the count
+    # of distinct cases with disposition "Rework" in the filtered range, which is
+    # also Rework Rate's new numerator. Field name kept for API/schema stability.
     drawers_reworked: int
     defects_per_100: float | None
     rejection_rate: float | None
     first_pass_yield: float | None
     rework_rate: float | None
+    # Phase 7 cost model: sum of one cost unit per non-"Closed - Use As Is" case in
+    # the filtered range (see compute_internal_quality_cost). Field name kept for
+    # API/schema stability even though it's no longer specifically "rework" cost -
+    # it's every case's cost except the ones that avoided it.
     internal_rework_cost: float
+    # Phase 7, new: sum of the cost that WOULD have been incurred by every case in
+    # the filtered range that instead closed "Closed - Use As Is" - the number
+    # that makes "shipping as-is instead of reworking" visible as a saving.
+    cost_avoided: float
     total_internal_quality_cost: float
     quality_cost_per_drawer_inspected: float | None
 
@@ -52,6 +64,7 @@ class Kpis:
             "first_pass_yield": round_rate(self.first_pass_yield),
             "rework_rate": round_rate(self.rework_rate),
             "internal_rework_cost": round(self.internal_rework_cost, 2),
+            "cost_avoided": round(self.cost_avoided, 2),
             "total_internal_quality_cost": round(self.total_internal_quality_cost, 2),
             "quality_cost_per_drawer_inspected": (
                 round(self.quality_cost_per_drawer_inspected, 2)
@@ -61,107 +74,67 @@ class Kpis:
         }
 
 
-def sum_internal_rework_cost(
-    entries: list[tuple[int, decimal.Decimal | float | None]],
+def compute_case_cost(
     *,
+    status: str,
+    cost_per_drawer_at_time: decimal.Decimal | float | None,
     fallback_rate: decimal.Decimal | float,
 ) -> float:
-    """internal_rework_cost summed across a period's DailyProductionSummary rows
-    (Phase 4 cost tracking; scrap cost was dropped from this app entirely - see
-    docs/PROJECT_SPEC_PHASE4.md "Scrap removal").
+    """PROJECT_SPEC_PHASE7.md "Cost model": one defect case's contribution to
+    Total Internal Quality Cost - one unit of its snapshotted
+    cost_per_drawer_at_time, or `fallback_rate` (normally today's configured
+    rate) for a case that predates this column, as the best available estimate
+    rather than silently costing it at $0. Never multiplied by affected_drawer_
+    quantity or DefectItem count - a case is one defective drawer no matter how
+    many categories/items are on it (PROJECT_SPEC.md section 2).
 
-    entries: (drawers_reworked, cost_per_drawer_at_time) per row. A row saved
-    before Phase 4 existed has no rate snapshot (None) - it falls back to
-    `fallback_rate` (normally today's configured rate) as the best available
-    estimate, rather than silently costing it at $0.
+    A case closed "Closed - Use As Is" contributes ZERO here - see
+    compute_case_cost_avoided for its flip side.
     """
-    rework_cost = 0.0
-    for reworked, rate in entries:
-        effective_rate = float(rate) if rate is not None else float(fallback_rate)
-        rework_cost += reworked * effective_rate
-    return rework_cost
+    if status == "Closed - Use As Is":
+        return 0.0
+    if cost_per_drawer_at_time is not None:
+        return float(cost_per_drawer_at_time)
+    return float(fallback_rate)
 
 
-def classify_case_cost_bucket(status: str, disposition: str | None) -> str | None:
-    """Which cost bucket a defect case counts toward for the defect-case-derived
-    cost fallback (see compute_internal_quality_cost / docs/PROJECT_SPEC_PHASE4.md
-    "Defect-case fallback" section).
-
-    A case already represents one defective drawer regardless of how many
-    categories/items are on it (PROJECT_SPEC.md section 2), so the case itself -
-    not its items - is the unit counted here. Still classifies "scrap" (the Scrap
-    disposition/status are kept for backward compatibility - PROJECT_SPEC.md
-    section 3.2), but only the "rework" bucket feeds any cost calculation now;
-    callers that only care about rework cost can ignore a "scrap" result.
-    """
-    if status == "Closed - Scrapped" or disposition == "Scrap":
-        return "scrap"
-    if status == "Closed - Repaired" or disposition == "Rework":
-        return "rework"
-    return None
-
-
-def defect_case_derived_rework_count(cases: list[tuple[dt.date, str, str | None]]) -> int:
-    """Count of qualifying cases (one drawer per case) with disposition Rework
-    closed as Closed - Repaired - the defect-case fallback source for internal
-    rework cost when a production date has no DailyProductionSummary row at all.
-
-    cases: (production_date, status, disposition) per case. production_date isn't
-    used for the classification itself; callers pass it through because they've
-    typically already filtered `cases` down to a specific date/bucket and this
-    keeps the tuple shape self-describing.
-    """
-    return sum(
-        1
-        for _production_date, status, disposition in cases
-        if classify_case_cost_bucket(status, disposition) == "rework"
-    )
+def compute_case_cost_avoided(
+    *,
+    status: str,
+    cost_per_drawer_at_time: decimal.Decimal | float | None,
+    fallback_rate: decimal.Decimal | float,
+) -> float:
+    """The flip side of compute_case_cost: the cost this case WOULD have counted
+    as, had it not closed "Closed - Use As Is" - zero for every other status."""
+    if status != "Closed - Use As Is":
+        return 0.0
+    if cost_per_drawer_at_time is not None:
+        return float(cost_per_drawer_at_time)
+    return float(fallback_rate)
 
 
 def compute_internal_quality_cost(
+    cases: list[tuple[str, decimal.Decimal | float | None]],
     *,
-    daily_summary_entries: list[tuple[int, decimal.Decimal | float | None]],
-    fallback_case_rework_count: int,
     fallback_rate: decimal.Decimal | float,
-    has_daily_summary_rows: bool,
 ) -> dict:
-    """Phase 4 fix: internal rework cost from BOTH sources, using the
-    higher-resolution one for each production date. (Scrap cost was dropped from
-    this app entirely - see docs/PROJECT_SPEC_PHASE4.md "Scrap removal" - so only
-    rework is computed here.)
-
-    `daily_summary_entries` covers dates that DO have a DailyProductionSummary row
-    (same shape as sum_internal_rework_cost: (drawers_reworked,
-    cost_per_drawer_at_time) per row) - that's the "official" count per
-    PROJECT_SPEC_PHASE4.md, since it may include rework that never got a defect
-    case. `fallback_case_rework_count` is derived from defect cases (via
-    defect_case_derived_rework_count) whose production_date has NO daily summary
-    row at all - this is what keeps cost from silently showing $0 when real defect
-    cases exist but nobody filled out a Daily Production Summary for that date.
-    Cases on a date that DOES have a summary are never added here, so the two
-    sources are never double-counted for the same date. Case-derived cost always
-    uses the *currently configured* rate, since a DefectCase has no rate snapshot of
-    its own.
-
-    Returns internal_rework_cost plus `cost_basis` ("daily_summary" |
-    "defect_cases" | "blended" | "none") and the raw fallback count, so the UI can
-    show which source is driving the number.
+    """PROJECT_SPEC_PHASE7.md "Cost model": Total Internal Quality Cost + Cost
+    Avoided across `cases` - (status, cost_per_drawer_at_time snapshot) per
+    distinct defect case in the filtered range. Replaces the old dual-source
+    (Daily Production Summary + defect-case fallback) model from Phase 4 entirely
+    - there is exactly one source now, and it is always the defect cases.
     """
-    daily_rework_cost = sum_internal_rework_cost(daily_summary_entries, fallback_rate=fallback_rate)
-    case_rework_cost = fallback_case_rework_count * float(fallback_rate)
-
-    if fallback_case_rework_count == 0:
-        cost_basis = "daily_summary" if has_daily_summary_rows else "none"
-    elif not has_daily_summary_rows:
-        cost_basis = "defect_cases"
-    else:
-        cost_basis = "blended"
-
-    return {
-        "internal_rework_cost": daily_rework_cost + case_rework_cost,
-        "defect_case_rework_count": fallback_case_rework_count,
-        "cost_basis": cost_basis,
-    }
+    internal_rework_cost = sum(
+        compute_case_cost(status=status, cost_per_drawer_at_time=rate, fallback_rate=fallback_rate)
+        for status, rate in cases
+    )
+    cost_avoided = sum(
+        compute_case_cost_avoided(
+            status=status, cost_per_drawer_at_time=rate, fallback_rate=fallback_rate
+        )
+        for status, rate in cases
+    )
+    return {"internal_rework_cost": internal_rework_cost, "cost_avoided": cost_avoided}
 
 
 def compute_kpis(
@@ -171,10 +144,13 @@ def compute_kpis(
     unique_drawers_rejected: int,
     drawers_reworked: int,
     internal_rework_cost: float = 0.0,
+    cost_avoided: float = 0.0,
 ) -> Kpis:
-    """Implements PROJECT_SPEC.md section 2.1 exactly (minus Scrap Rate, dropped
-    from this app - see docs/PROJECT_SPEC_PHASE4.md "Scrap removal"). Never divides
-    by zero."""
+    """Implements PROJECT_SPEC.md section 2.1, with PROJECT_SPEC_PHASE7.md's
+    redefinition of Rework Rate: `drawers_reworked` here is the count of distinct
+    cases with disposition "Rework" in the filtered range (see
+    app/routers/reports.py get_summary), not a Daily Production Summary sum.
+    Never divides by zero."""
     if drawers_inspected == 0:
         defects_per_100 = rejection_rate = first_pass_yield = rework_rate = None
     else:
@@ -198,6 +174,7 @@ def compute_kpis(
         first_pass_yield=first_pass_yield,
         rework_rate=rework_rate,
         internal_rework_cost=internal_rework_cost,
+        cost_avoided=cost_avoided,
         total_internal_quality_cost=total_internal_quality_cost,
         quality_cost_per_drawer_inspected=quality_cost_per_drawer_inspected,
     )
@@ -271,18 +248,6 @@ def compute_resolved_on_the_spot_rate(
     if total_cases == 0:
         return None
     return round_rate((resolved_on_the_spot_count / total_cases) * 100)
-
-
-def compute_skip_recheck_rate(
-    *, queued_rework_count: int, skipped_recheck_count: int
-) -> float | None:
-    """PROJECT_SPEC.md section 3.3 KPI: of the cases that actually reached In
-    Rework (i.e. went through the queue rather than being resolved on the spot),
-    what % closed directly via "Close Directly (Skip Recheck)" rather than going
-    through Ready for QC Recheck. Never divides by zero."""
-    if queued_rework_count == 0:
-        return None
-    return round_rate((skipped_recheck_count / queued_rework_count) * 100)
 
 
 def filtered_defect_items_query(

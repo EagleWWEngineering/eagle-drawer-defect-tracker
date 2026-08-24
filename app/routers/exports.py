@@ -53,63 +53,43 @@ def export_defects_csv(
     )
     rows = query.all()
 
+    # Phase 7 "Cost model": cost is per-CASE now (see export_service.py
+    # build_defect_items_csv), computed straight from each row's own case - no
+    # date-joined DailyProductionSummary lookup needed for cost anymore.
+    fallback_rate = settings_service.get_cost_per_drawer(db)
+
+    # Phase 6: same-day schedule + attainment context, joined by production_date.
+    # Still needs DailyProductionSummary rows, to sum drawers_inspected across
+    # shifts before computing attainment, so a two-shift day is never
+    # double-counted against the whole-day scheduled figure.
     involved_dates = {case.production_date for _item, case in rows}
-    daily_cost_by_date: dict = {}
+    daily_schedule_by_date: dict = {}
     if involved_dates:
         summary_rows = (
             db.query(DailyProductionSummary)
             .filter(DailyProductionSummary.production_date.in_(involved_dates))
             .all()
         )
-        # A date can have more than one shift saved; sum their costs together
-        # rather than picking just one row.
-        rows_by_date: dict = defaultdict(list)
+        inspected_by_date: dict = defaultdict(int)
         for summary_row in summary_rows:
-            rows_by_date[summary_row.production_date].append(summary_row)
+            inspected_by_date[summary_row.production_date] += summary_row.drawers_inspected
 
-        fallback_rate = settings_service.get_cost_per_drawer(db)
-        for production_date, date_rows in rows_by_date.items():
-            rework_cost = metrics_service.sum_internal_rework_cost(
-                [(r.drawers_reworked, r.cost_per_drawer_at_time) for r in date_rows],
-                fallback_rate=fallback_rate,
-            )
-            representative_rate = next(
-                (
-                    r.cost_per_drawer_at_time
-                    for r in date_rows
-                    if r.cost_per_drawer_at_time is not None
-                ),
-                fallback_rate,
-            )
-            daily_cost_by_date[production_date] = {
-                "rate": representative_rate,
-                "rework_cost": rework_cost,
-            }
-
-    # Phase 6: same-day schedule + attainment context, joined by production_date
-    # exactly like daily_cost_by_date above - reuses rows_by_date (this date's
-    # DailyProductionSummary rows, already grouped above) to sum drawers_inspected
-    # across shifts before computing attainment, so a two-shift day is never
-    # double-counted against the whole-day scheduled figure.
-    daily_schedule_by_date: dict = {}
-    if involved_dates:
         schedule_rows = schedule_service.list_schedules(
             db, min(involved_dates), max(involved_dates)
         )
         for schedule_row in schedule_rows:
             if schedule_row.production_date not in involved_dates:
                 continue
-            date_rows = rows_by_date.get(schedule_row.production_date, [])
-            inspected = sum(r.drawers_inspected for r in date_rows)
             daily_schedule_by_date[schedule_row.production_date] = {
                 "drawers_scheduled": schedule_row.drawers_scheduled,
                 "attainment_pct": metrics_service.compute_schedule_attainment_pct(
-                    total_inspected=inspected, total_scheduled=schedule_row.drawers_scheduled
+                    total_inspected=inspected_by_date.get(schedule_row.production_date, 0),
+                    total_scheduled=schedule_row.drawers_scheduled,
                 ),
             }
 
     csv_text = export_service.build_defect_items_csv(
-        rows, daily_cost_by_date=daily_cost_by_date, daily_schedule_by_date=daily_schedule_by_date
+        rows, fallback_rate=fallback_rate, daily_schedule_by_date=daily_schedule_by_date
     )
 
     audit_service.record(
