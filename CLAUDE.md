@@ -7,18 +7,23 @@ definitions, phases). Phase 2 addendum (Customer Issues tab):
 plus the later "Scrap removal" section): `docs/PROJECT_SPEC_PHASE4.md`. Phase 5
 addendum (single shared login): `docs/PROJECT_SPEC_PHASE5.md`. Phase 6 addendum
 (scheduled vs completed drawers, synced from the production brief):
-`docs/PROJECT_SPEC_PHASE6.md`. Field-level detail: `docs/DATA_DICTIONARY.md`. This
-file is the short version for coding agents working in this repo.
+`docs/PROJECT_SPEC_PHASE6.md`. Phase 7 addendum (cost model + disposition/status
+simplification): `docs/PROJECT_SPEC_PHASE7.md`. Field-level detail:
+`docs/DATA_DICTIONARY.md`. This file is the short version for coding agents
+working in this repo.
 
 Internal quality cost (`AppSetting`/`cost_per_drawer`,
 `app/services/settings_service.py`, `/api/v1/settings/cost-per-drawer`) is a flat
-admin-editable rate multiplied against `drawers_reworked` on
-`DailyProductionSummary` (scrap was dropped from cost calculations entirely - see
-`docs/PROJECT_SPEC_PHASE4.md` "Scrap removal" - though the `drawers_scrapped`
-column itself is kept for backward compatibility). See `docs/PROJECT_SPEC_PHASE4.md`
-before changing it. It is a completely separate number from Phase 2's
-`estimated_rework_cost` (`piece_count * $100`) — never conflate the two rates or
-their tables.
+admin-editable rate. As of Phase 7, cost is snapshotted per `DefectCase` at
+creation (`DefectCase.cost_per_drawer_at_time`) — one unit per case, zero for a
+case closed `Closed - Use As Is` — not multiplied against
+`DailyProductionSummary.drawers_reworked` anymore; see
+`docs/PROJECT_SPEC_PHASE7.md` "Cost model" before changing it.
+`DailyProductionSummary.cost_per_drawer_at_time`/`drawers_reworked`/
+`drawers_scrapped` all stay in the schema with their historical values, but
+nothing reads them for cost anymore. It is a completely separate number from
+Phase 2's `estimated_rework_cost` (`piece_count * $100`) — never conflate the
+two rates or their tables.
 
 Every route (UI pages and API endpoints) requires the single shared login except
 `GET /api/v1/health` and static assets — see `app/auth_middleware.py`,
@@ -44,6 +49,16 @@ the same relay script — see `docs/PROJECT_SPEC_PHASE6.md` and
 means a human edited it on the Daily Summary form; the relay must never overwrite
 that row (manual-wins rule in `schedule_service.upsert_schedule`).
 
+Dispositions (`Rework`, `Set Aside`) and statuses (`Open`, `Closed - Repaired`,
+`Closed - Use As Is`) are a small, fixed vocabulary as of Phase 7 — see
+`docs/PROJECT_SPEC_PHASE7.md` before changing either list.
+`app/services/defect_service.py`'s `VALID_STATUSES`/`VALID_DISPOSITIONS` are what
+new writes must use; `ALL_KNOWN_STATUSES`/`ALL_KNOWN_DISPOSITIONS` (which also
+include the retired `In Rework`/`Waiting`/`Ready for QC Recheck`/`Closed -
+Scrapped`/`Use As Is`/`Hold`) are for filter/display surfaces only, never for
+write validation — a retired value stays valid stored data forever, never a new
+write.
+
 ## What this is
 
 A local FastAPI + SQLite app for tracking drawer defects at Eagle Woodworking's
@@ -66,14 +81,18 @@ offline after install.
   docs.
 - Priority/status always render with a text label, never color alone.
 - No operator-name field anywhere. This is a process tool, not a performance tool.
-- No "Remake" disposition — only Rework, Scrap, Use As Is, Hold. `repair_action` is
-  free text describing what actually happened.
+- No "Remake" disposition — only Rework and Set Aside as of Phase 7 (Scrap/Use As
+  Is/Hold are retired for new entry, still valid on historical rows). `repair_action`
+  is free text describing what actually happened.
 - Status transitions are enforced by the map in `app/services/defect_service.py` (see
-  `docs/PROJECT_SPEC.md` §3.1) — do not bypass it in routers or the UI.
+  `docs/PROJECT_SPEC_PHASE7.md`) — do not bypass it in routers or the UI.
 - Soft delete only for `DefectCase`. Master data (`Station`, `DefectCategory`) can be
   deactivated but never hard-deleted if referenced by historical records.
-- Counting formulas (defects/100, rejection rate, FPY, rework rate, scrap rate) must
-  match `docs/PROJECT_SPEC.md` §2.1 exactly, everywhere. Zero `drawers_inspected` →
+- Counting formulas (defects/100, rejection rate, FPY) must match
+  `docs/PROJECT_SPEC.md` §2.1 exactly, everywhere. Rework Rate and Internal Quality
+  Cost were redefined in Phase 7 (`docs/PROJECT_SPEC_PHASE7.md`) — case-derived, not
+  a Daily Production Summary field. There is no scrap rate/cost anywhere in this app
+  (`docs/PROJECT_SPEC_PHASE4.md` "Scrap removal"). Zero `drawers_inspected` →
   `null`/"N/A", never a divide-by-zero.
 
 ## Architecture rule

@@ -46,11 +46,13 @@ Unique constraint: (production_date, shift).
 | possible_source_station_id | FK -> stations.id, optional | a HYPOTHESIS, never a confirmed root cause |
 | priority | enum | Urgent, High, Normal |
 | status | enum | see status list below |
-| disposition | enum, optional | Rework, Scrap, Use As Is, Hold |
+| disposition | enum, optional | **Rework, Set Aside** as of Phase 7 (`PROJECT_SPEC_PHASE7.md`) — Use As Is/Hold/Scrap are retired for new writes, still valid on historical rows |
 | repair_action | text, optional | what actually happened (free text) |
 | root_cause | text, optional | filled in later during investigation |
 | corrective_action | text, optional | filled in later during investigation |
 | notes | text, optional | |
+| skipped_recheck | bool | retired (Phase 7 — no recheck status exists); historical values kept, no longer written |
+| cost_per_drawer_at_time | decimal(10,2), optional | Phase 7 — rate snapshot at creation time, see below; `null` only for cases created before Phase 7 |
 | closed_at | datetime, optional | set when status becomes a Closed status |
 | is_deleted | bool | soft delete only |
 
@@ -83,19 +85,23 @@ id, timestamp (UTC), actor_role, action, entity_type, entity_id, inputs_json,
 before_json, after_json, success, message.
 
 ## Status list
-Open, In Rework, Waiting, Ready for QC Recheck, Closed - Repaired, Closed - Scrapped,
-Closed - Use As Is. "Ready for QC Recheck" is a legacy status kept for backward
-compatibility only — the shop floor has no real recheck moment, so no UI presents
-moving a case into it as an expected step (PROJECT_SPEC.md section 3.3). Allowed
-transitions are enforced in `app/services/defect_service.py` (`STATUS_TRANSITIONS`,
-`direct_close_statuses`) — see PROJECT_SPEC.md section 3.1.
+**As of Phase 7** (`PROJECT_SPEC_PHASE7.md`), only three statuses are valid for a
+new case or a new status change: `Open`, `Closed - Repaired`, `Closed - Use As Is`.
+`In Rework`, `Waiting`, `Ready for QC Recheck`, and `Closed - Scrapped` are retired
+for new entry — they remain valid **stored** values (a historical case in one of
+them still renders/filters/exports correctly) but nothing writes them anymore.
+Allowed transitions are enforced in `app/services/defect_service.py`
+(`STATUS_TRANSITIONS`, `direct_close_statuses`, `VALID_STATUSES` vs.
+`ALL_KNOWN_STATUSES`) — see `PROJECT_SPEC_PHASE7.md`.
 
 ## Counting definitions
-See PROJECT_SPEC.md section 2.1 for the exact formulas (Defect Event, Defective
-Drawer, Defects per 100 Drawers, Drawer Rejection Rate, First Pass Yield, Rework
-Rate). All rates are `null`/"N/A" when `drawers_inspected` is 0. Scrap Rate was
-dropped from the KPI/API/UI surface entirely in Phase 4's "Scrap removal" - see
-that addendum.
+See PROJECT_SPEC.md section 2.1 for Defect Event, Defective Drawer, Defects per
+100 Drawers, Drawer Rejection Rate, and First Pass Yield - unchanged by Phase 7.
+**Rework Rate** was redefined in Phase 7: `(cases with disposition "Rework" in the
+filtered range) / drawers_inspected * 100` — no longer a
+`DailyProductionSummary.drawers_reworked` sum. All rates are `null`/"N/A" when
+`drawers_inspected` is 0. Scrap Rate was dropped from the KPI/API/UI surface
+entirely in Phase 4's "Scrap removal" - see that addendum.
 
 ## REST API (`/api/v1`)
 
@@ -238,13 +244,15 @@ for the shared-login credential — see `auth_username` / `auth_password_hash` b
 | cost_per_drawer_at_time | decimal(10,2), optional | snapshot of the configured rate at save time; `null` only for rows saved before Phase 4 and never re-saved since |
 
 ### KPI fields added to `/api/v1/reports/summary` and `/api/v1/reports/trend`
+**Superseded by Phase 7** (`PROJECT_SPEC_PHASE7.md`, "Cost model" section below) -
+`internal_rework_cost` is now derived from `DefectCase.cost_per_drawer_at_time`,
+not from this table's `drawers_reworked` * rate. Kept here for history:
 `internal_rework_cost`, `total_internal_quality_cost`,
 `quality_cost_per_drawer_inspected` (`null` when `drawers_inspected` is 0 for the
-period). See `PROJECT_SPEC_PHASE4.md` for the exact formulas and the
-missing-snapshot fallback-rate rule. `internal_scrap_cost`/`scrap_rate` were
-dropped from this KPI surface entirely ("Scrap removal", below) — the
-`DailyProductionSummary.drawers_scrapped` column and `Scrap` disposition/status are
-both still kept for backward compatibility, just no longer surfaced anywhere.
+period). `internal_scrap_cost`/`scrap_rate` were dropped from this KPI surface
+entirely ("Scrap removal", below) — the `DailyProductionSummary.drawers_scrapped`
+column and `Scrap` disposition/status are both still kept for backward
+compatibility, just no longer surfaced anywhere.
 
 ### API (`/api/v1/settings`)
 `GET /cost-per-drawer` · `PUT /cost-per-drawer` (`> 0`, audited).
@@ -344,11 +352,75 @@ HTML scrape, not a JSON API call): `PRODUCTION_BRIEF_SCHEDULE_SOURCE.md`.
 bucketed the same way (`day`/`week`) as every other field on this response.
 
 ### Defect CSV export additions (`/api/v1/exports/defects.csv`)
-`day_drawers_scheduled`, `day_schedule_attainment_pct` - joined by `production_date`
-exactly like the existing Phase 4 `day_cost_per_drawer` / `day_internal_rework_cost`
-columns; blank (not `0`) for a date with no `daily_schedules` row.
+`day_drawers_scheduled`, `day_schedule_attainment_pct` - joined by `production_date`;
+blank (not `0`) for a date with no `daily_schedules` row. (The Phase 4 cost columns
+this mirrored, `day_cost_per_drawer` / `day_internal_rework_cost`, were themselves
+replaced by per-case columns in Phase 7 - see below - but these schedule columns are
+unaffected and unchanged.)
 
 ### Configuration
 No new environment variable - the relay's schedule-scrape pass reuses
 `PRODUCTION_BRIEF_URL` and `RELAY_API_KEY`, both already present for the Phase 3
 customer-issues relay.
+
+## Phase 7: Cost Model + Disposition/Status Simplification
+
+Full addendum: `PROJECT_SPEC_PHASE7.md`. Vocabulary and display change plus one
+narrow, logged migration of currently-open cases - no table/column drops, no
+destructive backfills.
+
+### `DefectCase` additions / changes
+| Field | Type | Notes |
+|---|---|---|
+| cost_per_drawer_at_time | decimal(10,2), optional | rate snapshot at creation; `null` only for cases created before this column existed, in which case cost calculations fall back to the currently-configured rate |
+
+`disposition` is now `Rework` \| `Set Aside` for new writes (`Use As Is`/`Hold`/
+`Scrap` retired); `status` is now `Open` \| `Closed - Repaired` \| `Closed - Use As
+Is` for new writes (`In Rework`/`Waiting`/`Ready for QC Recheck`/`Closed -
+Scrapped` retired). `skipped_recheck` is retired (no recheck status exists) - the
+column stays, historical values stay, nothing writes to it anymore.
+
+### Migration (the only data change)
+`alembic` revisions `3d8532f3a9ec` (schema) + `7c1f9a2b4e6d` (data). Only
+currently-open (non-closed) cases in a retired status move to `Open`, with a real
+`status_history` row and an `audit_log` row; an open case with a retired
+disposition gets it remapped to `Set Aside`, logged the same way. Closed cases -
+including ones already carrying a retired disposition - are never touched. See
+`tests/unit/test_phase7_migration.py`.
+
+### Cost model
+Replaces the Phase 4 dual-source model entirely: one cost unit per `DefectCase`
+(its own `cost_per_drawer_at_time` snapshot, or the current rate as a fallback),
+zero for a case closed `Closed - Use As Is`. Never multiplied by `DefectItem`
+count or `affected_drawer_quantity`.
+
+### KPI fields changed on `/api/v1/reports/summary` and `/api/v1/reports/trend`
+- `drawers_reworked` - repurposed: count of cases with disposition `"Rework"` in
+  the filtered range (Rework Rate's numerator), not a `DailyProductionSummary` sum.
+- `internal_rework_cost` - now case-derived (see "Cost model" above).
+- `cost_avoided` - **new**: summed cost of every case in range that closed
+  `Closed - Use As Is`.
+- Removed: `defect_case_rework_count`, `cost_basis` (the dual-source model they
+  described no longer exists), `queued_rework_count`, `skipped_recheck_count`,
+  `pct_queued_rework_closed_without_recheck` (no recheck status exists).
+
+### Defect CSV export changes (`/api/v1/exports/defects.csv`)
+`day_cost_per_drawer` / `day_internal_rework_cost` (date-joined from
+`DailyProductionSummary`) are **replaced** by per-case columns: `case_cost_per_drawer`,
+`case_internal_cost`, `case_cost_avoided` - computed from each row's own case, not a
+date join, since cost no longer depends on whether a Daily Production Summary
+exists for that date.
+
+### `DailyProductionSummaryIn`/`Out` changes
+`drawers_reworked` is now optional (`int | None`, default `None`) on the input -
+same "omit to preserve, explicit int to override" rule `drawers_scrapped` already
+had since Phase 4. `DailyProductionSummaryOut`'s `internal_rework_cost` /
+`internal_scrap_cost` computed fields were removed (they multiplied
+`drawers_reworked`/`drawers_scrapped` by the row's rate snapshot - exactly the
+retired per-date model); `cost_per_drawer_at_time` itself stays as a plain,
+informational field.
+
+### `MasterDataOut` additions
+`all_statuses`, `all_dispositions` - every historically-possible value, retired
+ones included, for filter/display dropdowns only (Reports/Dashboard). `statuses`/
+`dispositions` stay write-legal-only (what a case can be created/changed to).
