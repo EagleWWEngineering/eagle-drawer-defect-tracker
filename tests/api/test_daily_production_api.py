@@ -214,3 +214,35 @@ def test_same_date_and_shift_upserts_not_duplicates(client):
     rows = client.get("/api/v1/daily-production").json()
     assert len(rows) == 1
     assert rows[0]["drawers_inspected"] == 120
+
+
+def test_reworked_case_count_appears_on_upsert_and_list(client, master_data):
+    """PROJECT_SPEC_PHASE7.md: read-only, case-derived - not the (now optional)
+    drawers_reworked field on the payload."""
+    resp = client.put(
+        "/api/v1/daily-production/2026-07-24",
+        json={"shift": "Day", "drawers_inspected": 10, "drawers_rejected_unique": 1},
+    )
+    assert resp.json()["reworked_case_count"] == 0
+
+    client.post(
+        "/api/v1/defect-cases",
+        json={
+            "production_date": "2026-07-24",
+            "detected_at": "2026-07-24T14:30:00Z",
+            "work_order_number": "WO-REWORKED-COL",
+            "found_station_id": master_data["stations"]["QC / Sorting / Shipping"],
+            "priority": "Normal",
+            "items": [{"defect_category_id": master_data["categories"]["Sanding / Surface"]}],
+            "disposition": "Rework",
+        },
+    )
+
+    resp = client.put(
+        "/api/v1/daily-production/2026-07-24",
+        json={"shift": "Day", "drawers_inspected": 10, "drawers_rejected_unique": 1},
+    )
+    assert resp.json()["reworked_case_count"] == 1
+
+    rows = client.get("/api/v1/daily-production").json()
+    assert rows[0]["reworked_case_count"] == 1

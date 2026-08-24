@@ -59,7 +59,7 @@
   <h2>Recent entries</h2>
   <div class="table-scroll">
     <table id="summary-table">
-      <thead><tr><th>Date</th><th>Shift</th><th>Inspected</th><th>Rejected (unique)</th><th>Notes</th></tr></thead>
+      <thead><tr><th>Date</th><th>Shift</th><th>Inspected</th><th>Rejected (unique)</th><th>Reworked (from cases)</th><th>Notes</th></tr></thead>
       <tbody></tbody>
     </table>
   </div>
@@ -169,10 +169,11 @@ async function loadRecentEntries() {
       (r) => `<tr>
         <td>${r.production_date}</td><td>${escapeHtml(r.shift)}</td>
         <td>${r.drawers_inspected}</td><td>${r.drawers_rejected_unique}</td>
+        <td>${r.reworked_case_count}</td>
         <td>${escapeHtml(r.notes || "")}</td>
       </tr>`
     )
-    .join("") || `<tr><td colspan="5">No entries yet.</td></tr>`;
+    .join("") || `<tr><td colspan="6">No entries yet.</td></tr>`;
 }
 
 /** Apply a suggestion to the Rejected input and show the "Suggested: N (from N

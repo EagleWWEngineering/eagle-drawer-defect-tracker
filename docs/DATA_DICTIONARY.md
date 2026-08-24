@@ -424,3 +424,12 @@ informational field.
 `all_statuses`, `all_dispositions` - every historically-possible value, retired
 ones included, for filter/display dropdowns only (Reports/Dashboard). `statuses`/
 `dispositions` stay write-legal-only (what a case can be created/changed to).
+
+### `DailyProductionSummaryOut` addition: `reworked_case_count`
+Read-only, not stored on the row - a per-`production_date` count of `DefectCase`
+rows with disposition `"Rework"` (`app/services/defect_service.py
+count_rework_cases_by_date`), the same rule Rework Rate itself uses (no status
+qualifier). Added to the Daily Summary page's Recent Entries table as "Reworked
+(from cases)" after Rodolfo asked for a reference figure once the editable
+`drawers_reworked` input left the form - not part of the save payload, purely
+informational.

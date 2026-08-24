@@ -375,6 +375,14 @@ class DailyProductionSummaryOut(BaseModel):
     # dollar figure that has nothing to do with the actual reported cost anymore.
     cost_per_drawer_at_time: float | None
     warnings: list[str] = []
+    # Read-only, not stored on this row and not part of a save payload - set
+    # explicitly by the router after model_validate() from
+    # defect_service.count_rework_cases_by_date(), same pattern `warnings`
+    # above already uses. PROJECT_SPEC_PHASE7.md: Rework Rate's numerator
+    # (cases with disposition "Rework" for this production_date), surfaced for
+    # reference on the Daily Summary page now that there's no editable
+    # drawers_reworked field to show it next to.
+    reworked_case_count: int = 0
 
     model_config = {"from_attributes": True}
 

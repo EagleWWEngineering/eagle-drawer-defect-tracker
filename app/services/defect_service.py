@@ -691,3 +691,34 @@ def suggested_daily_counts(db: Session, production_date: dt.date) -> dict:
         "defect_case_count": case_count,
         "suggested_drawers_rejected_unique": case_count,
     }
+
+
+def count_rework_cases_by_date(db: Session, production_dates: list[dt.date]) -> dict[dt.date, int]:
+    """Count of non-deleted DefectCase rows with disposition "Rework", grouped by
+    production_date - the Daily Summary page's read-only "Reworked (from cases)"
+    column (PROJECT_SPEC_PHASE7.md). This is a plain factual display, not a
+    suggestion the user edits or saves - the input field itself was removed from
+    the form; this is just Rework Rate's numerator surfaced per date for
+    reference, using the exact same rule (any Rework-dispositioned case counts,
+    open or closed - no status qualifier) as
+    app/routers/reports.py get_summary.
+
+    Same whole-day limitation as suggested_daily_counts: DefectCase has no shift
+    field, so a two-shift day shows the same count on both shifts' rows.
+
+    A date with zero matching cases is simply absent from the returned dict -
+    callers use `.get(date, 0)`.
+    """
+    if not production_dates:
+        return {}
+    rows = (
+        db.query(DefectCase.production_date, func.count(DefectCase.id))
+        .filter(
+            DefectCase.production_date.in_(production_dates),
+            DefectCase.disposition == "Rework",
+            DefectCase.is_deleted.is_(False),
+        )
+        .group_by(DefectCase.production_date)
+        .all()
+    )
+    return {production_date: count for production_date, count in rows}

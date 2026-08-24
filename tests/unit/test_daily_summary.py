@@ -10,6 +10,7 @@ import pytest
 from app.errors import ValidationError
 from app.services import settings_service
 from app.services.defect_service import (
+    count_rework_cases_by_date,
     create_defect_case,
     get_daily_summary,
     suggested_daily_counts,
@@ -383,3 +384,72 @@ def test_suggested_counts_only_include_the_given_production_date(
 
     suggestion = suggested_daily_counts(db_session, today)
     assert suggestion["suggested_drawers_rejected_unique"] == 0
+
+
+# ---------------------------------------------------------------------------
+# count_rework_cases_by_date - the Daily Summary page's read-only "Reworked
+# (from cases)" column (PROJECT_SPEC_PHASE7.md: drawers_reworked left the form
+# entirely, but a read-only case-derived figure was added back for reference).
+# ---------------------------------------------------------------------------
+
+
+def test_count_rework_cases_by_date_counts_only_rework_disposition(
+    db_session, stations, categories, today
+):
+    create_defect_case(
+        db_session,
+        production_date=today,
+        detected_at=_detected_at(today),
+        work_order_number="WO-CR-1",
+        drawer_part_reference=None,
+        found_station_id=stations["QC / Sorting / Shipping"].id,
+        possible_source_station_id=None,
+        priority="Normal",
+        items=[{"defect_category_id": categories["Sanding / Surface"].id}],
+        disposition="Rework",
+    )
+    create_defect_case(
+        db_session,
+        production_date=today,
+        detected_at=_detected_at(today),
+        work_order_number="WO-CR-2",
+        drawer_part_reference=None,
+        found_station_id=stations["QC / Sorting / Shipping"].id,
+        possible_source_station_id=None,
+        priority="Normal",
+        items=[{"defect_category_id": categories["Sanding / Surface"].id}],
+        disposition="Set Aside",
+    )
+
+    counts = count_rework_cases_by_date(db_session, [today])
+    assert counts[today] == 1
+
+
+def test_count_rework_cases_by_date_ignores_status(db_session, stations, categories, today):
+    """No status qualifier - any Rework-dispositioned case counts, open or
+    closed, matching Rework Rate's own rule exactly."""
+    create_defect_case(
+        db_session,
+        production_date=today,
+        detected_at=_detected_at(today),
+        work_order_number="WO-CR-3",
+        drawer_part_reference=None,
+        found_station_id=stations["QC / Sorting / Shipping"].id,
+        possible_source_station_id=None,
+        priority="Normal",
+        items=[{"defect_category_id": categories["Sanding / Surface"].id}],
+        disposition="Rework",
+        resolved_on_the_spot=True,
+        repair_action="Resanded",
+    )
+
+    counts = count_rework_cases_by_date(db_session, [today])
+    assert counts[today] == 1
+
+
+def test_count_rework_cases_by_date_omits_dates_with_no_matches(db_session, today):
+    assert count_rework_cases_by_date(db_session, [today]) == {}
+
+
+def test_count_rework_cases_by_date_empty_input_is_empty(db_session):
+    assert count_rework_cases_by_date(db_session, []) == {}

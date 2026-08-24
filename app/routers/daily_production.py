@@ -139,6 +139,9 @@ def upsert_summary(
     )
     out = DailyProductionSummaryOut.model_validate(row)
     out.warnings = warnings
+    out.reworked_case_count = defect_service.count_rework_cases_by_date(db, [production_date]).get(
+        production_date, 0
+    )
     return out
 
 
@@ -166,4 +169,12 @@ def list_summaries(
     if end_date is not None:
         query = query.filter(DailyProductionSummary.production_date <= end_date)
     rows = query.order_by(DailyProductionSummary.production_date.desc()).all()
-    return [DailyProductionSummaryOut.model_validate(r) for r in rows]
+    reworked_by_date = defect_service.count_rework_cases_by_date(
+        db, [r.production_date for r in rows]
+    )
+    results = []
+    for r in rows:
+        out = DailyProductionSummaryOut.model_validate(r)
+        out.reworked_case_count = reworked_by_date.get(r.production_date, 0)
+        results.append(out)
+    return results
