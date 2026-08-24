@@ -244,10 +244,13 @@ async def get_defect_summary(
 ) -> dict[str, Any]:
     """Get KPI totals for a date range: drawers inspected, defect events, unique
     drawers rejected, defects per 100 drawers, rejection rate, first pass yield,
-    rework rate, scrap rate, and internal quality cost (internal_rework_cost,
-    internal_scrap_cost, total_internal_quality_cost, and
-    quality_cost_per_drawer_inspected, using the cost-per-drawer rate configured in
-    Admin). Rates and per-drawer cost are null/None when drawers_inspected is 0.
+    rework rate (% of the filtered cases with disposition "Rework"), and internal
+    quality cost - internal_rework_cost (one cost unit per case, zero for a case
+    closed "Closed - Use As Is"), cost_avoided (the flip side: what those
+    "Use As Is" cases would have cost), total_internal_quality_cost, and
+    quality_cost_per_drawer_inspected, using the cost-per-drawer rate each case
+    snapshotted at creation. Rates and per-drawer cost are null/None when
+    drawers_inspected is 0. There is no scrap rate/cost in this app.
 
     Dates are "YYYY-MM-DD". filters is optional and may include any of:
     work_order_number, category (defect category name), found_station (station name),
@@ -375,6 +378,12 @@ async def record_defect_case(
     production_date/detected_at default to the current date/time if omitted
     ("YYYY-MM-DD" / ISO datetime).
     priority: "Urgent", "High", or "Normal" (default).
+    disposition: "Rework" or "Set Aside" (the API rejects any other value - older
+    values like "Use As Is"/"Hold"/"Scrap" are retired for new entries, though they
+    can still appear on historical cases). This tool always creates the case as
+    "Open" - it does not expose the web UI's "resolved on the spot" instant-close
+    fast path, so use update_defect_case_status afterward if the user wants it
+    closed immediately.
     """
     now = dt.datetime.now(dt.timezone.utc)
     resolved_items = []
@@ -412,7 +421,7 @@ async def record_daily_production(
     production_date: str,
     drawers_inspected: int,
     drawers_rejected_unique: int,
-    drawers_reworked: int = 0,
+    drawers_reworked: int | None = None,
     drawers_scrapped: int = 0,
     shift: str = "Day",
     notes: str | None = None,
@@ -421,9 +430,16 @@ async def record_daily_production(
     Production Summary - the denominator for every rate on the dashboard. Only call
     this when the user has explicitly asked you to record production counts.
 
-    Unusual combinations (e.g. drawers_reworked exceeding drawers_rejected_unique -
-    which can legitimately happen when rework spans multiple days) are accepted only
-    if `notes` explains why; otherwise the API rejects the entry and asks for a note.
+    drawers_reworked is no longer used by the Rework Rate KPI (PROJECT_SPEC_PHASE7.md:
+    that's now computed from defect cases with disposition "Rework", not this
+    field) - it's kept only for historical/legacy record-keeping. Leave it
+    unset (None) unless the user explicitly wants to set/override it; passing None
+    preserves whatever is already saved for this date/shift instead of zeroing it.
+
+    Unusual combinations (e.g. an explicit drawers_reworked exceeding
+    drawers_rejected_unique - which can legitimately happen when rework spans
+    multiple days) are accepted only if `notes` explains why; otherwise the API
+    rejects the entry and asks for a note.
     """
     payload = {
         "shift": shift,
@@ -447,11 +463,14 @@ async def update_defect_case_status(
     """Change a defect case's status. Only call this when the user has explicitly
     asked you to update, advance, or close a case.
 
-    Allowed statuses: "Open", "In Rework", "Waiting", "Ready for QC Recheck",
-    "Closed - Repaired", "Closed - Scrapped", "Closed - Use As Is". Only specific
+    Allowed statuses to set: "Open", "Closed - Repaired", "Closed - Use As Is" -
+    the only two ways to close a case now, from any non-closed status, with an
+    optional note. A case may display a retired legacy status ("In Rework",
+    "Waiting", "Ready for QC Recheck", "Closed - Scrapped") if it's old historical
+    data, but the API rejects any of those as a NEW value to set. Only specific
     transitions are allowed (enforced by the API, same rule as the web UI) - an
     invalid transition returns a clear error instead of silently failing. Reopening a
-    closed case back to "Open" requires `note` to explain why.
+    closed case back to "Open" requires `note` to explain why; closing does not.
     """
     case = await _request("GET", f"/api/v1/defect-cases/by-number/{case_number}")
     payload = {

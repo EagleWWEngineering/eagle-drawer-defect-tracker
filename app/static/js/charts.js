@@ -180,13 +180,17 @@ function renderTrendChart(canvas, points) {
   ]);
 }
 
-/** points: [{period, internal_rework_cost}] (Phase 4). Scrap cost was dropped from
- * this app entirely - see docs/PROJECT_SPEC_PHASE4.md "Scrap removal". */
+/** points: [{period, internal_rework_cost, cost_avoided}] (Phase 7 "Cost model" -
+ * one cost unit per defect case). Scrap cost was dropped from this app entirely -
+ * see docs/PROJECT_SPEC_PHASE4.md "Scrap removal". */
 function renderCostTrendChart(canvas, points) {
   _renderLineChart(
     canvas,
     points,
-    [{ key: "internal_rework_cost", label: "Rework cost ($)", color: CHART_COLORS[2] }],
+    [
+      { key: "internal_rework_cost", label: "Internal rework cost ($)", color: CHART_COLORS[2] },
+      { key: "cost_avoided", label: "Cost avoided ($)", color: CHART_COLORS[1] },
+    ],
     { emptyMessage: "No cost data in the selected date range." }
   );
 }
