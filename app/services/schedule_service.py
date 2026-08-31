@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 
 from app.errors import ValidationError
 from app.models import DailySchedule, SyncLog
+from app.services import working_days_service
 
 SOURCE_SYNC = "sync"
 SOURCE_MANUAL = "manual"
@@ -195,6 +196,16 @@ def process_schedule_payload(
     no 'drawers_scheduled' (the brief had no "Today's plan" fact for it - see
     docs/PRODUCTION_BRIEF_SCHEDULE_SOURCE.md) is also counted as skipped, not an
     error - there's simply nothing to write for that date.
+
+    Working Days Logic (Part C addendum): a date that isn't a working day (per
+    app/services/working_days_service.is_working_day) is rejected before it ever
+    reaches _apply_schedule - skipped and counted the same way, but with its own
+    message in SyncLog.errors so it reads distinctly from the "brief had no plan"
+    skip above. This is belt-and-braces on top of the relay's own freshness guard
+    (scripts/relay_customer_issues.py) - even a relay change or a retimed brief
+    can never poison a weekend row here. Applies to this sync path only; the
+    manual PUT /api/v1/daily-production/schedule route never calls this function,
+    so a human's deliberate overtime-Saturday entry is untouched.
     """
     now = dt.datetime.now(dt.timezone.utc)
     log = SyncLog(sync_started_at=sync_started_at or now, source_url=source_url, status="failed")
@@ -209,10 +220,21 @@ def process_schedule_payload(
             if not isinstance(raw, dict) or not raw.get("date"):
                 raise ValueError("entry is missing required 'date'")
             production_date = dt.date.fromisoformat(raw["date"])
-            count = raw.get("drawers_scheduled")
-            if count is None:
-                skipped += 1
-                continue
+        except (ValueError, TypeError) as exc:
+            skipped += 1
+            error_messages.append(f"{date_label}: {exc}")
+            continue
+
+        if not working_days_service.is_working_day(db, production_date):
+            skipped += 1
+            error_messages.append(f"{production_date}: not a working day - sync write rejected")
+            continue
+
+        count = raw.get("drawers_scheduled")
+        if count is None:
+            skipped += 1
+            continue
+        try:
             count = int(count)
         except (ValueError, TypeError) as exc:
             skipped += 1
