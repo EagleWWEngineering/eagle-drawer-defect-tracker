@@ -32,6 +32,17 @@ These two passes are fully independent: a failure in one (production brief down,
 Render down, bad response) must never prevent the other from running and being
 logged. See run() below - each pass is wrapped separately and both always run.
 
+Working Days Logic (Part C addendum): the schedule pass also carries a freshness
+guard for the LIVE /drawers.html fetch only (never the dated archive backfill,
+which is already correctly dated by the URL it requested) - see
+_parse_board_heading_month_day and _collect_schedule_entries below. It compares
+the scraped page's own "Today's plan" heading date against the date this run is
+about to stamp, and skips (never blocks) writing today's figure on a mismatch.
+This is belt-and-braces on top of the ingest-side working-day guard
+(app/services/schedule_service.py process_schedule_payload) - that guard rejects
+a WRONG DAY (a non-working date); this one catches a STALE/EARLY page for the
+RIGHT day.
+
 This module's run()/_log() are also imported directly by scripts/relay_poll.py (a
 companion script, run on a much more frequent ~1 minute Task Scheduler interval)
 so that its "a manual Sync Now was requested - do a full relay pass right now"
@@ -117,6 +128,68 @@ _FACT_RE = re.compile(
 )
 _SCHEDULE_FACT_LABEL = "drawers scheduled to finish today"
 
+# --- Part C addendum: freshness guard for the LIVE /drawers.html scrape only --
+#
+# production_brief/render.py stamps the "Today's plan" section's <h2> as a plain
+# f-string: `Today's plan — <Weekday> <Mon> <DD>` (see
+# docs/PRODUCTION_BRIEF_SCHEDULE_SOURCE.md's sample markup - HTML-entity-encoded
+# apostrophe, an em dash, no year). It's not a stable/tested contract on the
+# brief's side, so parsing it here is deliberately permissive: _HEADING_DATE_RE
+# only requires a month abbreviation + day number *somewhere* in the "Today's
+# plan" <h2>, not the exact separator/dash/wording around it. No year is parsed
+# either (there isn't one in the heading) - see
+# _parse_board_heading_month_day's docstring for why that's fine.
+_HEADING_H2_RE = re.compile(r"<h2>([^<]*)</h2>")
+_HEADING_DATE_RE = re.compile(
+    r"\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+(\d{1,2})\b", re.IGNORECASE
+)
+_MONTH_ABBR = {
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
+}
+
+
+def _parse_board_heading_month_day(page_html: str) -> tuple[int, int] | None:
+    """Best-effort (month, day) out of the "Today's plan — <Weekday> <Mon> <DD>"
+    <h2> heading - the freshness guard's input. Returns None ("unknown, can't
+    tell") on ANY parse miss: no "Today's plan" <h2> found, no month+day pattern
+    inside it, or an unrecognized month abbreviation - never raises. Callers
+    (see _run_schedule_forward) MUST treat None as "fall back to the old
+    unconditional-write behavior", never as "block the write" - a parse failure
+    here is expected to happen eventually (this heading has no test pinning it
+    on the brief's side) and must never take down schedule syncing entirely.
+
+    No year is parsed - the heading doesn't have one, and inferring it would
+    just add a second way to get this wrong. Callers compare (month, day)
+    directly against the date they're about to stamp instead.
+    """
+    for h2_text in _HEADING_H2_RE.findall(page_html):
+        text = html_lib.unescape(h2_text)
+        if "plan" not in text.lower():
+            continue
+        match = _HEADING_DATE_RE.search(text)
+        if not match:
+            continue
+        month = _MONTH_ABBR.get(match.group(1).lower())
+        if month is None:
+            continue
+        try:
+            day = int(match.group(2))
+        except ValueError:
+            continue
+        return month, day
+    return None
+
 
 def _scrape_drawers_scheduled(page_html: str) -> int | None:
     """Isolated, single-purpose HTML scrape (see the module docstring and
@@ -160,27 +233,48 @@ def _fetch_drawers_board_html(base_url: str, day: dt.date, *, today: dt.date) ->
     return "ok", resp.text
 
 
-def _collect_schedule_entries(base_url: str) -> tuple[list[dict], int, int]:
-    """(entries, found_count, unreachable_count) for today + a trailing
-    SCHEDULE_LOOKBACK_DAYS window. `entries` is ready to drop straight into the
-    ingest payload's "schedules" list."""
+def _collect_schedule_entries(base_url: str) -> tuple[list[dict], int, int, bool]:
+    """(entries, found_count, unreachable_count, stale_today) for today + a
+    trailing SCHEDULE_LOOKBACK_DAYS window. `entries` is ready to drop straight
+    into the ingest payload's "schedules" list.
+
+    Part C addendum - freshness guard: for `day == today` ONLY (the live
+    /drawers.html fetch, never the dated archive path - see
+    _fetch_drawers_board_html - which is already correctly dated by the URL it
+    requested), the scraped page's own "Today's plan" heading date is compared
+    against `today`. A mismatch means the fetch got a stale/early page (e.g. the
+    brief hasn't regenerated yet, or served a cached previous day) - that one
+    entry is nulled out (never written) and `stale_today` comes back True so the
+    caller can log it clearly, distinct from every other skip reason. A heading
+    that can't be parsed at all (_parse_board_heading_month_day returns None) is
+    treated as "unknown" and does NOT block the write - see that function's
+    docstring.
+    """
     today = dt.date.today()
     entries: list[dict] = []
     found = 0
     unreachable = 0
+    stale_today = False
     for back in range(SCHEDULE_LOOKBACK_DAYS + 1):
         day = today - dt.timedelta(days=back)
         status, body = _fetch_drawers_board_html(base_url, day, today=today)
+        count = None
         if status == "ok":
             count = _scrape_drawers_scheduled(body)
-            if count is not None:
-                found += 1
-        else:
-            count = None
-            if status == "unreachable":
-                unreachable += 1
+            if day == today and count is not None:
+                heading_month_day = _parse_board_heading_month_day(body)
+                if heading_month_day is not None and heading_month_day != (
+                    today.month,
+                    today.day,
+                ):
+                    stale_today = True
+                    count = None
+        elif status == "unreachable":
+            unreachable += 1
+        if count is not None:
+            found += 1
         entries.append({"date": day.isoformat(), "drawers_scheduled": count})
-    return entries, found, unreachable
+    return entries, found, unreachable, stale_today
 
 
 def _log(message: str) -> None:
@@ -264,7 +358,7 @@ def _run_schedule_forward(production_brief_url: str, render_url: str, relay_api_
     """Phase 6: scrape + forward the drawers-scheduled figures. Independent of
     _run_customer_issues_forward - failures here never affect that pass, and vice
     versa (see run()). True on success, False on any failure - never raises."""
-    entries, found, unreachable = _collect_schedule_entries(production_brief_url)
+    entries, found, unreachable, stale_today = _collect_schedule_entries(production_brief_url)
 
     if unreachable == len(entries):
         # Every single fetch failed at the connection level - the production brief
@@ -276,6 +370,18 @@ def _run_schedule_forward(production_brief_url: str, render_url: str, relay_api_
             f"{production_brief_url} for any of {len(entries)} date(s)."
         )
         return False
+
+    if stale_today:
+        # Part C addendum freshness guard: the live /drawers.html heading's own
+        # date didn't match today - the fetch got a stale/early page. Today's
+        # entry was already nulled out in `entries` (never written); this is
+        # just the distinct log line for it, separate from every other
+        # SCHEDULE SUCCESS/FAILURE reason above and below.
+        _log(
+            "SCHEDULE WARNING: the live /drawers.html page's 'Today's plan' heading "
+            "did not match today's date - skipped writing today's schedule figure "
+            "this pass (stale/early pull freshness guard). Will retry next hour."
+        )
 
     payload = {"schedules": entries}
 
