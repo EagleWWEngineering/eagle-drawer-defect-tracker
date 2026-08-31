@@ -67,3 +67,88 @@ def test_defaults_to_the_real_current_instant_when_now_is_omitted():
     returns a same-day range without needing an injected `now`."""
     start, end = resolve_date_preset("today")
     assert start == end
+
+
+# ---------------------------------------------------------------------------
+# this_week / last_week (calendar-only, added alongside This Week / Last Week
+# Dashboard buttons) - 2026-08-17 is a Monday, 2026-08-19 a Wednesday,
+# 2026-08-21 the Friday of that same week, 2026-08-23 a Sunday, 2026-08-24 the
+# following Monday - same reference dates as tests/unit/test_working_days_
+# service.py and tests/unit/test_brief_export_service.py.
+# ---------------------------------------------------------------------------
+
+MONDAY = dt.date(2026, 8, 17)
+WEDNESDAY = dt.date(2026, 8, 19)
+FRIDAY = dt.date(2026, 8, 21)
+SUNDAY = dt.date(2026, 8, 23)
+NEXT_MONDAY = dt.date(2026, 8, 24)
+NEXT_FRIDAY = dt.date(2026, 8, 28)
+
+
+def _now_on(d: dt.date) -> dt.datetime:
+    """15:00 UTC is safely the same calendar day in DISPLAY_TIMEZONE
+    (America/New_York) year-round - unlike NEAR_UTC_BOUNDARY above, these
+    tests aren't targeting the tz-boundary edge case, just the Mon-Fri math."""
+    return dt.datetime.combine(d, dt.time(15, 0), tzinfo=dt.timezone.utc)
+
+
+def test_this_week_on_a_wednesday_is_monday_through_wednesday():
+    assert resolve_date_preset("this_week", now=_now_on(WEDNESDAY)) == (MONDAY, WEDNESDAY)
+
+
+def test_this_week_on_a_monday_is_a_single_day_range():
+    start, end = resolve_date_preset("this_week", now=_now_on(MONDAY))
+    assert start == end == MONDAY
+
+
+def test_this_week_on_a_sunday_runs_monday_through_sunday_with_no_error():
+    assert resolve_date_preset("this_week", now=_now_on(SUNDAY)) == (MONDAY, SUNDAY)
+
+
+def test_last_week_on_a_monday_is_the_previous_mon_fri():
+    assert resolve_date_preset("last_week", now=_now_on(NEXT_MONDAY)) == (MONDAY, FRIDAY)
+
+
+def test_last_week_on_a_friday_is_the_same_previous_mon_fri_regardless_of_call_day():
+    """last_week is anchored to the Monday of the CURRENT week, not the day
+    it's called on - Monday and Friday of the same week must resolve
+    identically."""
+    on_monday = resolve_date_preset("last_week", now=_now_on(NEXT_MONDAY))
+    on_friday = resolve_date_preset("last_week", now=_now_on(NEXT_FRIDAY))
+    assert on_monday == on_friday == (MONDAY, FRIDAY)
+
+
+def test_last_week_is_always_exactly_five_calendar_days():
+    start, end = resolve_date_preset("last_week", now=_now_on(WEDNESDAY))
+    assert (end - start).days == 4
+    assert start.weekday() == 0
+    assert end.weekday() == 4
+
+
+def test_this_week_and_last_week_take_no_db_session():
+    """Working Days Logic (Part C addendum) is explicit that this_week/
+    last_week must NOT live in working_days_service (which takes a Session) -
+    proven simply by every call above (and this one) passing no db argument
+    and using no db_session fixture."""
+    assert resolve_date_preset("this_week", now=_now_on(WEDNESDAY)) == (MONDAY, WEDNESDAY)
+    assert resolve_date_preset("last_week", now=_now_on(NEXT_MONDAY)) == (MONDAY, FRIDAY)
+
+
+@pytest.mark.parametrize("preset", ["this_week", "last_week"])
+def test_this_week_and_last_week_are_in_calendar_only_presets(preset):
+    """Regression guard: these two must be routed through resolve_date_preset
+    (this module), never through working_days_service - see
+    app/routers/reports.py get_date_preset's dispatch."""
+    from app.timezone_utils import CALENDAR_ONLY_PRESETS, DATE_PRESETS
+
+    assert preset in CALENDAR_ONLY_PRESETS
+    assert preset in DATE_PRESETS
+
+
+def test_working_day_presets_tuple_is_unchanged():
+    """Regression guard: WORKING_DAY_PRESETS (app/services/working_days_service.py)
+    must stay exactly ("yesterday", "last_7_days", "last_30_days") - this_week/
+    last_week must never be added there."""
+    from app.services.working_days_service import WORKING_DAY_PRESETS
+
+    assert WORKING_DAY_PRESETS == ("yesterday", "last_7_days", "last_30_days")

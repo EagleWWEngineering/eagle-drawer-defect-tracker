@@ -10,14 +10,36 @@ from app.errors import ValidationError
 
 _DISPLAY_TZ = ZoneInfo(get_settings().display_timezone)
 
-# The full set of valid Dashboard date-preset names. "today" and "month_to_date"
-# are calendar-only and resolved right here by resolve_date_preset(). "yesterday",
-# "last_7_days", and "last_30_days" are working-day-aware (Working Days Logic,
-# Part C addendum) and resolved by app/services/working_days_service.
-# resolve_working_day_preset() instead - this module stays pure/DB-free, so it
-# cannot compute those itself. See WORKING_DAY_PRESETS there.
-DATE_PRESETS = ("today", "yesterday", "last_7_days", "last_30_days", "month_to_date")
-CALENDAR_ONLY_PRESETS = ("today", "month_to_date")
+# The full set of valid Dashboard date-preset names, in the Dashboard's button
+# order (day presets, then week presets, then rolling-window presets, then
+# month): Today, Yesterday, This Week, Last Week, Last 7 Working Days, Last 30
+# Working Days, Month to Date.
+#
+# "today", "this_week", "last_week", and "month_to_date" are calendar-only and
+# resolved right here by resolve_date_preset(). "yesterday", "last_7_days", and
+# "last_30_days" are working-day-aware (Working Days Logic, Part C addendum)
+# and resolved by app/services/working_days_service.resolve_working_day_preset()
+# instead - this module stays pure/DB-free, so it cannot compute those itself.
+# See WORKING_DAY_PRESETS there.
+DATE_PRESETS = (
+    "today",
+    "yesterday",
+    "this_week",
+    "last_week",
+    "last_7_days",
+    "last_30_days",
+    "month_to_date",
+)
+CALENDAR_ONLY_PRESETS = ("today", "this_week", "last_week", "month_to_date")
+
+
+def _monday_of(d: dt.date) -> dt.date:
+    """Monday of the calendar week containing `d`. Pure calendar math, no
+    working-day awareness - kept local to this module (rather than imported
+    from app/services/brief_export_service.py's identical private helper) so
+    this module keeps taking no DB session and no dependency on the service
+    layer above it."""
+    return d - dt.timedelta(days=d.weekday())
 
 
 def to_display_string(value: dt.datetime | None) -> str | None:
@@ -57,6 +79,17 @@ def resolve_date_preset(preset: str, *, now: dt.datetime | None = None) -> tuple
     Preset definitions:
       - "today": the current date in DISPLAY_TIMEZONE.
       - "month_to_date": the 1st of the current month through today.
+      - "this_week": Monday of the current week through today (week-to-date -
+        NOT the full Mon-Fri, so it never includes days that haven't happened
+        yet). On a Monday this is a single-day range (start == end == today);
+        on a Saturday/Sunday it runs Monday through that weekend day - fine,
+        downstream working-day filtering (working_day_set /
+        omit_non_working_day_silently) already drops/greys out weekends and
+        holidays regardless of where a range came from.
+      - "last_week": the calendar week (Monday-Friday) immediately before the
+        week containing today - always exactly 5 calendar days, and the same
+        answer no matter which day of the current week it's called on (Monday
+        or Friday both resolve the same Mon-Fri from last week).
 
     "yesterday", "last_7_days", and "last_30_days" are NOT handled here as of the
     Working Days Logic (Part C) addendum - they're working-day-aware and require
@@ -73,6 +106,12 @@ def resolve_date_preset(preset: str, *, now: dt.datetime | None = None) -> tuple
         return today, today
     if preset == "month_to_date":
         return today.replace(day=1), today
+    if preset == "this_week":
+        return _monday_of(today), today
+    if preset == "last_week":
+        this_monday = _monday_of(today)
+        last_monday = this_monday - dt.timedelta(days=7)
+        return last_monday, last_monday + dt.timedelta(days=4)
     if preset in DATE_PRESETS:
         raise ValidationError(
             f"Preset {preset!r} is working-day-aware - call "

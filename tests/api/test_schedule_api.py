@@ -233,3 +233,28 @@ def test_date_preset_yesterday_and_last_n_days_are_working_day_aware(client):
         if preset == "yesterday":
             assert start == end
             assert start.weekday() < 5
+
+
+def test_date_preset_this_week_is_monday_through_today(client):
+    """Smoke test only - can't pin an exact date without controlling "today"
+    (this endpoint always resolves against the real current instant). Full
+    boundary coverage (Wednesday/Monday/Sunday) lives in
+    tests/unit/test_date_presets.py."""
+    resp = client.get("/api/v1/reports/date-preset", params={"preset": "this_week"})
+    assert resp.status_code == 200
+    body = resp.json()
+    start = dt.date.fromisoformat(body["start_date"])
+    end = dt.date.fromisoformat(body["end_date"])
+    assert start.weekday() == 0  # Monday
+    assert start <= end
+
+
+def test_date_preset_last_week_is_always_a_five_day_mon_fri_span(client):
+    resp = client.get("/api/v1/reports/date-preset", params={"preset": "last_week"})
+    assert resp.status_code == 200
+    body = resp.json()
+    start = dt.date.fromisoformat(body["start_date"])
+    end = dt.date.fromisoformat(body["end_date"])
+    assert start.weekday() == 0  # Monday
+    assert end.weekday() == 4  # Friday
+    assert (end - start).days == 4
