@@ -196,14 +196,21 @@ function renderCostTrendChart(canvas, points) {
 }
 
 /** Phase 6: Dashboard "Scheduled vs Completed" card - one pair of bars per day.
- * days: [{production_date, drawers_scheduled: int|null, drawers_inspected: int}].
- * Scheduled renders muted (grey), Completed/Inspected renders primary (blue),
- * per PROJECT_SPEC.md Phase 6 addendum 5b. A day with drawers_scheduled === null
- * (no daily_schedules row - unknown, never assumed 0) draws no Scheduled bar at
- * all and labels that slot "—" instead of "0" - the accompanying HTML table
- * (same rule as every other chart in this file) is what actually distinguishes
- * "unknown" from "a real zero" in text, since a 0-height bar looks the same
- * either way. */
+ * days: [{production_date, drawers_scheduled: int|null, drawers_inspected: int,
+ * is_working_day: bool}]. Scheduled renders muted (grey), Completed/Inspected
+ * renders primary (blue), per PROJECT_SPEC.md Phase 6 addendum 5b. A day with
+ * drawers_scheduled === null (no daily_schedules row - unknown, never assumed
+ * 0) draws no Scheduled bar at all and labels that slot "—" instead of "0" -
+ * the accompanying HTML table (same rule as every other chart in this file) is
+ * what actually distinguishes "unknown" from "a real zero" in text, since a
+ * 0-height bar looks the same either way.
+ *
+ * Working Days Logic (Part C addendum): a weekend day never reaches this
+ * function at all (the API drops it entirely). A weekday holiday/shutdown
+ * arrives with is_working_day: false and draws as one flat grey "no
+ * production" bar instead of the normal Scheduled/Completed pair - a blank gap
+ * would otherwise read as "the tracker is broken" rather than "nothing was
+ * scheduled that day". */
 function renderScheduleVsCompletedChart(canvas, days) {
   const width = Math.max(canvas.parentElement.clientWidth, days.length * 90);
   const height = 300;
@@ -237,30 +244,45 @@ function renderScheduleVsCompletedChart(canvas, days) {
   const barW = Math.min(28, slot * 0.32);
   const scheduledColor = "#9aa5b1";
   const completedColor = CHART_COLORS[0];
+  const noProductionColor = "#e3e6ea";
 
   days.forEach((d, i) => {
     const slotX = padding.left + i * slot + slot / 2;
 
-    if (d.drawers_scheduled !== null && d.drawers_scheduled !== undefined) {
-      const h = (d.drawers_scheduled / maxVal) * plotH;
-      ctx.fillStyle = scheduledColor;
-      ctx.fillRect(slotX - barW - 2, padding.top + plotH - h, barW, h);
-    }
-    const inspectedH = (d.drawers_inspected / maxVal) * plotH;
-    ctx.fillStyle = completedColor;
-    ctx.fillRect(slotX + 2, padding.top + plotH - inspectedH, barW, inspectedH);
+    if (d.is_working_day === false) {
+      // Weekday holiday/shutdown: one flat grey bar, no Scheduled/Completed
+      // split - a real absence of production, not missing data.
+      const flagH = Math.max(6, plotH * 0.06);
+      ctx.fillStyle = noProductionColor;
+      ctx.fillRect(slotX - barW, padding.top + plotH - flagH, barW * 2, flagH);
+      ctx.fillStyle = "#5b6472";
+      ctx.font = "italic 10px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("no production", slotX, padding.top + plotH - flagH - 6);
+    } else {
+      if (d.drawers_scheduled !== null && d.drawers_scheduled !== undefined) {
+        const h = (d.drawers_scheduled / maxVal) * plotH;
+        ctx.fillStyle = scheduledColor;
+        ctx.fillRect(slotX - barW - 2, padding.top + plotH - h, barW, h);
+      }
+      const inspectedH = (d.drawers_inspected / maxVal) * plotH;
+      ctx.fillStyle = completedColor;
+      ctx.fillRect(slotX + 2, padding.top + plotH - inspectedH, barW, inspectedH);
 
-    ctx.fillStyle = "#1a1d21";
-    ctx.font = "11px sans-serif";
-    ctx.textAlign = "center";
-    const scheduledLabel = d.drawers_scheduled === null || d.drawers_scheduled === undefined ? "—" : String(d.drawers_scheduled);
-    ctx.fillText(scheduledLabel, slotX - barW / 2 - 2, padding.top + plotH - Math.max(0, (d.drawers_scheduled || 0) / maxVal * plotH) - 6);
-    ctx.fillText(String(d.drawers_inspected), slotX + barW / 2 + 2, padding.top + plotH - inspectedH - 6);
+      ctx.fillStyle = "#1a1d21";
+      ctx.font = "11px sans-serif";
+      ctx.textAlign = "center";
+      const scheduledLabel = d.drawers_scheduled === null || d.drawers_scheduled === undefined ? "—" : String(d.drawers_scheduled);
+      ctx.fillText(scheduledLabel, slotX - barW / 2 - 2, padding.top + plotH - Math.max(0, (d.drawers_scheduled || 0) / maxVal * plotH) - 6);
+      ctx.fillText(String(d.drawers_inspected), slotX + barW / 2 + 2, padding.top + plotH - inspectedH - 6);
+    }
 
     ctx.save();
     ctx.translate(slotX, padding.top + plotH + 10);
     ctx.rotate(-Math.PI / 6);
+    ctx.font = "11px sans-serif";
     ctx.textAlign = "right";
+    ctx.fillStyle = d.is_working_day === false ? "#9aa5b1" : "#1a1d21";
     ctx.fillText(d.production_date, 0, 0);
     ctx.restore();
   });

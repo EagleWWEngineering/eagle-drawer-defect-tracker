@@ -457,6 +457,11 @@ th { background: #f8f9fb; font-size: 0.78rem; text-transform: uppercase; color: 
 tr.clickable { cursor: pointer; }
 tr.clickable:hover { background: #f5f7ff; }
 
+/* Working Days Logic (Part C addendum): a weekday holiday/shutdown row on the
+   Scheduled vs Completed table - greyed and italic, not a blank/broken-looking
+   row (see app/templates/dashboard.html and app/static/js/charts.js). */
+tr.row-no-production { color: var(--color-muted); font-style: italic; }
+
 /* ---------------------------------------------------------------------- */
 /* Filters                                                                 */
 /* ---------------------------------------------------------------------- */

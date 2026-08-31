@@ -12,7 +12,7 @@ import datetime as dt
 
 import pytest
 
-from app.errors import ServiceError
+from app.errors import ServiceError, ValidationError
 from app.models import DailyProductionSummary
 from app.services import schedule_service, working_days_service
 
@@ -200,3 +200,84 @@ def test_working_day_set_reflects_manual_saturday_and_holiday_weekday(db_session
 
 def test_working_day_set_empty_range_when_start_after_end(db_session):
     assert working_days_service.working_day_set(db_session, FRIDAY, MONDAY) == set()
+
+
+# ---------------------------------------------------------------------------
+# resolve_working_day_preset: "yesterday" / "last_7_days" / "last_30_days"
+# ---------------------------------------------------------------------------
+
+
+def test_preset_yesterday_from_a_monday_is_the_previous_friday(db_session):
+    schedule_service.upsert_schedule(
+        db_session, production_date=FRIDAY, drawers_scheduled=400, source="sync"
+    )
+    start, end = working_days_service.resolve_working_day_preset(
+        db_session, "yesterday", today=NEXT_MONDAY
+    )
+    assert start == end == FRIDAY
+
+
+def test_preset_last_7_days_ending_on_a_working_day_counts_today(db_session):
+    """Today (a Thursday, a working day with no rows - Mon-Fri fallback) counts
+    as one of the 7 - so start is 6 working days before it."""
+    thursday = dt.date(2026, 8, 20)  # a working day (no rows, weekday fallback)
+    start, end = working_days_service.resolve_working_day_preset(
+        db_session, "last_7_days", today=thursday
+    )
+    assert end == thursday
+    # 6 working days back from Thursday 8/20, skipping the weekend in between:
+    # Wed 8/19, Tue 8/18, Mon 8/17, Fri 8/14, Thu 8/13, Wed 8/12.
+    assert start == dt.date(2026, 8, 12)
+
+
+def test_preset_last_7_days_ending_on_a_non_working_day_does_not_count_today(db_session):
+    """Today is the Saturday, with no rows - not a working day. It still ends
+    the range (end_date == today), but doesn't count toward the 7."""
+    start, end = working_days_service.resolve_working_day_preset(
+        db_session, "last_7_days", today=SATURDAY
+    )
+    assert end == SATURDAY
+    # 7 working days strictly before Saturday 8/22: Fri 8/21 back through
+    # Thu 8/13.
+    assert start == dt.date(2026, 8, 13)
+
+
+def test_preset_last_30_days_returns_a_wider_window_than_last_7(db_session):
+    start_7, _ = working_days_service.resolve_working_day_preset(
+        db_session, "last_7_days", today=NEXT_MONDAY
+    )
+    start_30, end_30 = working_days_service.resolve_working_day_preset(
+        db_session, "last_30_days", today=NEXT_MONDAY
+    )
+    assert end_30 == NEXT_MONDAY
+    assert start_30 < start_7
+
+
+def test_preset_last_7_days_baseline_without_a_holiday(db_session):
+    """6 working days strictly before Monday 8/24, no holidays: Fri 8/21, Thu
+    8/20, Wed 8/19, Tue 8/18, Mon 8/17, Fri 8/14 - the 6th is 8/14."""
+    start, end = working_days_service.resolve_working_day_preset(
+        db_session, "last_7_days", today=NEXT_MONDAY
+    )
+    assert end == NEXT_MONDAY
+    assert start == dt.date(2026, 8, 14)
+
+
+def test_preset_last_7_days_excludes_a_holiday_from_the_count(db_session):
+    """Same window as the baseline above, except Friday 8/21 was a holiday
+    (scheduled 0, inspected 0) - it must not count as one of the 7 working days,
+    so the window reaches one calendar day further back (8/13, not 8/14)."""
+    schedule_service.upsert_schedule(
+        db_session, production_date=FRIDAY, drawers_scheduled=0, source="sync"
+    )
+    start, end = working_days_service.resolve_working_day_preset(
+        db_session, "last_7_days", today=NEXT_MONDAY
+    )
+    assert end == NEXT_MONDAY
+    assert start == dt.date(2026, 8, 13)
+
+
+def test_resolve_working_day_preset_rejects_a_calendar_only_preset(db_session):
+    with pytest.raises(ValidationError) as exc_info:
+        working_days_service.resolve_working_day_preset(db_session, "today", today=MONDAY)
+    assert exc_info.value.field == "preset"

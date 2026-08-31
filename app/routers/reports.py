@@ -22,23 +22,35 @@ from app.schemas import (
     WorkOrderHistoryOut,
     defect_case_to_out,
 )
-from app.services import metrics_service, schedule_service, settings_service
+from app.services import metrics_service, schedule_service, settings_service, working_days_service
 from app.services.defect_service import DIRECT_CLOSE_SOURCE_STATUSES
-from app.timezone_utils import resolve_date_preset
+from app.timezone_utils import resolve_date_preset, today_in_display_timezone
 
 router = APIRouter(prefix="/api/v1/reports", tags=["reports"])
 rework_router = APIRouter(prefix="/api/v1", tags=["rework-queue"])
 
 
 @router.get("/date-preset", response_model=DatePresetOut)
-def get_date_preset(preset: str) -> DatePresetOut:
+def get_date_preset(preset: str, db: Session = Depends(get_db)) -> DatePresetOut:
     """Resolve one of the Dashboard's date-range preset buttons (Today/Yesterday/
-    Last 7 days/Last 30 days/Month to date) to concrete {start_date, end_date},
-    in DISPLAY_TIMEZONE - see app/timezone_utils.py resolve_date_preset(). The
-    dashboard calls this rather than computing the boundary itself in JavaScript,
-    so there is exactly one implementation of "what does 'Yesterday' mean" to get
-    right and test."""
-    start_date, end_date = resolve_date_preset(preset)
+    Last 7 working days/Last 30 working days/Month to date) to concrete
+    {start_date, end_date}, in DISPLAY_TIMEZONE. The dashboard calls this rather
+    than computing the boundary itself in JavaScript, so there is exactly one
+    implementation of "what does 'Yesterday' mean" to get right and test.
+
+    Working Days Logic (Part C addendum): "Yesterday"/"Last 7 days"/"Last 30
+    days" are working-day-aware (a Monday's "Yesterday" is Friday, not Sunday) -
+    those go through working_days_service.resolve_working_day_preset(), the only
+    place in this router that needs a DB session for date-preset resolution.
+    "Today"/"Month to date" stay purely calendar-based via
+    app/timezone_utils.py resolve_date_preset()."""
+    if preset in working_days_service.WORKING_DAY_PRESETS:
+        today = today_in_display_timezone()
+        start_date, end_date = working_days_service.resolve_working_day_preset(
+            db, preset, today=today
+        )
+    else:
+        start_date, end_date = resolve_date_preset(preset)
     return DatePresetOut(start_date=start_date, end_date=end_date)
 
 
@@ -231,22 +243,42 @@ def get_trend(
         )
 
     all_labels = sorted(set(events_by_bucket) | set(inspected_by_bucket) | set(scheduled_by_bucket))
-    return [
-        TrendPointOut(
-            period=label,
-            defect_events=events_by_bucket.get(label, 0),
-            drawers_inspected=inspected_by_bucket.get(label, 0),
-            unique_drawers_rejected=rejected_by_bucket.get(label, 0),
-            internal_rework_cost=round(rework_cost_by_bucket.get(label, 0.0), 2),
-            cost_avoided=round(cost_avoided_by_bucket.get(label, 0.0), 2),
-            drawers_scheduled=scheduled_by_bucket.get(label),
-            schedule_attainment_pct=metrics_service.compute_schedule_attainment_pct(
-                total_inspected=inspected_by_bucket.get(label, 0),
-                total_scheduled=scheduled_by_bucket.get(label),
-            ),
+
+    # Working Days Logic (Part C addendum): only applies to day-level buckets
+    # over a bounded range - a "week" label isn't itself a date, and an
+    # unbounded range has no fixed window to bulk-fetch working days for. Both
+    # cases fall through with is_working_day left None on every point (see
+    # TrendPointOut) - unchanged trend behavior, no flagging/omission.
+    working_days: set[dt.date] | None = None
+    if group_by == "day" and start_date is not None and end_date is not None:
+        working_days = working_days_service.working_day_set(db, start_date, end_date)
+
+    points: list[TrendPointOut] = []
+    for label in all_labels:
+        is_working: bool | None = None
+        if working_days is not None:
+            day = dt.date.fromisoformat(label)
+            is_working = day in working_days
+            if metrics_service.omit_non_working_day_silently(day, is_working):
+                continue  # weekend with no working-day override: drop silently
+
+        points.append(
+            TrendPointOut(
+                period=label,
+                defect_events=events_by_bucket.get(label, 0),
+                drawers_inspected=inspected_by_bucket.get(label, 0),
+                unique_drawers_rejected=rejected_by_bucket.get(label, 0),
+                internal_rework_cost=round(rework_cost_by_bucket.get(label, 0.0), 2),
+                cost_avoided=round(cost_avoided_by_bucket.get(label, 0.0), 2),
+                drawers_scheduled=scheduled_by_bucket.get(label),
+                schedule_attainment_pct=metrics_service.compute_schedule_attainment_pct(
+                    total_inspected=inspected_by_bucket.get(label, 0),
+                    total_scheduled=scheduled_by_bucket.get(label),
+                ),
+                is_working_day=is_working,
+            )
         )
-        for label in all_labels
-    ]
+    return points
 
 
 @router.get("/work-orders/{work_order_number}", response_model=WorkOrderHistoryOut)

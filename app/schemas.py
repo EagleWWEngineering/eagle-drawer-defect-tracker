@@ -431,11 +431,19 @@ class DailyScheduleListOut(BaseModel):
 class ScheduleAttainmentDayOut(BaseModel):
     """One bar-pair on the Dashboard's Scheduled vs Completed chart.
     drawers_scheduled is None (renders as "—") when no daily_schedules row exists
-    for that date - never 0, which would mean "the brief scheduled zero drawers"."""
+    for that date - never 0, which would mean "the brief scheduled zero drawers".
+
+    is_working_day (Working Days Logic Part C addendum): False only for a
+    weekday holiday/shutdown (weekends never appear here at all - they're
+    omitted from the response entirely, see
+    app/services/metrics_service.py build_schedule_vs_completed) - the template
+    renders that day's bar greyed out and labelled "no production" instead of a
+    silent blank."""
 
     production_date: dt.date
     drawers_scheduled: int | None
     drawers_inspected: int
+    is_working_day: bool
 
 
 class ScheduleAttainmentOut(BaseModel):
@@ -511,6 +519,14 @@ class TrendPointOut(BaseModel):
     # docstring for why a real "scheduled zero" must stay distinguishable.
     drawers_scheduled: int | None = None
     schedule_attainment_pct: float | None = None
+    # Working Days Logic (Part C addendum): only meaningful for group_by="day"
+    # with both start_date and end_date given - False for a weekday
+    # holiday/shutdown bucket (a weekend bucket is dropped from the response
+    # entirely, never appears here at all). None when the working-day status of
+    # this bucket isn't determinable (an unbounded date range, or group_by=
+    # "week" - a week isn't itself working/non-working) - the template should
+    # only grey out a point when this is explicitly False.
+    is_working_day: bool | None = None
 
 
 class ReworkQueueItemOut(BaseModel):
@@ -761,6 +777,56 @@ class RelayConnectionStatusOut(BaseModel):
     @property
     def relay_last_seen_at_local(self) -> str | None:
         return to_display_string(self.relay_last_seen_at)
+
+
+# ---------------------------------------------------------------------------
+# Label-scan OCR diagnostic (Phase 8a) — see app/services/ocr_service.py.
+# Read-only: this response is never persisted anywhere server-side.
+# ---------------------------------------------------------------------------
+
+
+class ScanLineOut(BaseModel):
+    """One normalised OCR text line - identical shape regardless of which
+    provider (Azure or Google) produced it. See
+    app/services/ocr_service.py normalize_azure_response/normalize_google_response."""
+
+    text: str
+    x: float
+    y: float
+
+
+class ScanDimensionsOut(BaseModel):
+    height: float
+    width: float
+    depth: float
+
+
+class ScanCornerBlockOut(BaseModel):
+    thickness: str
+    height: float
+
+
+class ScanDiagnosticOut(BaseModel):
+    """POST /api/v1/scan/diagnose - see app/services/ocr_service.py diagnose_label().
+    Every field below may be null; a null field is a normal, expected outcome for
+    a real shop-floor label read, not an error (see validator_skipped)."""
+
+    order_number: str | None
+    quantity: int | None
+    ship_code: str | None
+    line_label: str | None
+    line_label_alternates: list[str]
+    line_label_used_centroid_fallback: bool
+    dimensions: ScanDimensionsOut | None
+    thickness: str | None
+    corner_block: ScanCornerBlockOut | None
+    # Human-readable failure descriptions - see ocr_service.validate_parsed_label.
+    validator_failures: list[str]
+    # Names of checks that could not run because a needed field never parsed -
+    # never conflated with a passing check.
+    validator_skipped: list[str]
+    raw_lines: list[ScanLineOut]
+    elapsed_ms: float
 
 
 # ---------------------------------------------------------------------------

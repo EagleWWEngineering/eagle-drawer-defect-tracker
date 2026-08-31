@@ -210,3 +210,75 @@ def test_trend_grouped_by_week_buckets_into_iso_weeks(client, master_data):
     assert len(trend) == 1
     assert trend[0]["period"] == "2026-W30"
     assert trend[0]["defect_events"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Working Days Logic (Part C addendum): trend omits/flags non-working days
+# ---------------------------------------------------------------------------
+
+
+def test_trend_by_day_omits_a_weekend_with_no_working_day_override(client, master_data):
+    """2026-07-24 is a Friday, 7/25 a Saturday, 7/27 a Monday. A defect case
+    logged on the Saturday, with no daily_schedules/daily_production_summaries
+    row for it, doesn't make it a working day on its own - the bucket is
+    dropped from the trend entirely, same as any other plain weekend."""
+    _create_case(
+        client, master_data, "Sanding / Surface", wo="WO-D1", qty=1, production_date="2026-07-24"
+    )
+    _create_case(client, master_data, "Other", wo="WO-D2", qty=5, production_date="2026-07-25")
+    _create_case(client, master_data, "Other", wo="WO-D3", qty=1, production_date="2026-07-27")
+
+    trend = client.get(
+        "/api/v1/reports/trend",
+        params={"start_date": "2026-07-24", "end_date": "2026-07-27", "group_by": "day"},
+    ).json()
+
+    periods = [p["period"] for p in trend]
+    assert "2026-07-25" not in periods  # the Saturday - dropped
+    assert "2026-07-24" in periods
+    assert "2026-07-27" in periods
+    assert all(p["is_working_day"] is True for p in trend)
+
+
+def test_trend_by_day_keeps_and_flags_a_holiday_weekday(client, master_data):
+    """2026-07-23 (Thursday) is a real holiday: the brief scheduled 0 and
+    nothing was inspected. It must stay in the trend (a defect case was still
+    logged that day), marked is_working_day=False, not silently dropped like a
+    weekend."""
+    client.put(
+        "/api/v1/daily-production/schedule",
+        json={"production_date": "2026-07-23", "drawers_scheduled": 0},
+    )
+    _create_case(
+        client, master_data, "Sanding / Surface", wo="WO-H1", qty=2, production_date="2026-07-23"
+    )
+    _create_case(client, master_data, "Other", wo="WO-H2", qty=1, production_date="2026-07-24")
+
+    trend = client.get(
+        "/api/v1/reports/trend",
+        params={"start_date": "2026-07-23", "end_date": "2026-07-24", "group_by": "day"},
+    ).json()
+
+    by_period = {p["period"]: p for p in trend}
+    assert by_period["2026-07-23"]["is_working_day"] is False
+    assert by_period["2026-07-23"]["defect_events"] == 2  # still counted, just flagged
+    assert by_period["2026-07-24"]["is_working_day"] is True
+
+
+def test_trend_week_grouping_leaves_is_working_day_unset(client, master_data):
+    """Working-day flagging only applies at day granularity - a week isn't
+    itself working/non-working."""
+    _create_case(
+        client, master_data, "Sanding / Surface", wo="WO-W3", qty=1, production_date="2026-07-20"
+    )
+    trend = client.get(
+        "/api/v1/reports/trend",
+        params={"start_date": "2026-07-20", "end_date": "2026-07-21", "group_by": "week"},
+    ).json()
+    assert all(p["is_working_day"] is None for p in trend)
+
+
+def test_trend_with_no_date_bounds_leaves_is_working_day_unset(client, master_data):
+    _create_case(client, master_data, "Sanding / Surface", wo="WO-U1", qty=1)
+    trend = client.get("/api/v1/reports/trend", params={"group_by": "day"}).json()
+    assert all(p["is_working_day"] is None for p in trend)

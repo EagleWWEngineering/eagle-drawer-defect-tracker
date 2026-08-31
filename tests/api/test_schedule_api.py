@@ -9,6 +9,8 @@ addendum.
 
 from __future__ import annotations
 
+import datetime as dt
+
 # ---------------------------------------------------------------------------
 # GET/PUT /api/v1/daily-production/schedule
 # ---------------------------------------------------------------------------
@@ -115,7 +117,11 @@ def test_schedule_attainment_two_shift_day_sums_before_comparing_to_schedule(cli
     assert body["days"][0]["drawers_inspected"] == 250
 
 
-def test_schedule_attainment_zero_scheduled_is_na(client):
+def test_schedule_attainment_zero_scheduled_with_nothing_inspected_is_a_holiday(client):
+    """Working Days Logic (Part C addendum): scheduled 0 + nothing inspected on a
+    weekday is a holiday, not a working day - it's flagged is_working_day=False
+    and excluded from the totals entirely (None, not a real 0), same as any
+    other day with no daily_schedules row at all."""
     client.put(
         "/api/v1/daily-production/schedule",
         json={"production_date": "2026-08-20", "drawers_scheduled": 0},
@@ -125,8 +131,35 @@ def test_schedule_attainment_zero_scheduled_is_na(client):
         params={"start_date": "2026-08-20", "end_date": "2026-08-20"},
     )
     body = resp.json()
-    assert body["total_scheduled"] == 0
+    assert body["total_scheduled"] is None
     assert body["attainment_pct"] is None
+    assert body["days"][0]["is_working_day"] is False
+
+
+def test_schedule_attainment_zero_scheduled_with_inspections_is_a_real_zero(client):
+    """Same scheduled-0 entry, but drawers WERE inspected that day - a working
+    day after all (not a holiday), so the real 0 counts in total_scheduled."""
+    client.put(
+        "/api/v1/daily-production/schedule",
+        json={"production_date": "2026-08-20", "drawers_scheduled": 0},
+    )
+    client.put(
+        "/api/v1/daily-production/2026-08-20",
+        json={
+            "shift": "Day",
+            "drawers_inspected": 12,
+            "drawers_rejected_unique": 0,
+            "drawers_reworked": 0,
+        },
+    )
+    resp = client.get(
+        "/api/v1/daily-production/schedule-attainment",
+        params={"start_date": "2026-08-20", "end_date": "2026-08-20"},
+    )
+    body = resp.json()
+    assert body["total_scheduled"] == 0
+    assert body["attainment_pct"] is None  # 0 scheduled -> still N/A, not a divide-by-zero
+    assert body["days"][0]["is_working_day"] is True
 
 
 def test_schedule_attainment_unknown_schedule_is_na(client):
@@ -183,3 +216,20 @@ def test_date_preset_today_returns_a_single_day_range(client):
 def test_date_preset_unknown_preset_returns_400(client):
     resp = client.get("/api/v1/reports/date-preset", params={"preset": "bogus"})
     assert resp.status_code == 400
+
+
+def test_date_preset_yesterday_and_last_n_days_are_working_day_aware(client):
+    """Smoke test only - can't pin an exact date without controlling "today",
+    but every one of these must be a real weekday (Working Days Logic Part C
+    addendum), never a Saturday/Sunday, whatever today happens to be. Full
+    boundary coverage lives in tests/unit/test_working_days_service.py."""
+    for preset in ("yesterday", "last_7_days", "last_30_days"):
+        resp = client.get("/api/v1/reports/date-preset", params={"preset": preset})
+        assert resp.status_code == 200
+        body = resp.json()
+        start = dt.date.fromisoformat(body["start_date"])
+        end = dt.date.fromisoformat(body["end_date"])
+        assert start <= end
+        if preset == "yesterday":
+            assert start == end
+            assert start.weekday() < 5

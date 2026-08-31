@@ -19,7 +19,13 @@ from app.schemas import (
     DailySummarySuggestionOut,
     ScheduleAttainmentOut,
 )
-from app.services import audit_service, defect_service, metrics_service, schedule_service
+from app.services import (
+    audit_service,
+    defect_service,
+    metrics_service,
+    schedule_service,
+    working_days_service,
+)
 
 router = APIRouter(prefix="/api/v1/daily-production", tags=["daily-production"])
 
@@ -102,11 +108,13 @@ def get_schedule_attainment(
             inspected_by_date.get(row.production_date, 0) + row.drawers_inspected
         )
 
+    working_days = working_days_service.working_day_set(db, start_date, end_date)
     result = metrics_service.build_schedule_vs_completed(
         start_date=start_date,
         end_date=end_date,
         scheduled_by_date=scheduled_by_date,
         inspected_by_date=inspected_by_date,
+        working_days=working_days,
     )
     return ScheduleAttainmentOut(**result)
 

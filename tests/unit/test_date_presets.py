@@ -25,23 +25,18 @@ def test_today_resolves_in_display_timezone_not_utc():
     assert resolve_date_preset("today", now=NEAR_UTC_BOUNDARY) == (EXPECTED_TODAY, EXPECTED_TODAY)
 
 
-def test_yesterday_resolves_in_display_timezone_not_utc():
-    expected = dt.date(2026, 8, 20)
-    assert resolve_date_preset("yesterday", now=NEAR_UTC_BOUNDARY) == (expected, expected)
-
-
-def test_last_7_days_includes_today_and_is_inclusive():
-    start, end = resolve_date_preset("last_7_days", now=NEAR_UTC_BOUNDARY)
-    assert end == EXPECTED_TODAY
-    assert start == dt.date(2026, 8, 15)
-    assert (end - start).days == 6  # 7 calendar days inclusive
-
-
-def test_last_30_days_includes_today_and_is_inclusive():
-    start, end = resolve_date_preset("last_30_days", now=NEAR_UTC_BOUNDARY)
-    assert end == EXPECTED_TODAY
-    assert start == dt.date(2026, 7, 23)
-    assert (end - start).days == 29
+@pytest.mark.parametrize("preset", ["yesterday", "last_7_days", "last_30_days"])
+def test_working_day_presets_are_no_longer_resolved_here(preset):
+    """Working Days Logic (Part C addendum): these three presets moved to
+    app/services/working_days_service.resolve_working_day_preset() (see
+    tests/unit/test_working_days_service.py), since resolving them correctly
+    requires a database session that this module deliberately never takes.
+    Calling them here is a clear, actionable error, not silent wrong-answer
+    calendar math."""
+    with pytest.raises(ValidationError) as exc_info:
+        resolve_date_preset(preset, now=NEAR_UTC_BOUNDARY)
+    assert exc_info.value.field == "preset"
+    assert "working_days_service" in exc_info.value.message
 
 
 def test_month_to_date_starts_on_the_1st():

@@ -23,8 +23,8 @@
   <div class="btn-row" style="margin-top:0.75rem;">
     <button type="button" class="secondary" data-range="today">Today</button>
     <button type="button" class="secondary" data-range="yesterday">Yesterday</button>
-    <button type="button" class="secondary" data-range="last_7_days">Last 7 Days</button>
-    <button type="button" class="secondary" data-range="last_30_days">Last 30 Days</button>
+    <button type="button" class="secondary" data-range="last_7_days">Last 7 Working Days</button>
+    <button type="button" class="secondary" data-range="last_30_days">Last 30 Working Days</button>
     <button type="button" class="secondary" data-range="month_to_date">Month to Date</button>
   </div>
 </section>
@@ -242,12 +242,17 @@ async function loadScheduleCard(range) {
 
   const tbody = document.querySelector("#schedule-table tbody");
   tbody.innerHTML = result.days
-    .map(
-      (d) => `<tr>
-        <td>${d.production_date}</td>
-        <td>${d.drawers_scheduled === null ? "—" : d.drawers_scheduled}</td>
-        <td>${d.drawers_inspected}</td>
-      </tr>`
+    .map((d) =>
+      d.is_working_day === false
+        ? `<tr class="row-no-production">
+            <td>${d.production_date} (no production)</td>
+            <td colspan="2">No drawers scheduled that day - holiday/shutdown.</td>
+          </tr>`
+        : `<tr>
+            <td>${d.production_date}</td>
+            <td>${d.drawers_scheduled === null ? "—" : d.drawers_scheduled}</td>
+            <td>${d.drawers_inspected}</td>
+          </tr>`
     )
     .join("") || `<tr><td colspan="3">No dates in the selected range.</td></tr>`;
 }

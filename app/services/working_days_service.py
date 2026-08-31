@@ -28,13 +28,18 @@ import datetime as dt
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.errors import ServiceError
+from app.errors import ServiceError, ValidationError
 from app.models import DailyProductionSummary, DailySchedule
 
 # Cap for walk_back_working_days' backward search - guards against an infinite
 # loop on a pathological all-weekend/all-holiday stretch. 60 calendar days is
 # ~8-9 weeks, far more than any realistic shutdown.
 _MAX_WALK_BACK_DAYS = 60
+
+# The Dashboard date presets that need working-day awareness (as opposed to
+# app/timezone_utils.py's CALENDAR_ONLY_PRESETS) - see resolve_working_day_preset
+# below and app/timezone_utils.py DATE_PRESETS for the full preset name list.
+WORKING_DAY_PRESETS = ("yesterday", "last_7_days", "last_30_days")
 
 
 def _is_working_day_from_values(day: dt.date, scheduled: int | None, inspected: int) -> bool:
@@ -142,3 +147,38 @@ def previous_working_day(db: Session, d: dt.date) -> dt.date:
     """Thin alias for walk_back_working_days(db, d, 1) - reads better at call
     sites that only ever want "the one before this"."""
     return walk_back_working_days(db, d, 1)
+
+
+def resolve_working_day_preset(
+    db: Session, preset: str, *, today: dt.date
+) -> tuple[dt.date, dt.date]:
+    """(start_date, end_date), both inclusive, for one of WORKING_DAY_PRESETS.
+    `today` is the caller-resolved "today in DISPLAY_TIMEZONE" (see
+    app/timezone_utils.py today_in_display_timezone()) - this module never
+    computes timezone boundaries itself, only working-day ones.
+
+    Preset definitions:
+      - "yesterday": the previous WORKING day (Monday -> Friday; Thursday if
+        Friday was a holiday).
+      - "last_7_days" / "last_30_days": the trailing 7 / 30 WORKING days,
+        through today - end_date is always `today` (matching how the old
+        calendar presets always ran through today), start_date is walked back
+        far enough that exactly 7 (or 30) working days fall in [start, today],
+        counting today itself if today is a working day.
+
+    Raises ValidationError for any other preset name (including the
+    calendar-only ones - those go through timezone_utils.resolve_date_preset).
+    """
+    if preset == "yesterday":
+        d = previous_working_day(db, today)
+        return d, d
+    if preset in ("last_7_days", "last_30_days"):
+        n = 7 if preset == "last_7_days" else 30
+        # today counts as one of the n working days if it is one itself.
+        n_before_today = n - 1 if is_working_day(db, today) else n
+        start = walk_back_working_days(db, today, n_before_today)
+        return start, today
+    raise ValidationError(
+        f"Unknown working-day preset {preset!r} - expected one of {WORKING_DAY_PRESETS}.",
+        field="preset",
+    )

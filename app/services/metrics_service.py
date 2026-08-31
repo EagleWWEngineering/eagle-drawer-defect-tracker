@@ -193,40 +193,75 @@ def compute_schedule_attainment_pct(
     return round_rate((total_inspected / total_scheduled) * 100)
 
 
+def omit_non_working_day_silently(production_date: dt.date, is_working: bool) -> bool:
+    """Working Days Logic (Part C addendum): the one place that decides which
+    non-working days vanish from a chart entirely versus which stay (flagged).
+    Weekend non-working days are omitted silently - everyone knows the plant is
+    closed. Weekday non-working days (holidays/shutdowns) are kept, marked
+    is_working_day=False, so a blank weekday doesn't read as "the tracker is
+    broken". One helper, so this distinction can be flipped later without
+    hunting through every chart/template that renders a day range."""
+    return (not is_working) and production_date.weekday() >= 5
+
+
 def build_schedule_vs_completed(
     *,
     start_date: dt.date,
     end_date: dt.date,
     scheduled_by_date: dict[dt.date, int],
     inspected_by_date: dict[dt.date, int],
+    working_days: set[dt.date],
 ) -> dict:
     """Pure function behind the Dashboard's Scheduled vs Completed card
-    (PROJECT_SPEC.md Phase 6 addendum 5b): one row per calendar day in
-    [start_date, end_date] inclusive, pairing that day's known schedule (None if
-    no daily_schedules row - never 0, a real "scheduled zero" fact must stay
-    distinguishable) with drawers_inspected already summed across every shift
-    that date (0 if no DailyProductionSummary rows exist for it - "the gap is
-    exactly the signal Rodolfo wants to see"). Also returns the range totals and
-    the Schedule Attainment % tile, computed from those same totals so the card
-    and the tile can never disagree.
+    (PROJECT_SPEC.md Phase 6 addendum 5b): one row per WORKING day in
+    [start_date, end_date] inclusive (Working Days Logic Part C addendum -
+    `working_days` is the caller-fetched set from
+    app/services/working_days_service.working_day_set for this exact range),
+    pairing that day's known schedule (None if no daily_schedules row - never 0,
+    a real "scheduled zero" fact must stay distinguishable) with
+    drawers_inspected already summed across every shift that date (0 if no
+    DailyProductionSummary rows exist for it - "the gap is exactly the signal
+    Rodolfo wants to see"). Also returns the range totals and the Schedule
+    Attainment % tile, computed from those same totals so the card and the tile
+    can never disagree.
 
-    total_scheduled is the sum of only the KNOWN days' figures - None if not a
-    single day in the range has a daily_schedules row at all, distinct from a
-    real total of 0.
+    Weekend non-working days are dropped from `days` entirely (see
+    omit_non_working_day_silently) - a Friday-to-Monday chart needs no explanation. Weekday
+    non-working days (holidays/shutdowns) stay in `days` with
+    is_working_day=False so the template can grey them out instead of showing an
+    unexplained blank bar, but never contribute to the totals/attainment %
+    (narrowing "computed over working days only" - the existing rule that a
+    day with no daily_schedules row is excluded from the denominator, never
+    treated as a scheduled zero, is otherwise unchanged).
+
+    total_scheduled is the sum of only the KNOWN working days' figures - None if
+    not a single working day in the range has a daily_schedules row at all,
+    distinct from a real total of 0.
     """
     days: list[dict] = []
     total_scheduled: int | None = None
     total_inspected = 0
     day = start_date
     while day <= end_date:
+        is_working = day in working_days
+        if omit_non_working_day_silently(day, is_working):
+            day += dt.timedelta(days=1)
+            continue
+
         scheduled = scheduled_by_date.get(day)
         inspected = inspected_by_date.get(day, 0)
         days.append(
-            {"production_date": day, "drawers_scheduled": scheduled, "drawers_inspected": inspected}
+            {
+                "production_date": day,
+                "drawers_scheduled": scheduled,
+                "drawers_inspected": inspected,
+                "is_working_day": is_working,
+            }
         )
-        if scheduled is not None:
-            total_scheduled = (total_scheduled or 0) + scheduled
-        total_inspected += inspected
+        if is_working:
+            if scheduled is not None:
+                total_scheduled = (total_scheduled or 0) + scheduled
+            total_inspected += inspected
         day += dt.timedelta(days=1)
 
     return {
