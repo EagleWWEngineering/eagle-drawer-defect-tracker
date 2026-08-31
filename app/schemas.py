@@ -797,12 +797,20 @@ class BriefLastProductionDayOut(BaseModel):
     brief_export_service.build_last_production_day. scheduled_per_tracker is
     this app's own daily_schedules figure for that date, advisory only (see
     that same function's docstring for why an attainment % is never computed
-    here) - None if no daily_schedules row exists."""
+    here) - None if no daily_schedules row exists.
+
+    cases/defect_events (Part 1 addendum, for the brief's "Yesterday's result"
+    fourth tile) come from DefectCase, not daily_production_summaries, and are
+    DELIBERATELY DECOUPLED from entered/inspected - entered=False never implies
+    these are null, and inspected=None can coexist with a real, nonzero cases
+    count. A day with genuinely no cases is 0/0 - real zeros, never null."""
 
     date: dt.date
     entered: bool
     inspected: int | None
     scheduled_per_tracker: int | None
+    cases: int
+    defect_events: int
 
 
 class BriefWeekOut(BaseModel):

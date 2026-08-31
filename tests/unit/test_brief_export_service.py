@@ -114,6 +114,108 @@ def test_last_production_day_two_shifts_summed(db_session):
     assert result["inspected"] == 390
 
 
+def test_last_production_day_cases_and_defect_events_for_that_single_date(
+    db_session, stations, categories
+):
+    """Part 1: cases/defect_events reflect DefectCase rows on the resolved date
+    only - via the same _case_and_event_counts helper build_week_summary
+    uses."""
+    _add_summary(db_session, FRIDAY, drawers_inspected=390)
+    _make_case(
+        db_session,
+        stations,
+        categories,
+        production_date=FRIDAY,
+        wo="WO-1",
+        category_counts={"Sanding / Surface": 3, "Dado / Bottom Groove": 1},
+    )
+    # A case on a different date must not leak into Friday's figures.
+    _make_case(
+        db_session,
+        stations,
+        categories,
+        production_date=THURSDAY,
+        wo="WO-2",
+        category_counts={"Bad Wood / Material": 100},
+    )
+
+    result = build_last_production_day(db_session, NEXT_MONDAY)
+
+    assert result["date"] == FRIDAY
+    assert result["cases"] == 1
+    assert result["defect_events"] == 4
+
+
+def test_last_production_day_no_cases_is_real_zero_not_none(db_session):
+    """A day with genuinely no defect cases is cases=0/defect_events=0 - real,
+    verified zeros, never null (unlike the un-entered inspection count)."""
+    result = build_last_production_day(db_session, NEXT_MONDAY)
+
+    assert result["cases"] == 0
+    assert result["cases"] is not None
+    assert result["defect_events"] == 0
+    assert result["defect_events"] is not None
+
+
+def test_last_production_day_cases_decoupled_from_entered(db_session, stations, categories):
+    """entered=False (no daily_production_summaries row) must not imply
+    cases/defect_events are null or zero - a case can be logged before the
+    Daily Summary form is ever filled in for that date."""
+    _make_case(
+        db_session,
+        stations,
+        categories,
+        production_date=FRIDAY,
+        wo="WO-1",
+        category_counts={"Sanding / Surface": 2},
+    )
+
+    result = build_last_production_day(db_session, NEXT_MONDAY)
+
+    assert result["entered"] is False
+    assert result["inspected"] is None
+    assert result["cases"] == 1
+    assert result["defect_events"] == 2
+
+
+def test_last_production_day_single_category_quantity_five_is_one_case_five_events(
+    db_session, stations, categories
+):
+    """Pins the definition Part A reconciled to: affected_drawer_quantity=5 on
+    one DefectItem is 5 defect_events but still 1 case (one case = one
+    defective drawer, regardless of how many events it carries)."""
+    _make_case(
+        db_session,
+        stations,
+        categories,
+        production_date=FRIDAY,
+        wo="WO-1",
+        category_counts={"Sanding / Surface": 5},
+    )
+
+    result = build_last_production_day(db_session, NEXT_MONDAY)
+
+    assert result["cases"] == 1
+    assert result["defect_events"] == 5
+
+
+def test_last_production_day_excludes_soft_deleted_cases(db_session, stations, categories):
+    case = _make_case(
+        db_session,
+        stations,
+        categories,
+        production_date=FRIDAY,
+        wo="WO-1",
+        category_counts={"Sanding / Surface": 5},
+    )
+    defect_service.soft_delete_case(db_session, case)
+
+    result = build_last_production_day(db_session, NEXT_MONDAY)
+
+    assert result["cases"] == 0
+    assert result["defect_events"] == 0
+
+
 def test_last_production_day_null_when_no_working_day_found_in_lookback_window(db_session):
     """Every day in the 60-day lookback window is an explicit
     scheduled-0/zero-inspected weekday or a weekend - previous_working_day

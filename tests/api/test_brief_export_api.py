@@ -160,6 +160,9 @@ def test_valid_key_returns_200_with_full_payload_shape(unauth_client, brief_key)
     assert last_day["entered"] is True
     assert last_day["inspected"] == 390
     assert last_day["scheduled_per_tracker"] == 406
+    # Part 1: per-day defect figures, same date as last_production_day.
+    assert last_day["cases"] == 1
+    assert last_day["defect_events"] == 4
 
     week = body["week"]
     assert week["basis"] == "prior_full_week"
