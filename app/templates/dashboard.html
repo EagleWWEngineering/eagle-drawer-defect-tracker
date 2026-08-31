@@ -20,15 +20,7 @@
       <button type="submit">Apply</button>
     </div>
   </form>
-  <div class="btn-row" style="margin-top:0.75rem;">
-    <button type="button" class="secondary" data-range="today">Today</button>
-    <button type="button" class="secondary" data-range="yesterday">Yesterday</button>
-    <button type="button" class="secondary" data-range="this_week">This Week</button>
-    <button type="button" class="secondary" data-range="last_week">Last Week</button>
-    <button type="button" class="secondary" data-range="last_7_days">Last 7 Working Days</button>
-    <button type="button" class="secondary" data-range="last_30_days">Last 30 Working Days</button>
-    <button type="button" class="secondary" data-range="month_to_date">Month to Date</button>
-  </div>
+  {% include "_date_presets.html" %}
 </section>
 
 <section class="card">
@@ -350,18 +342,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     e.preventDefault();
     try { await reloadDashboard(); } catch (err) { showToast(err.message, "error"); }
   });
-  document.querySelectorAll("[data-range]").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      try {
-        const range = await Api.getDatePreset(btn.dataset.range);
-        document.getElementById("dr-start-date").value = range.start_date;
-        document.getElementById("dr-end-date").value = range.end_date;
-        await reloadDashboard();
-      } catch (err) {
-        showToast(err.message, "error");
-      }
-    });
-  });
+  initDatePresetButtons({ startInputId: "dr-start-date", endInputId: "dr-end-date", onApply: reloadDashboard });
   document.getElementById("filter-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     try { await loadPeriod(); } catch (err) { showToast(err.message, "error"); }

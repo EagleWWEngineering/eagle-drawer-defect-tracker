@@ -1,0 +1,15 @@
+<!-- Shared date-preset button row: Dashboard and Reports both include this
+     exact partial so the preset list/order/labels can never drift between
+     the two pages. Wire it up with app/static/js/app.js initDatePresetButtons()
+     - see dashboard.html / reports.html for the two call sites. Day presets,
+     then week presets, then rolling-window presets, then month - that
+     ordering is deliberate, follow it if a preset is ever added. -->
+<div class="btn-row" style="margin-top:0.75rem;">
+  <button type="button" class="secondary" data-range="today">Today</button>
+  <button type="button" class="secondary" data-range="yesterday">Yesterday</button>
+  <button type="button" class="secondary" data-range="this_week">This Week</button>
+  <button type="button" class="secondary" data-range="last_week">Last Week</button>
+  <button type="button" class="secondary" data-range="last_7_days">Last 7 Working Days</button>
+  <button type="button" class="secondary" data-range="last_30_days">Last 30 Working Days</button>
+  <button type="button" class="secondary" data-range="month_to_date">Month to Date</button>
+</div>

@@ -282,3 +282,117 @@ def test_trend_with_no_date_bounds_leaves_is_working_day_unset(client, master_da
     _create_case(client, master_data, "Sanding / Surface", wo="WO-U1", qty=1)
     trend = client.get("/api/v1/reports/trend", params={"group_by": "day"}).json()
     assert all(p["is_working_day"] is None for p in trend)
+
+
+# ---------------------------------------------------------------------------
+# Reports date presets (Part 3): the Reports page's new preset buttons call
+# the exact same GET /api/v1/reports/date-preset the Dashboard already used
+# (app/timezone_utils.py resolve_date_preset / app/services/working_days_
+# service.py resolve_working_day_preset) - there's only ever one preset
+# resolver, so the two pages can never disagree. See
+# tests/unit/test_date_presets.py and tests/unit/test_working_days_service.py
+# for full boundary coverage of each preset's math; these confirm the
+# end-to-end composition a preset-driven Reports request now unlocks.
+# ---------------------------------------------------------------------------
+
+ALL_SEVEN_PRESETS = (
+    "today",
+    "yesterday",
+    "this_week",
+    "last_week",
+    "last_7_days",
+    "last_30_days",
+    "month_to_date",
+)
+
+
+def test_every_preset_resolves_to_a_bounded_range_via_the_one_shared_endpoint(client):
+    """Every preset a Reports button can fire always returns both bounds -
+    this is what lets a preset-driven Trend request always ask for
+    group_by='day' with both start_date/end_date, unlocking is_working_day
+    flagging (see the tests below) whenever it does."""
+    for preset in ALL_SEVEN_PRESETS:
+        resp = client.get("/api/v1/reports/date-preset", params={"preset": preset})
+        assert resp.status_code == 200, preset
+        body = resp.json()
+        assert body["start_date"] is not None
+        assert body["end_date"] is not None
+        assert body["start_date"] <= body["end_date"]
+
+
+def test_preset_driven_group_by_day_request_returns_populated_is_working_day(client, master_data):
+    """The composition Part 3 adds to Reports: resolve a preset, feed its
+    (start_date, end_date) straight into the Trend endpoint with
+    group_by='day' - is_working_day must come back populated (True/False),
+    never null, exactly like a manually-typed range already did."""
+    preset = client.get("/api/v1/reports/date-preset", params={"preset": "last_week"}).json()
+    # Trend only emits a point for a date with SOME data (events/inspected/
+    # scheduled) - seed one case on the preset's own start_date so there's
+    # something for group_by="day" to return at all.
+    _create_case(
+        client,
+        master_data,
+        "Sanding / Surface",
+        wo="WO-P1",
+        qty=1,
+        production_date=preset["start_date"],
+    )
+    trend = client.get(
+        "/api/v1/reports/trend",
+        params={
+            "start_date": preset["start_date"],
+            "end_date": preset["end_date"],
+            "group_by": "day",
+        },
+    ).json()
+
+    assert trend  # last_week is always a real 5-day span, never empty
+    assert all(p["is_working_day"] is not None for p in trend)
+
+
+def test_preset_driven_group_by_week_request_still_leaves_is_working_day_unset(client, master_data):
+    """group_by='week' is unaffected by presets - is_working_day stays null on
+    those points by design (a week isn't itself working/non-working). This is
+    NOT something Part 3 changes - the Reports Trend endpoint's group_by/
+    is_working_day logic is untouched."""
+    preset = client.get("/api/v1/reports/date-preset", params={"preset": "last_week"}).json()
+    trend = client.get(
+        "/api/v1/reports/trend",
+        params={
+            "start_date": preset["start_date"],
+            "end_date": preset["end_date"],
+            "group_by": "week",
+        },
+    ).json()
+
+    assert all(p["is_working_day"] is None for p in trend)
+
+
+# ---------------------------------------------------------------------------
+# Reports page template (Part 3): the shared preset button row - confirm
+# there is exactly ONE definition (app/templates/_date_presets.html), included
+# by both Dashboard and Reports, never two independent copies.
+# ---------------------------------------------------------------------------
+
+
+def test_reports_page_renders_the_shared_preset_button_row_once(client):
+    resp = client.get("/reports")
+    assert resp.status_code == 200
+    html = resp.text
+    for preset in ALL_SEVEN_PRESETS:
+        assert html.count(f'data-range="{preset}"') == 1
+    # Existing manual date inputs are still present - presets are additive.
+    assert 'id="f-start-date"' in html
+    assert 'id="f-end-date"' in html
+
+
+def test_dashboard_page_still_renders_the_shared_preset_button_row(client):
+    """Regression guard: extracting the shared partial must not remove or
+    duplicate the Dashboard's own preset row."""
+    resp = client.get("/")
+    assert resp.status_code == 200
+    html = resp.text
+    for preset in ALL_SEVEN_PRESETS:
+        assert html.count(f'data-range="{preset}"') == 1
+    assert 'id="dr-start-date"' in html
+    assert 'id="dr-end-date"' in html

@@ -189,6 +189,34 @@ function initBulkSelect({ tableBodySelector, selectAllId, entityLabel = "item", 
   return { refresh };
 }
 
+/** Wires every `<button data-range="...">` on the page (the shared preset row
+ * rendered by app/templates/_date_presets.html) to resolve that preset via
+ * GET /api/v1/reports/date-preset (Api.getDatePreset - see
+ * app/timezone_utils.py resolve_date_preset / app/services/working_days_
+ * service.py resolve_working_day_preset), write the result into the given
+ * start/end date inputs, then call onApply() to re-run the page's own reload.
+ *
+ * Extracted from the Dashboard (its original, page-specific version) so the
+ * Dashboard and Reports pages share exactly one button row and exactly one
+ * click handler instead of two copies that could drift apart. Presets set
+ * ONLY the two named date inputs - onApply() must be the page's existing
+ * reload (reads its own filter-form fresh), so every other filter already set
+ * on the page is picked up untouched, never reset. */
+function initDatePresetButtons({ startInputId, endInputId, onApply }) {
+  document.querySelectorAll("[data-range]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      try {
+        const range = await Api.getDatePreset(btn.dataset.range);
+        document.getElementById(startInputId).value = range.start_date;
+        document.getElementById(endInputId).value = range.end_date;
+        await onApply();
+      } catch (err) {
+        showToast(err.message, "error");
+      }
+    });
+  });
+}
+
 function initRoleSelector() {
   const select = document.getElementById("actor-role-select");
   if (!select) return;

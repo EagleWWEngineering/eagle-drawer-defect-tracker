@@ -50,6 +50,7 @@
       <a id="csv-export-link" class="btn secondary" href="#">Export CSV</a>
     </div>
   </form>
+  {% include "_date_presets.html" %}
 </section>
 
 <section class="card">
@@ -301,6 +302,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     e.preventDefault();
     try { await reloadAll(); } catch (err) { showToast(err.message, "error"); }
   });
+  // Presets set start_date/end_date only, then re-run reloadAll() - which
+  // reads the whole filter-form fresh, so every other filter (station,
+  // category, status, disposition, priority, ...) already set is preserved.
+  initDatePresetButtons({ startInputId: "f-start-date", endInputId: "f-end-date", onApply: reloadAll });
   document.getElementById("pareto-group-by").addEventListener("change", async () => {
     try { await loadPareto(currentFilters()); } catch (err) { showToast(err.message, "error"); }
   });
