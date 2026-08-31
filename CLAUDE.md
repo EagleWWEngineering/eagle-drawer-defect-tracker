@@ -49,6 +49,22 @@ the same relay script — see `docs/PROJECT_SPEC_PHASE6.md` and
 means a human edited it on the Daily Summary form; the relay must never overwrite
 that row (manual-wins rule in `schedule_service.upsert_schedule`).
 
+"Working day" (Eagle runs Mon–Fri) has exactly one definition, in
+`app/services/working_days_service.py` (`is_working_day`/`working_day_set`/
+`walk_back_working_days`) — never reimplement it (not even a bare
+`weekday() < 5` check) anywhere else. A date counts if it has a scheduled or
+inspected figure > 0, or it's a plain Mon–Fri weekday that wasn't explicitly
+recorded as a scheduled-zero-and-nothing-inspected holiday; a missing schedule
+row (failed scrape) is never treated as a holiday. `schedule_service`'s sync
+ingest path rejects a non-working-day date before writing (manual writes are
+unaffected — the deliberate overtime-Saturday escape hatch);
+`metrics_service.build_schedule_vs_completed` and the Reports trend omit
+weekends and flag (never silently drop) a working weekday holiday; the
+Yesterday/Last 7/Last 30 days date presets walk back working days, not
+calendar days (`working_days_service.resolve_working_day_preset` —
+`timezone_utils.resolve_date_preset` stays pure/DB-free and only handles
+Today/Month to date).
+
 Dispositions (`Rework`, `Set Aside`) and statuses (`Open`, `Closed - Repaired`,
 `Closed - Use As Is`) are a small, fixed vocabulary as of Phase 7 — see
 `docs/PROJECT_SPEC_PHASE7.md` before changing either list.
