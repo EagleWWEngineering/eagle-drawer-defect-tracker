@@ -23,12 +23,14 @@ from app.dependencies import get_db
 from app.errors import InvalidTransitionError, NotFoundError, ServiceError, ValidationError
 from app.routers import (
     auth,
+    brief,
     customer_issues,
     daily_production,
     defect_cases,
     exports,
     master_data,
     reports,
+    scan,
     sync,
 )
 from app.routers import settings as settings_router
@@ -122,6 +124,8 @@ app.include_router(customer_issues.router)
 app.include_router(customer_issues.export_router)
 app.include_router(sync.router)
 app.include_router(settings_router.router)
+app.include_router(scan.router)
+app.include_router(brief.router)
 
 app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
 settings.uploads_dir.mkdir(parents=True, exist_ok=True)
@@ -178,6 +182,15 @@ def page_settings(request: Request):
     """Behind the login like every other page (LoginRequiredMiddleware) - holds the
     "Log out" / "Log out everywhere" actions (Phase 2)."""
     return templates.TemplateResponse(request, "settings.html")
+
+
+@app.get("/scan-diagnostic")
+def page_scan_diagnostic(request: Request):
+    """Phase 8a label-scan OCR diagnostic - read-only, writes nothing to the
+    database (see app/routers/scan.py). Behind the login like every other page
+    (LoginRequiredMiddleware) - deliberately NOT added to that middleware's
+    allowlist, so it requires no special treatment to stay protected."""
+    return templates.TemplateResponse(request, "scan_diagnostic.html")
 
 
 @app.get("/login")

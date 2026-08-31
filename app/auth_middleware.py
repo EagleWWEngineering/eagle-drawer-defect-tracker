@@ -45,6 +45,14 @@ PUBLIC_EXACT_PATHS: set[str] = {
     # protected by the same RELAY_API_KEY header check (_verify_relay_key).
     # Exempting this ONE exact path only - nothing broader.
     "/api/v1/sync/daily-schedule/ingest-raw",
+    # Brief Export (Part A): the Eagle production brief's VM fetches this daily
+    # (~06:15 ET) to build its drawers TV board - also an unattended,
+    # machine-to-machine caller with no browser session, protected instead by its
+    # own X-Brief-Key header check (app/routers/brief.py _verify_brief_key), same
+    # discipline as the relay paths above but a separate key (BRIEF_API_KEY) since
+    # this is a different machine, calling in the opposite direction. Exempting
+    # this ONE exact path only - nothing broader.
+    "/api/v1/brief/summary",
 }
 
 # Path prefixes reachable with no session (static assets only - no shop data lives

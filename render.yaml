@@ -51,6 +51,14 @@ services:
       - key: SYNC_INTERVAL_MINUTES
         value: "60"
 
+      # Phase 8a label-scan OCR diagnostic (docs/PROJECT_SPEC_PHASE8A.md). Ships
+      # dormant - false until Rodolfo deliberately turns it on for the pilot, and
+      # even then app/routers/scan.py still 503s without a real OCR_API_KEY below.
+      - key: OCR_ENABLED
+        value: "false"
+      - key: OCR_PROVIDER
+        value: azure
+
       # Secrets / sensitive values — Rodolfo enters the real value in
       # Render's dashboard after the Blueprint creates the service.
       - key: APP_USERNAME
@@ -66,4 +74,20 @@ services:
       # match the value scripts/relay_customer_issues.py sends from Rodolfo's
       # local machine. Separate secret from APP_USERNAME/APP_PASSWORD_HASH above.
       - key: RELAY_API_KEY
+        sync: false
+      # Brief Export (Part A): checked against the X-Brief-Key header on
+      # GET /api/v1/brief/summary (app/routers/brief.py). The Eagle production
+      # brief's VM calls this directly (no relay involved - it has outbound
+      # internet access). Separate secret from RELAY_API_KEY - different
+      # machine, opposite direction; revoking one must never break the other.
+      - key: BRIEF_API_KEY
+        sync: false
+      # Phase 8a: the OCR provider's own API key (Azure Ocp-Apim-Subscription-Key
+      # or a Google Vision API key, depending on OCR_PROVIDER above) and, for
+      # Azure only, its resource endpoint. Leaving these unset keeps
+      # /api/v1/scan/diagnose returning a clean 503 even if OCR_ENABLED is ever
+      # flipped to true by mistake - see app/routers/scan.py.
+      - key: OCR_API_KEY
+        sync: false
+      - key: OCR_ENDPOINT
         sync: false

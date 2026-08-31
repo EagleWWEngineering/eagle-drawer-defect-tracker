@@ -13,6 +13,17 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    """Phase 8a: the only boolean env var this app reads (everything else so far
+    has been a string/int/Decimal) - a small dedicated parser rather than a bare
+    `bool(os.getenv(...))`, which would treat the literal string "false" as truthy.
+    """
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
 class Settings:
     """Central place for every configurable value in the app.
 
@@ -52,6 +63,14 @@ class Settings:
         # an unset key means the endpoint rejects every request (see
         # _verify_relay_key), never accepts one by accident.
         self.relay_api_key: str = os.getenv("RELAY_API_KEY", "")
+        # Brief Export (Part A): checked against the X-Brief-Key header on
+        # GET /api/v1/brief/summary (see app/routers/brief.py). A separate secret
+        # from RELAY_API_KEY above - different machine (the production brief's VM,
+        # pulling FROM this app), opposite direction, so revoking one must never
+        # break the other. Empty by default - an unset key means the endpoint
+        # rejects every request (see brief.py's _verify_brief_key), never accepts
+        # one by accident.
+        self.brief_api_key: str = os.getenv("BRIEF_API_KEY", "")
         # Seed value only (app/seed_data.py writes this into the app_settings table
         # once, on first run). After that, the DB row is authoritative and editable
         # via Admin - see app/services/settings_service.py. Changing this env var
@@ -59,6 +78,16 @@ class Settings:
         self.default_cost_per_drawer: decimal.Decimal = decimal.Decimal(
             os.getenv("DEFAULT_COST_PER_DRAWER", "35.00")
         )
+        # Phase 8a (docs/PROJECT_SPEC_PHASE8A.md): label-scan OCR diagnostic. Ships
+        # dormant - ocr_enabled defaults to False, and app/routers/scan.py refuses
+        # every request with a 503 unless it's explicitly true AND an API key is
+        # configured, so an unconfigured/misconfigured deployment fails obviously
+        # rather than silently. See app/services/ocr_service.py for the provider
+        # abstraction these four settings select between.
+        self.ocr_enabled: bool = _env_bool("OCR_ENABLED", False)
+        self.ocr_provider: str = os.getenv("OCR_PROVIDER", "azure")
+        self.ocr_endpoint: str = os.getenv("OCR_ENDPOINT", "")
+        self.ocr_api_key: str = os.getenv("OCR_API_KEY", "")
 
     @property
     def max_upload_bytes(self) -> int:

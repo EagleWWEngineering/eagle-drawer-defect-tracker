@@ -780,6 +780,58 @@ class RelayConnectionStatusOut(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Brief export (Part A) — GET /api/v1/brief/summary. See
+# app/services/brief_export_service.py for the business rules; read-only,
+# nothing here is persisted by this app.
+# ---------------------------------------------------------------------------
+
+
+class BriefTopCategoryOut(BaseModel):
+    name: str
+    count: int
+
+
+class BriefLastProductionDayOut(BaseModel):
+    """entered/inspected are False/None (never 0) when no
+    daily_production_summaries row exists for `date` at all - see
+    brief_export_service.build_last_production_day. scheduled_per_tracker is
+    this app's own daily_schedules figure for that date, advisory only (see
+    that same function's docstring for why an attainment % is never computed
+    here) - None if no daily_schedules row exists."""
+
+    date: dt.date
+    entered: bool
+    inspected: int | None
+    scheduled_per_tracker: int | None
+
+
+class BriefWeekOut(BaseModel):
+    """basis is "week_to_date" (Tue-Fri) or "prior_full_week" (Mon, and
+    Sat/Sun defensively) - see brief_export_service.build_week_summary. A real,
+    verified zero (no cases at all in range) is meaningful here and rendered as
+    0, not null."""
+
+    start: dt.date
+    end: dt.date
+    basis: str
+    cases: int
+    defect_events: int
+    top_categories: list[BriefTopCategoryOut]
+    other_count: int
+
+
+class BriefSummaryOut(BaseModel):
+    ok: bool
+    product: str
+    asof: dt.date
+    generated_at: dt.datetime
+    # None only when previous_working_day can't find a working day within its
+    # lookback window - see build_last_production_day's docstring.
+    last_production_day: BriefLastProductionDayOut | None
+    week: BriefWeekOut
+
+
+# ---------------------------------------------------------------------------
 # Label-scan OCR diagnostic (Phase 8a) — see app/services/ocr_service.py.
 # Read-only: this response is never persisted anywhere server-side.
 # ---------------------------------------------------------------------------
