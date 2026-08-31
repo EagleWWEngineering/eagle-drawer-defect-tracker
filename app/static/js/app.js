@@ -189,12 +189,25 @@ function initBulkSelect({ tableBodySelector, selectAllId, entityLabel = "item", 
   return { refresh };
 }
 
+/** Highlights the one `[data-range]` button matching `presetName` (see
+ * .ampm-btn.active in app.css - the only existing "highlighted button in a
+ * group" convention in this app; reused here rather than inventing a new
+ * one), clearing the highlight from every other preset button. Pass
+ * null/undefined to clear all of them - e.g. a bookmarked URL date range or a
+ * manually-typed range that doesn't correspond to any one preset. */
+function setActivePresetButton(presetName) {
+  document.querySelectorAll("[data-range]").forEach((btn) => {
+    btn.classList.toggle("active", Boolean(presetName) && btn.dataset.range === presetName);
+  });
+}
+
 /** Wires every `<button data-range="...">` on the page (the shared preset row
  * rendered by app/templates/_date_presets.html) to resolve that preset via
  * GET /api/v1/reports/date-preset (Api.getDatePreset - see
  * app/timezone_utils.py resolve_date_preset / app/services/working_days_
  * service.py resolve_working_day_preset), write the result into the given
- * start/end date inputs, then call onApply() to re-run the page's own reload.
+ * start/end date inputs, highlight that button, then call onApply() to
+ * re-run the page's own reload.
  *
  * Extracted from the Dashboard (its original, page-specific version) so the
  * Dashboard and Reports pages share exactly one button row and exactly one
@@ -209,6 +222,7 @@ function initDatePresetButtons({ startInputId, endInputId, onApply }) {
         const range = await Api.getDatePreset(btn.dataset.range);
         document.getElementById(startInputId).value = range.start_date;
         document.getElementById(endInputId).value = range.end_date;
+        setActivePresetButton(btn.dataset.range);
         await onApply();
       } catch (err) {
         showToast(err.message, "error");

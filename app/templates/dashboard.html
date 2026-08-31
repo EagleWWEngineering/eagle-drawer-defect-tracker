@@ -303,17 +303,38 @@ async function populateMasterDataFilters() {
   md.dispositions.forEach((d) => dispSelect.insertAdjacentHTML("beforeend", `<option>${escapeHtml(d)}</option>`));
 }
 
-function defaultDateRange() {
+/** The page's load-time default, resolved through the SAME server-side path
+ * the "Last 7 Working Days" button uses (GET /api/v1/reports/date-preset),
+ * rather than a second, client-side calendar-day calculation - see the
+ * "Align page-load default date ranges with preset buttons" prompt. A
+ * bookmarked/shared URL with explicit start_date/end_date query params still
+ * wins over the default, same as before; it doesn't correspond to any one
+ * preset, so no button is highlighted for it. If the preset call itself
+ * fails (e.g. a network hiccup), falls back to a plain last-7-calendar-days
+ * range - the page's old default - rather than leaving the inputs empty. */
+async function loadDefaultDateRange() {
   const urlRange = dateRangeFromUrl();
-  let range = urlRange;
-  if (!range) {
+  if (urlRange) {
+    document.getElementById("dr-start-date").value = urlRange.start_date;
+    document.getElementById("dr-end-date").value = urlRange.end_date;
+    return;
+  }
+  try {
+    const range = await Api.getDatePreset("last_7_days");
+    document.getElementById("dr-start-date").value = range.start_date;
+    document.getElementById("dr-end-date").value = range.end_date;
+    setActivePresetButton("last_7_days");
+  } catch (err) {
     const end = new Date();
     const start = new Date();
     start.setDate(start.getDate() - 6);
-    range = { start_date: start.toISOString().slice(0, 10), end_date: end.toISOString().slice(0, 10) };
+    document.getElementById("dr-start-date").value = start.toISOString().slice(0, 10);
+    document.getElementById("dr-end-date").value = end.toISOString().slice(0, 10);
+    showToast(
+      "Could not load the default date range from the server - showing the last 7 calendar days instead.",
+      "error"
+    );
   }
-  document.getElementById("dr-start-date").value = range.start_date;
-  document.getElementById("dr-end-date").value = range.end_date;
 }
 
 async function reloadDashboard() {
@@ -329,8 +350,8 @@ async function reloadDashboard() {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
-  defaultDateRange();
   try {
+    await loadDefaultDateRange();
     await populateMasterDataFilters();
     await reloadDashboard();
     await loadReworkPreview();

@@ -396,3 +396,26 @@ def test_dashboard_page_still_renders_the_shared_preset_button_row(client):
         assert html.count(f'data-range="{preset}"') == 1
     assert 'id="dr-start-date"' in html
     assert 'id="dr-end-date"' in html
+
+
+# ---------------------------------------------------------------------------
+# Align page-load default date ranges with preset buttons: the old
+# client-side calendar-day defaultDateRange() functions must be gone from
+# both pages' rendered HTML/JS, not left as dead code alongside the new
+# server-resolved loadDefaultDateRange(). A byte-string check on the rendered
+# response is a crude proxy for "the deleted function is really deleted" but
+# it's exercised every test run (unlike a one-off manual grep), so a
+# regression can't silently creep back in.
+# ---------------------------------------------------------------------------
+
+
+def test_dashboard_page_no_longer_defines_the_deleted_client_side_default(client):
+    html = client.get("/").text
+    assert "defaultDateRange" not in html
+    assert "loadDefaultDateRange" in html
+
+
+def test_reports_page_no_longer_defines_the_deleted_client_side_default(client):
+    html = client.get("/reports").text
+    assert "defaultDateRange" not in html
+    assert "loadDefaultDateRange" in html

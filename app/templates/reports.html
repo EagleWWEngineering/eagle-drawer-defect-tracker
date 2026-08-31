@@ -267,17 +267,33 @@ async function reloadAll() {
   await Promise.all([loadSummary(params), loadPareto(params), loadTrend(params), loadRecords(params)]);
 }
 
-function defaultDateRange() {
-  const end = new Date();
-  const start = new Date();
-  start.setDate(start.getDate() - 29);
-  document.getElementById("f-start-date").value = start.toISOString().slice(0, 10);
-  document.getElementById("f-end-date").value = end.toISOString().slice(0, 10);
+/** The page's load-time default, resolved through the SAME server-side path
+ * the "Last 30 Working Days" button uses (GET /api/v1/reports/date-preset),
+ * rather than a second, client-side calendar-day calculation - see the
+ * "Align page-load default date ranges with preset buttons" prompt. If the
+ * preset call itself fails (e.g. a network hiccup), falls back to a plain
+ * last-30-calendar-days range - the page's old default - rather than leaving
+ * the inputs empty. */
+async function loadDefaultDateRange() {
+  try {
+    const range = await Api.getDatePreset("last_30_days");
+    document.getElementById("f-start-date").value = range.start_date;
+    document.getElementById("f-end-date").value = range.end_date;
+    setActivePresetButton("last_30_days");
+  } catch (err) {
+    const end = new Date();
+    const start = new Date();
+    start.setDate(start.getDate() - 29);
+    document.getElementById("f-start-date").value = start.toISOString().slice(0, 10);
+    document.getElementById("f-end-date").value = end.toISOString().slice(0, 10);
+    showToast(
+      "Could not load the default date range from the server - showing the last 30 calendar days instead.",
+      "error"
+    );
+  }
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
-  defaultDateRange();
-
   const urlParams = new URLSearchParams(window.location.search);
   if (urlParams.get("work_order_number")) {
     document.getElementById("f-work-order").value = urlParams.get("work_order_number");
@@ -292,6 +308,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   try {
+    await loadDefaultDateRange();
     await populateMasterDataFilters();
     await reloadAll();
   } catch (err) {

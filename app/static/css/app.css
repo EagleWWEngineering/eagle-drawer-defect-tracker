@@ -380,6 +380,16 @@ button.danger, .btn.danger {
   border-color: var(--color-primary-dark);
 }
 
+/* Date-preset buttons (Dashboard/Reports, app/templates/_date_presets.html):
+   same "highlighted button in a group" convention as .ampm-btn.active above,
+   for whichever preset produced the currently-shown range - see
+   app/static/js/app.js setActivePresetButton(). */
+[data-range].active {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: var(--color-primary-dark);
+}
+
 .save-flash {
   background: #e9f8ee;
   color: var(--color-success);

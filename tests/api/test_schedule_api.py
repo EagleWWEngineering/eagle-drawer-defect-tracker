@@ -258,3 +258,60 @@ def test_date_preset_last_week_is_always_a_five_day_mon_fri_span(client):
     assert start.weekday() == 0  # Monday
     assert end.weekday() == 4  # Friday
     assert (end - start).days == 4
+
+
+# ---------------------------------------------------------------------------
+# Align page-load default date ranges with preset buttons: the Dashboard's
+# default is now last_7_days and the Reports page's default is now
+# last_30_days, both resolved client-side through this SAME endpoint
+# (Api.getDatePreset - see app/templates/dashboard.html /
+# app/templates/reports.html loadDefaultDateRange()) rather than a second,
+# client-side calendar-day calculation. These confirm the endpoint's answer
+# for each preset matches working_days_service.resolve_working_day_preset()
+# called directly, so the page default and the resolver can never disagree.
+# The client-side half (that the page actually requests this preset name and
+# highlights its button) is verified by code inspection only - this repo has
+# no JS test framework to execute that part; see the prompt report.
+# ---------------------------------------------------------------------------
+
+
+def test_dashboard_default_preset_matches_resolve_working_day_preset_directly(client):
+    from app.services import working_days_service
+    from app.timezone_utils import today_in_display_timezone
+
+    resp = client.get("/api/v1/reports/date-preset", params={"preset": "last_7_days"})
+    assert resp.status_code == 200
+    body = resp.json()
+
+    db = client.testing_sessionmaker()
+    try:
+        today = today_in_display_timezone()
+        expected_start, expected_end = working_days_service.resolve_working_day_preset(
+            db, "last_7_days", today=today
+        )
+    finally:
+        db.close()
+
+    assert body["start_date"] == expected_start.isoformat()
+    assert body["end_date"] == expected_end.isoformat()
+
+
+def test_reports_default_preset_matches_resolve_working_day_preset_directly(client):
+    from app.services import working_days_service
+    from app.timezone_utils import today_in_display_timezone
+
+    resp = client.get("/api/v1/reports/date-preset", params={"preset": "last_30_days"})
+    assert resp.status_code == 200
+    body = resp.json()
+
+    db = client.testing_sessionmaker()
+    try:
+        today = today_in_display_timezone()
+        expected_start, expected_end = working_days_service.resolve_working_day_preset(
+            db, "last_30_days", today=today
+        )
+    finally:
+        db.close()
+
+    assert body["start_date"] == expected_start.isoformat()
+    assert body["end_date"] == expected_end.isoformat()
