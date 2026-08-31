@@ -11,16 +11,19 @@ from __future__ import annotations
 import datetime as dt
 
 import pytest
+from sqlalchemy import event
 
 from app.models import DailyProductionSummary
-from app.services import brief_export_service, defect_service, schedule_service
+from app.services import brief_export_service, defect_service, metrics_service, schedule_service
 from app.services import working_days_service as wds
 from app.services.brief_export_service import build_last_production_day, build_week_summary
 
 MONDAY = dt.date(2026, 8, 17)
+TUESDAY = dt.date(2026, 8, 18)
 WEDNESDAY = dt.date(2026, 8, 19)
 THURSDAY = dt.date(2026, 8, 20)
 FRIDAY = dt.date(2026, 8, 21)
+SATURDAY = dt.date(2026, 8, 22)
 NEXT_MONDAY = dt.date(2026, 8, 24)
 
 
@@ -370,3 +373,183 @@ def test_validate_product_rejects_anything_else():
     with pytest.raises(ValidationError) as exc_info:
         brief_export_service.validate_product("doors")
     assert exc_info.value.field == "product"
+
+
+# ---------------------------------------------------------------------------
+# week: days (Part 2 addendum - scheduled-vs-inspected bar chart)
+# ---------------------------------------------------------------------------
+
+
+def test_week_days_one_entry_per_working_day_ascending_order(db_session):
+    for d, n in [(MONDAY, 380), (TUESDAY, 390), (WEDNESDAY, 400), (THURSDAY, 410), (FRIDAY, 420)]:
+        _add_summary(db_session, d, drawers_inspected=n)
+
+    result = build_week_summary(db_session, FRIDAY)
+
+    assert [day["date"] for day in result["days"]] == [MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY]
+    assert [day["inspected"] for day in result["days"]] == [380, 390, 400, 410, 420]
+    assert all(day["entered"] for day in result["days"])
+
+
+def test_week_days_no_summary_row_entered_false_inspected_none_not_zero(db_session):
+    _add_summary(db_session, MONDAY, drawers_inspected=380)
+    # Tuesday-Friday: no daily_production_summaries rows at all.
+
+    result = build_week_summary(db_session, FRIDAY)
+
+    by_date = {day["date"]: day for day in result["days"]}
+    assert by_date[TUESDAY]["entered"] is False
+    assert by_date[TUESDAY]["inspected"] is None
+    assert by_date[TUESDAY]["inspected"] != 0
+
+
+def test_week_days_two_shifts_on_one_date_summed(db_session):
+    _add_summary(db_session, MONDAY, drawers_inspected=200, shift="Day")
+    _add_summary(db_session, MONDAY, drawers_inspected=190, shift="Night")
+
+    result = build_week_summary(db_session, TUESDAY)  # week_to_date: Mon-Tue
+
+    monday_entry = next(day for day in result["days"] if day["date"] == MONDAY)
+    assert monday_entry["entered"] is True
+    assert monday_entry["inspected"] == 390
+
+
+def test_week_days_weekend_date_excluded_even_with_defect_cases(db_session, stations, categories):
+    """_week_range itself never spans a weekend (always Mon-Fri), so this
+    exercises _build_week_days directly with a range that does - the helper
+    must still apply the real working-day rule, not just trust its input."""
+    _make_case(
+        db_session,
+        stations,
+        categories,
+        production_date=SATURDAY,
+        wo="WO-SAT",
+        category_counts={"Sanding / Surface": 2},
+    )
+    start, end = FRIDAY, SATURDAY + dt.timedelta(days=1)  # Fri-Sun
+    items = metrics_service.filtered_defect_items_query(
+        db_session, start_date=start, end_date=end
+    ).all()
+
+    days = brief_export_service._build_week_days(db_session, items, start, end)
+
+    assert SATURDAY not in [day["date"] for day in days]
+
+
+def test_week_days_overtime_saturday_included_via_manual_schedule(db_session):
+    """The existing escape hatch (a source="manual" schedule row) must still
+    make an overtime Saturday a working day here, exactly as it does
+    everywhere else via working_days_service."""
+    schedule_service.upsert_schedule(
+        db_session, production_date=SATURDAY, drawers_scheduled=40, source="manual"
+    )
+    _add_summary(db_session, SATURDAY, drawers_inspected=38)
+    start, end = FRIDAY, SATURDAY + dt.timedelta(days=1)
+    items = metrics_service.filtered_defect_items_query(
+        db_session, start_date=start, end_date=end
+    ).all()
+
+    days = brief_export_service._build_week_days(db_session, items, start, end)
+
+    by_date = {day["date"]: day for day in days}
+    assert SATURDAY in by_date
+    assert by_date[SATURDAY]["entered"] is True
+    assert by_date[SATURDAY]["inspected"] == 38
+
+
+def test_week_days_cases_sum_matches_week_cases(db_session, stations, categories):
+    _make_case(
+        db_session,
+        stations,
+        categories,
+        production_date=MONDAY,
+        wo="WO-1",
+        category_counts={"Sanding / Surface": 14, "Dado / Bottom Groove": 9},
+    )
+    _make_case(
+        db_session,
+        stations,
+        categories,
+        production_date=WEDNESDAY,
+        wo="WO-2",
+        category_counts={"Bad Wood / Material": 6},
+    )
+    _make_case(
+        db_session,
+        stations,
+        categories,
+        production_date=WEDNESDAY,
+        wo="WO-3",
+        category_counts={"Bottom Panel": 4},
+    )
+
+    result = build_week_summary(db_session, WEDNESDAY)
+
+    assert sum(day["cases"] for day in result["days"]) == result["cases"]
+    assert result["cases"] == 3
+
+
+def test_week_days_cases_decoupled_from_entered(db_session, stations, categories):
+    """A day with logged defect cases but no Daily Summary form entry yet must
+    be entered=False/inspected=None while still carrying its real, nonzero
+    cases count - the same decoupling build_last_production_day already
+    applies to a single date."""
+    _make_case(
+        db_session,
+        stations,
+        categories,
+        production_date=THURSDAY,
+        wo="WO-1",
+        category_counts={"Sanding / Surface": 2},
+    )
+
+    result = build_week_summary(db_session, FRIDAY)
+
+    thursday_entry = next(day for day in result["days"] if day["date"] == THURSDAY)
+    assert thursday_entry["entered"] is False
+    assert thursday_entry["inspected"] is None
+    assert thursday_entry["cases"] == 1
+
+
+def test_week_days_empty_when_no_working_days_in_range(db_session):
+    for d in (MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY):
+        schedule_service.upsert_schedule(
+            db_session, production_date=d, drawers_scheduled=0, source="sync"
+        )
+    # explicit scheduled-0 + zero-inspected on every weekday of the range ->
+    # none of them count as working days (working_days_service's Mon-Fri
+    # fallback rule), so the range has no working days at all.
+
+    result = build_week_summary(db_session, FRIDAY)
+
+    assert result["days"] == []
+
+
+def test_week_days_query_count_does_not_scale_with_range_length(db_session):
+    """The days breakdown must fetch its bulk queries once per call, not once
+    per day - a 4-week range must cost exactly the same as a 5-day week."""
+
+    def _count_queries(start: dt.date, end: dt.date) -> int:
+        items = metrics_service.filtered_defect_items_query(
+            db_session, start_date=start, end_date=end
+        ).all()
+        calls: list[object] = []
+
+        def _listener(*args, **kwargs):
+            calls.append(1)
+
+        bind = db_session.get_bind()
+        event.listen(bind, "before_cursor_execute", _listener)
+        try:
+            brief_export_service._build_week_days(db_session, items, start, end)
+        finally:
+            event.remove(bind, "before_cursor_execute", _listener)
+        return len(calls)
+
+    short_week_count = _count_queries(MONDAY, FRIDAY)  # 5 days
+    four_week_count = _count_queries(MONDAY, MONDAY + dt.timedelta(days=27))  # 28 days
+
+    assert short_week_count == four_week_count
+    # working_day_set's own 2 bulk queries + this function's 1 grouped
+    # inspected-sum query - never one query per day.
+    assert short_week_count <= 3

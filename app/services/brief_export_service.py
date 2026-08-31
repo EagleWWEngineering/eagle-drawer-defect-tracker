@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import datetime as dt
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.errors import ServiceError, ValidationError
@@ -43,31 +44,26 @@ def validate_product(product: str | None) -> None:
         )
 
 
-def _case_and_event_counts(db: Session, start_date: dt.date, end_date: dt.date) -> dict:
-    """{cases, defect_events, category_counts} over [start_date, end_date] inclusive
-    - the ONE aggregation both build_last_production_day (a single-day range) and
-    build_week_summary (a Mon-Fri/week-to-date range) call, so the per-day defect
-    tile and the weekly Pareto can never drift apart from each other or from the
-    Reports page.
+def _aggregate_case_and_event_counts(items: list) -> dict:
+    """{cases, defect_events, category_counts} for an already-fetched list of
+    (DefectItem, DefectCase) rows (see metrics_service.filtered_defect_items_
+    query). The math itself - the ONE aggregation build_last_production_day
+    (a single-day fetch), build_week_summary's week total, and its per-day
+    `days` breakdown (_build_week_days) all call - so the per-day defect
+    tile, the weekly Pareto, and the day-by-day chart can never drift apart
+    from each other or from the Reports page.
 
-    Built on app/services/metrics_service.py's filtered_defect_items_query (the
-    same non-deleted-case, date-ranged query Reports already uses) rather than a
-    second query. cases: count of distinct DefectCase ids in range (one case =
-    one defective drawer). defect_events: sum of DefectItem.affected_drawer_
-    quantity in range - one category on one drawer is one event;
-    affected_drawer_quantity folds in multiple drawers of the same category on
-    one case. category_counts is the {category name: event count} map
-    build_week_summary feeds into metrics_service.compute_pareto for its
-    top_categories/other_count - callers that only need cases/defect_events
-    (build_last_production_day) simply ignore it.
+    cases: count of distinct DefectCase ids among `items` (one case = one
+    defective drawer). defect_events: sum of DefectItem.affected_drawer_
+    quantity - one category on one drawer is one event; affected_drawer_
+    quantity folds in multiple drawers of the same category on one case.
+    category_counts is the {category name: event count} map build_week_
+    summary feeds into metrics_service.compute_pareto for its top_categories/
+    other_count - callers that only need cases/defect_events ignore it.
 
-    Zero cases in range legitimately returns all-zero fields - a defect-free
-    day/week is a real, verified result, never null.
+    An empty `items` list legitimately returns all-zero fields - a
+    defect-free day/week is a real, verified result, never null.
     """
-    items = metrics_service.filtered_defect_items_query(
-        db, start_date=start_date, end_date=end_date
-    ).all()
-
     case_ids = {case.id for _item, case in items}
     category_counts: dict[str, int] = {}
     for item, _case in items:
@@ -79,6 +75,20 @@ def _case_and_event_counts(db: Session, start_date: dt.date, end_date: dt.date) 
         "defect_events": sum(category_counts.values()),
         "category_counts": category_counts,
     }
+
+
+def _case_and_event_counts(db: Session, start_date: dt.date, end_date: dt.date) -> dict:
+    """_aggregate_case_and_event_counts over [start_date, end_date] inclusive,
+    fetched via metrics_service.filtered_defect_items_query (the same
+    non-deleted-case, date-ranged query Reports already uses). Used by
+    build_last_production_day, which only needs a single date's figures and
+    has no other query to share the fetch with (unlike build_week_summary,
+    which fetches its own range once and reuses it for both the week total
+    and the day-by-day breakdown - see _build_week_days)."""
+    items = metrics_service.filtered_defect_items_query(
+        db, start_date=start_date, end_date=end_date
+    ).all()
+    return _aggregate_case_and_event_counts(items)
 
 
 def build_last_production_day(db: Session, asof: dt.date) -> dict | None:
@@ -179,18 +189,95 @@ def _week_range(asof: dt.date) -> tuple[dt.date, dt.date, str]:
     return start, start + dt.timedelta(days=4), "prior_full_week"
 
 
-def build_week_summary(db: Session, asof: dt.date) -> dict:
-    """{start, end, basis, cases, defect_events, top_categories, other_count}
-    for the "Internal QC - this week" Pareto section - see _week_range for the
-    Mon-Fri window rules.
+def _build_week_days(db: Session, items: list, start: dt.date, end: dt.date) -> list[dict]:
+    """{date, entered, inspected, cases} for every WORKING day in
+    [start, end] - the day-by-day breakdown behind the brief's
+    scheduled-vs-inspected bar chart (Part 2). One entry per working day, in
+    ascending date order; `items` is the SAME (DefectItem, DefectCase) row
+    list build_week_summary already fetched for the week total (never a
+    second call to metrics_service.filtered_defect_items_query), so a day's
+    `cases` and the week's `cases` structurally cannot drift apart: every
+    DefectCase has exactly one production_date, so grouping `items` by date
+    partitions the week's cases with no overlap and no gap -
+    sum(day["cases"] for day in days) == week.cases always.
 
-    Reuses the SAME _case_and_event_counts helper build_last_production_day
-    uses for its per-day cases/defect_events figures, plus
+    Which dates count as working days comes from working_days_service.
+    working_day_set - the single source of truth (never a local
+    `weekday() < 5` check) - so a manually-entered overtime Saturday (or one
+    with real inspections logged) appears here exactly when it would count
+    as a working day anywhere else in this app, and an ordinary weekend date
+    never does, even if it happens to carry defect cases (a case can be
+    logged against any production_date regardless of whether that date is a
+    working day).
+
+    entered/inspected follow the exact same False/None-never-0 rule as
+    build_last_production_day: entered is True only when at least one
+    daily_production_summaries row exists for that date (drawers_inspected
+    summed across shifts, via ONE grouped query over the whole range - never
+    one query per day); no row at all is entered=False, inspected=None. This
+    is deliberately independent of `cases` - a day can have logged defect
+    cases before the Daily Summary form was ever filled in for it, same as
+    build_last_production_day's single-day figures.
+
+    `scheduled` is deliberately NOT included - see the module docstring and
+    build_last_production_day's scheduled_per_tracker note: the brief
+    supplies its own schedule figure (the one this app's daily_schedules
+    rows were originally scraped from), so sending it back would be
+    circular.
+
+    Empty result (no working days in range at all, including start > end)
+    returns [], never None - callers must not need a null check on top of an
+    empty-list check.
+    """
+    working_days = sorted(working_days_service.working_day_set(db, start, end))
+    if not working_days:
+        return []
+
+    inspected_by_date: dict[dt.date, int] = dict(
+        db.query(
+            DailyProductionSummary.production_date,
+            func.sum(DailyProductionSummary.drawers_inspected),
+        )
+        .filter(
+            DailyProductionSummary.production_date >= start,
+            DailyProductionSummary.production_date <= end,
+        )
+        .group_by(DailyProductionSummary.production_date)
+        .all()
+    )
+
+    grouped_items: dict[dt.date, list] = {}
+    for item, case in items:
+        grouped_items.setdefault(case.production_date, []).append((item, case))
+    cases_by_date = {
+        d: _aggregate_case_and_event_counts(pairs)["cases"] for d, pairs in grouped_items.items()
+    }
+
+    return [
+        {
+            "date": d,
+            "entered": d in inspected_by_date,
+            "inspected": int(inspected_by_date[d]) if d in inspected_by_date else None,
+            "cases": cases_by_date.get(d, 0),
+        }
+        for d in working_days
+    ]
+
+
+def build_week_summary(db: Session, asof: dt.date) -> dict:
+    """{start, end, basis, cases, defect_events, top_categories, other_count,
+    days} for the "Internal QC - this week" section - see _week_range for
+    the Mon-Fri window rules.
+
+    Fetches metrics_service.filtered_defect_items_query for [start, end]
+    exactly ONCE and reuses it for both the week-total aggregation
+    (_aggregate_case_and_event_counts) and the per-day breakdown
+    (_build_week_days) - never a second query for the same range, and never
+    a second aggregation that could drift from either. Plus
     app/services/metrics_service.py's compute_pareto (the same
     descending-count/name-tiebreak sort Reports already uses) for
-    top_categories - rather than a second aggregation query that could drift
-    from either - the number on the TV and the number on Reports must never
-    disagree.
+    top_categories - the number on the TV and the number on Reports must
+    never disagree.
 
     cases: count of distinct DefectCase ids in range (one case = one defective
     drawer). defect_events: sum of DefectItem.affected_drawer_quantity in
@@ -204,13 +291,18 @@ def build_week_summary(db: Session, asof: dt.date) -> dict:
     flickers between two equal categories on consecutive days). other_count is
     every remaining event, so sum(top) + other_count == defect_events exactly.
 
+    days: see _build_week_days - one entry per working day in [start, end],
+    for the brief's scheduled-vs-inspected bar chart (Part 2). Deliberately
+    excludes `scheduled` - the brief supplies its own.
+
     Zero cases in range legitimately returns all-zero/empty fields - a
     defect-free week is a real, verified result, unlike an un-entered
     inspection count, so 0 is correct here, never null.
     """
     start, end, basis = _week_range(asof)
 
-    counts = _case_and_event_counts(db, start, end)
+    items = metrics_service.filtered_defect_items_query(db, start_date=start, end_date=end).all()
+    counts = _aggregate_case_and_event_counts(items)
     defect_events = counts["defect_events"]
     pareto_rows = metrics_service.compute_pareto(counts["category_counts"])
     top_rows = pareto_rows[:3]
@@ -225,6 +317,7 @@ def build_week_summary(db: Session, asof: dt.date) -> dict:
         "defect_events": defect_events,
         "top_categories": top_categories,
         "other_count": other_count,
+        "days": _build_week_days(db, items, start, end),
     }
 
 

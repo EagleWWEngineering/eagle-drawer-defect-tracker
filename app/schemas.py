@@ -813,11 +813,29 @@ class BriefLastProductionDayOut(BaseModel):
     defect_events: int
 
 
+class BriefWeekDayOut(BaseModel):
+    """One working day within `week`'s [start, end] range (Part 2 addendum,
+    for the brief's scheduled-vs-inspected bar chart) - see
+    brief_export_service._build_week_days. entered/inspected follow the
+    exact same False/None-never-0 rule as BriefLastProductionDayOut: no
+    daily_production_summaries row for `date` at all means entered=False,
+    inspected=None, never 0. cases is a real count, decoupled from entered
+    the same way (a genuine 0 is 0, not null). `scheduled` is deliberately
+    absent - the brief supplies its own schedule figure, sourced from the
+    same daily_schedules rows this app originally scraped it from."""
+
+    date: dt.date
+    entered: bool
+    inspected: int | None
+    cases: int
+
+
 class BriefWeekOut(BaseModel):
     """basis is "week_to_date" (Tue-Fri) or "prior_full_week" (Mon, and
     Sat/Sun defensively) - see brief_export_service.build_week_summary. A real,
     verified zero (no cases at all in range) is meaningful here and rendered as
-    0, not null."""
+    0, not null. days: one entry per working day in [start, end] - see
+    BriefWeekDayOut; sum(d.cases for d in days) always equals `cases` above."""
 
     start: dt.date
     end: dt.date
@@ -826,6 +844,7 @@ class BriefWeekOut(BaseModel):
     defect_events: int
     top_categories: list[BriefTopCategoryOut]
     other_count: int
+    days: list[BriefWeekDayOut]
 
 
 class BriefSummaryOut(BaseModel):

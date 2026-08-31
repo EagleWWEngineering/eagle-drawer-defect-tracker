@@ -171,6 +171,27 @@ def test_valid_key_returns_200_with_full_payload_shape(unauth_client, brief_key)
     assert isinstance(week["top_categories"], list)
     assert sum(c["count"] for c in week["top_categories"]) + week["other_count"] == 4
 
+    # Part 2: day-by-day breakdown, one entry per working day in [start, end].
+    days = week["days"]
+    assert [d["date"] for d in days] == [
+        dt.date(2026, 8, 17).isoformat(),  # Mon
+        dt.date(2026, 8, 18).isoformat(),  # Tue
+        dt.date(2026, 8, 19).isoformat(),  # Wed
+        dt.date(2026, 8, 20).isoformat(),  # Thu
+        FRIDAY.isoformat(),
+    ]
+    friday_entry = next(d for d in days if d["date"] == FRIDAY.isoformat())
+    assert friday_entry["entered"] is True
+    assert friday_entry["inspected"] == 390
+    assert friday_entry["cases"] == 1
+    # Every other day in this fixture has no summary row at all.
+    monday_entry = next(d for d in days if d["date"] == dt.date(2026, 8, 17).isoformat())
+    assert monday_entry["entered"] is False
+    assert monday_entry["inspected"] is None
+    assert monday_entry["cases"] == 0
+    assert "scheduled" not in friday_entry  # the brief supplies its own
+    assert sum(d["cases"] for d in days) == week["cases"]
+
 
 # ---------------------------------------------------------------------------
 # Auth: missing / wrong / unconfigured key
@@ -295,6 +316,9 @@ def test_endpoint_writes_nothing(unauth_client, brief_key):
         headers={"X-Brief-Key": brief_key},
     )
     assert resp.status_code == 200
+    # Part 2's day-by-day breakdown reads daily_production_summaries with an
+    # extra grouped query - confirm that extra read still writes nothing.
+    assert len(resp.json()["week"]["days"]) > 0
 
     db = unauth_client.testing_sessionmaker()
     try:
