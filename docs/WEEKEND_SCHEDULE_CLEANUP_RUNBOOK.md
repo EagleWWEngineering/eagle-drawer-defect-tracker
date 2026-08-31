@@ -6,12 +6,14 @@
 > runbook was run). Step 1's inspection found four weekend rows total, all
 > `source='manual'`, all `drawers_scheduled = 0`: `2026-08-22`, `2026-08-23`,
 > `2026-08-29`, `2026-08-30`. These are correctly excluded from
-> `working_days_service`'s working-day set (`source='manual'` and
-> `drawers_scheduled = 0`/nothing inspected never counts as a working day
-> regardless of source) and were deliberately left in place — the DELETE in
-> step 3 is scoped to `source='sync'` only and would never have touched them
-> anyway. **Nothing was deleted.** The SQL below is left intact for future use
-> if a bad weekend row ever does show up.
+> `working_days_service`'s working-day set because `drawers_scheduled = 0` (and
+> nothing was inspected either) — **not** because they're `source='manual'`. A
+> manual row with `drawers_scheduled > 0` DOES make the day a working day (that's
+> the deliberate overtime-Saturday escape hatch); these four just happen to be
+> zeros. They were deliberately left in place — the DELETE in step 3 is scoped
+> to `source='sync'` only and would never have touched them anyway.
+> **Nothing was deleted.** The SQL below is left intact for future use if a bad
+> weekend row ever does show up.
 
 Manual cleanup for bad weekend rows in `daily_schedules`, surfaced by the
 Working Days Logic (Part C) investigation — the relay used to write Friday's
