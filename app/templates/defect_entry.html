@@ -138,6 +138,11 @@
       <p id="label-scan-status" class="hint">Point the camera at the QR code on the label.</p>
       <video id="label-scan-video" playsinline muted style="width:100%; max-width:480px; background:#000;"></video>
       <canvas id="label-scan-canvas" style="display:none;"></canvas>
+      <!-- Debug mode (?scandebug=1) - PROJECT_SPEC_PHASE9.md hotfix 2. Off for
+           operators, no rebuild needed to turn on. Kept permanently: the crop
+           geometry will need retuning whenever the label changes. Populated by
+           renderDebugFrame() below. -->
+      <div id="label-scan-debug" style="display:none; margin-top:1rem; border-top:1px solid var(--color-border, #ccc); padding-top:0.75rem;"></div>
     </div>
   </div>
 </div>
@@ -453,12 +458,150 @@ function setScanStatus(text, isError) {
   statusEl.classList.toggle("field-error", Boolean(isError));
 }
 
+// PROJECT_SPEC_PHASE9.md hotfix 2, Step 5: close the scanner automatically
+// once the scan is complete (QR decoded + the OCR attempt has resolved,
+// success or failure), after a short pause so the operator can actually read
+// what was captured. Never fires in debug mode - that would hide the debug
+// output the fix depends on.
+const SCAN_AUTO_CLOSE_DELAY_MS = 1200;
+
+function scheduleAutoClose() {
+  setTimeout(() => {
+    if (!scanController) return; // operator already closed it manually in the meantime
+    closeScanModal();
+    focusFirstEmptyScannedField();
+  }, SCAN_AUTO_CLOSE_DELAY_MS);
+}
+
+/** After auto-close, put the cursor where typing is actually needed - the
+ * Line field when the scanner could not read it. Work order number is
+ * QR-filled or nothing to add here either way. */
+function focusFirstEmptyScannedField() {
+  const line = document.getElementById("line_label");
+  if (!line.value) line.focus();
+}
+
+function describeCaptureMessage(result) {
+  const orderNumber = document.getElementById("work_order_number").value;
+  const parts = [];
+  if (orderNumber) parts.push(`Order ${orderNumber}`);
+  if (result.line_label) parts.push(`line ${result.line_label}`);
+  if (result.dimensions) {
+    const d = result.dimensions;
+    parts.push(`${d.height} x ${d.width} x ${d.depth}`);
+  }
+  const summary = parts.length ? parts.join(", ") + "." : "Scan complete.";
+  return result.line_label ? summary : summary + " Line couldn't be read — type it in.";
+}
+
+/** ?scandebug=1 (PROJECT_SPEC_PHASE9.md hotfix 2, Step 1) - shows exactly what
+ * the recogniser was handed for this scan attempt: both crops as actual
+ * images, their raw text/confidence, the detected label boundary (or that the
+ * QR-extrapolated fallback ran instead), the normalised flat label image when
+ * boundary detection succeeded, and the server's parsed/validated result.
+ * Kept in the codebase permanently - the crop geometry will need retuning
+ * whenever the label changes. */
+function renderDebugFrame(info) {
+  const panel = document.getElementById("label-scan-debug");
+  panel.style.display = "block";
+  panel.innerHTML = "";
+
+  function row(labelText, valueHtml) {
+    const p = document.createElement("p");
+    p.innerHTML = `<strong>${escapeHtml(labelText)}:</strong> ${valueHtml}`;
+    panel.appendChild(p);
+  }
+
+  row("Detection method", escapeHtml(info.method));
+  row(
+    "QR corners (px)",
+    escapeHtml(JSON.stringify(info.qrCorners.map((c) => [Math.round(c.x), Math.round(c.y)])))
+  );
+  row(
+    "Label boundary",
+    info.boundary
+      ? escapeHtml(
+          JSON.stringify({
+            left: Math.round(info.boundary.distNegU),
+            right: Math.round(info.boundary.distPosU),
+            top: Math.round(info.boundary.distNegV),
+            bottom: Math.round(info.boundary.distPosV),
+          })
+        ) + " (px from QR center)"
+      : "not found — used the QR-extrapolated fallback"
+  );
+
+  if (info.normalizedCanvas) {
+    const label = document.createElement("p");
+    label.innerHTML = "<strong>Normalised flat label:</strong>";
+    panel.appendChild(label);
+    info.normalizedCanvas.style.maxWidth = "100%";
+    info.normalizedCanvas.style.border = "1px solid var(--color-border, #ccc)";
+    panel.appendChild(info.normalizedCanvas);
+  }
+
+  function cropBlock(title, cropCanvas, rect, text, confidence) {
+    const wrap = document.createElement("div");
+    wrap.style.minWidth = "200px";
+    const h = document.createElement("p");
+    h.innerHTML = `<strong>${escapeHtml(title)}</strong>`;
+    wrap.appendChild(h);
+    cropCanvas.style.imageRendering = "pixelated";
+    cropCanvas.style.width = "200px";
+    cropCanvas.style.height = "auto";
+    cropCanvas.style.border = "1px solid var(--color-border, #ccc)";
+    wrap.appendChild(cropCanvas);
+    const rectP = document.createElement("p");
+    rectP.className = "hint";
+    rectP.textContent = `rect: x=${Math.round(rect.x)}, y=${Math.round(rect.y)}, w=${Math.round(rect.width)}, h=${Math.round(rect.height)}`;
+    wrap.appendChild(rectP);
+    const textP = document.createElement("p");
+    textP.textContent = `raw text: ${text ? JSON.stringify(text) : "(empty)"}`;
+    wrap.appendChild(textP);
+    const confP = document.createElement("p");
+    confP.className = "hint";
+    confP.textContent = `confidence: ${confidence === null || confidence === undefined ? "n/a" : confidence}`;
+    wrap.appendChild(confP);
+    return wrap;
+  }
+
+  const cropsWrap = document.createElement("div");
+  cropsWrap.style.display = "flex";
+  cropsWrap.style.gap = "1rem";
+  cropsWrap.style.flexWrap = "wrap";
+  cropsWrap.style.marginTop = "0.5rem";
+  cropsWrap.appendChild(
+    cropBlock(
+      "Line label crop",
+      info.lineLabelCropCanvas,
+      info.lineLabelRect,
+      info.lineLabelText,
+      info.lineLabelConfidence
+    )
+  );
+  cropsWrap.appendChild(
+    cropBlock(
+      "Dimension crop",
+      info.dimensionCropCanvas,
+      info.dimensionRect,
+      info.dimensionText,
+      info.dimensionConfidence
+    )
+  );
+  panel.appendChild(cropsWrap);
+
+  row("Parsed result", escapeHtml(JSON.stringify(info.parseResult)));
+}
+
 function openScanModal() {
   document.getElementById("label-scan-modal").style.display = "flex";
   document.body.style.overflow = "hidden";
   const video = document.getElementById("label-scan-video");
   const canvas = document.getElementById("label-scan-canvas");
   setScanStatus("Point the camera at the QR code on the label.", false);
+  const debugPanel = document.getElementById("label-scan-debug");
+  debugPanel.style.display = "none";
+  debugPanel.innerHTML = "";
 
   // startScan() returns its {stop} controller SYNCHRONOUSLY (see
   // app/static/js/label-scan.js) - it is fully usable the instant this line
@@ -476,13 +619,22 @@ function openScanModal() {
     },
     onLineLabelResult: (result) => {
       applyLineLabelResult(result);
-      setScanStatus("Done — review the fields below, then close this window.", false);
+      setScanStatus(describeCaptureMessage(result), !result.line_label);
     },
     onOcrUnavailable: (message) => {
       setScanStatus(message, true);
     },
     onError: (message) => {
       setScanStatus(message, true);
+    },
+    onScanComplete: () => {
+      // Debug mode never auto-closes - that would hide the very output it
+      // exists to show (PROJECT_SPEC_PHASE9.md hotfix 2, Step 5).
+      if (window.LabelScan.isDebugEnabled()) return;
+      scheduleAutoClose();
+    },
+    onDebugFrame: (info) => {
+      renderDebugFrame(info);
     },
   });
 }

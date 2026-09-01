@@ -534,6 +534,12 @@ def parse_label(
 #: (e.g. "7" vs "7.0") - a small tolerance, not a rounding rule.
 CORNER_HEIGHT_TOLERANCE = 0.001
 
+#: PROJECT_SPEC_PHASE9.md hotfix (2026-09-01, "line label never fills"): how many
+#: digits may differ between the OCR'd order number and the QR's before a
+#: disagreement is treated as GENUINE rather than plausible OCR noise - see
+#: _order_numbers_confidently_disagree.
+ORDER_NUMBER_MAX_TOLERATED_DIGIT_DIFFERENCES = 1
+
 
 @dataclass
 class ValidationResult:
@@ -541,20 +547,49 @@ class ValidationResult:
     skipped: list[str] = field(default_factory=list)
 
 
+def _order_numbers_confidently_disagree(ocr_value: str, qr_value: str) -> bool:
+    """True only for a genuine, confident disagreement between the OCR'd order
+    number and the QR's decoded one - not a single-digit OCR slip.
+
+    Both values are always exactly 6 digits when this is even called (see
+    _ORDER_QTY_SHIP_RE / _ORDER_HASH_RE / _ORDER_BARE_RE - parsed.order_number is
+    never anything else), so a plain per-position comparison is enough; no need
+    for a general edit-distance algorithm.
+
+    Found in production (PROJECT_SPEC_PHASE9.md hotfix, 2026-09-01, "line label
+    never fills"): the dimension crop sits right beside the QR - the same area
+    the order number is itself printed - so a slightly-off crop can pick up a
+    stray digit or two from the real order number, forming a 6-digit run that
+    differs from the QR's by only one digit. Discarding an otherwise-good line
+    label read over that single misread digit throws away good data for no
+    reason; a difference of two or more digits is no longer plausibly noise and
+    still discards (see _line_label_discarded)."""
+    if len(ocr_value) != len(qr_value):
+        return True
+    differences = sum(1 for a, b in zip(ocr_value, qr_value, strict=True) if a != b)
+    return differences > ORDER_NUMBER_MAX_TOLERATED_DIGIT_DIFFERENCES
+
+
 def validate_parsed_label(parsed: ParsedLabel, *, qr_order_number: str | None) -> ValidationResult:
     """Three cross-checks. A check that could not run because a needed field never
     parsed is recorded as SKIPPED, never as a silent pass - conflating the two
     would make a label the parser mostly failed to read look identical to one that
-    genuinely checked out."""
+    genuinely checked out. A one-digit order-number disagreement is ALSO recorded
+    as skipped, not failed - see _order_numbers_confidently_disagree: it's treated
+    as unverified rather than a confident mismatch."""
     result = ValidationResult()
 
     if qr_order_number is None or parsed.order_number is None:
         result.skipped.append("order_number_matches_qr")
-    elif parsed.order_number != qr_order_number:
+    elif parsed.order_number == qr_order_number:
+        pass
+    elif _order_numbers_confidently_disagree(parsed.order_number, qr_order_number):
         result.failures.append(
             f"OCR'd order number '{parsed.order_number}' does not match the QR "
             f"code's order number '{qr_order_number}'."
         )
+    else:
+        result.skipped.append("order_number_matches_qr")
 
     if parsed.corner_block is None or parsed.dimensions is None:
         result.skipped.append("corner_block_height_matches_dimensions")
@@ -577,18 +612,20 @@ def validate_parsed_label(parsed: ParsedLabel, *, qr_order_number: str | None) -
 
 def _line_label_discarded(parsed: ParsedLabel, qr_order_number: str | None) -> bool:
     """PROJECT_SPEC_PHASE9.md "Validate against the QR": an OCR'd order number that
-    disagrees with the QR's decoded order number makes the WHOLE read untrustworthy,
-    not just that one field - most likely the crop geometry latched onto the wrong
-    label (e.g. a neighbouring drawer's label in frame) or OCR hallucinated
-    something plausible-looking. Never shown to the operator; see diagnose_label /
-    diagnose_scanned_label, which both null out line_label/line_label_alternates
-    when this is True. Deliberately the same "both present and different" test
-    validate_parsed_label already uses for its own order_number_matches_qr check -
-    one definition of "mismatch", not two."""
+    CONFIDENTLY disagrees with the QR's decoded order number makes the WHOLE read
+    untrustworthy, not just that one field - most likely the crop geometry latched
+    onto the wrong label (e.g. a neighbouring drawer's label in frame) or OCR
+    hallucinated something plausible-looking. Never shown to the operator; see
+    diagnose_label / diagnose_scanned_label, which both null out line_label/
+    line_label_alternates when this is True. Deliberately the same confident-
+    disagreement test validate_parsed_label uses for its own
+    order_number_matches_qr check (see _order_numbers_confidently_disagree) - one
+    definition of "mismatch", not two, and a one-digit OCR slip does not count -
+    only a genuine disagreement discards an otherwise-good line-label read."""
     return (
         qr_order_number is not None
         and parsed.order_number is not None
-        and parsed.order_number != qr_order_number
+        and _order_numbers_confidently_disagree(parsed.order_number, qr_order_number)
     )
 
 

@@ -205,6 +205,57 @@ def test_order_number_match_never_discards_the_line_label():
 
 
 # ---------------------------------------------------------------------------
+# Hotfix (2026-09-01, "line label never fills"): a single misread digit in the
+# order number - plausible OCR noise from a dimension crop that grazes the
+# real order number printed beside the QR - must not discard an otherwise-good
+# line-label read. Two or more differing digits is no longer plausibly noise.
+# ---------------------------------------------------------------------------
+
+
+def test_single_digit_order_number_difference_is_tolerated_not_discarded():
+    lines = [{"text": "#178415 [22] S", "x": 55, "y": 12}, {"text": "E", "x": 500, "y": 500}]
+    result = ocr_service.diagnose_scanned_label(lines, qr_order_number="178414", qr_x=60, qr_y=60)
+    assert result["line_label"] == "E"
+    assert result["line_label_discarded"] is False
+    assert result["validator_failures"] == []
+
+
+def test_single_digit_order_number_difference_is_skipped_not_a_pass_or_a_failure():
+    parsed = ocr_service.parse_label([{"text": "#178415 [22] S", "x": 10, "y": 10}])
+    validation = ocr_service.validate_parsed_label(parsed, qr_order_number="178414")
+    assert validation.failures == []
+    assert "order_number_matches_qr" in validation.skipped
+
+
+def test_two_digit_order_number_difference_still_discards():
+    # "178919" vs "178414": differs at exactly 2 positions (index 3 and 5).
+    lines = [{"text": "#178919 [22] S", "x": 55, "y": 12}, {"text": "E", "x": 500, "y": 500}]
+    result = ocr_service.diagnose_scanned_label(lines, qr_order_number="178414", qr_x=60, qr_y=60)
+    assert result["line_label"] is None
+    assert result["line_label_discarded"] is True
+    assert any("does not match the QR" in f for f in result["validator_failures"])
+
+
+# ---------------------------------------------------------------------------
+# Hotfix (2026-09-01): raw OCR text with trailing whitespace/newlines, and a
+# genuinely single-character line label, must still parse.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("raw_text", ["E", "E\n", "E\r\n", "  E  ", "E\n\n"])
+def test_line_label_with_trailing_whitespace_or_newline_still_parses(raw_text):
+    lines = [{"text": raw_text, "x": 500, "y": 500}]
+    result = ocr_service.parse_line_label(lines, qr_x=0, qr_y=0)
+    assert result["value"] == "E"
+
+
+def test_single_character_line_label_parses_on_its_own():
+    lines = [{"text": "B", "x": 500, "y": 500}]
+    result = ocr_service.parse_line_label(lines, qr_x=0, qr_y=0)
+    assert result["value"] == "B"
+
+
+# ---------------------------------------------------------------------------
 # A missing field yields a SKIPPED check, never a silent pass
 # ---------------------------------------------------------------------------
 
@@ -225,6 +276,19 @@ def test_missing_order_number_on_either_side_is_skipped_not_passed():
     parsed_with_order = ocr_service.parse_label([{"text": "#178414", "x": 10, "y": 10}])
     validation_no_qr = ocr_service.validate_parsed_label(parsed_with_order, qr_order_number=None)
     assert "order_number_matches_qr" in validation_no_qr.skipped
+
+
+def test_unreadable_order_number_does_not_discard_an_otherwise_valid_line_read():
+    """An order number that never parsed at all (not merely a noisy read) must
+    be UNVERIFIED, never treated as a mismatch - PROJECT_SPEC_PHASE9.md hotfix
+    2, Step 4."""
+    lines = [
+        {"text": "no readable order number on this crop", "x": 10, "y": 10},
+        {"text": "E", "x": 500, "y": 500},
+    ]
+    result = ocr_service.diagnose_scanned_label(lines, qr_order_number="178414", qr_x=60, qr_y=60)
+    assert result["line_label"] == "E"
+    assert result["line_label_discarded"] is False
 
 
 def test_mismatched_corner_block_height_is_a_failure():
