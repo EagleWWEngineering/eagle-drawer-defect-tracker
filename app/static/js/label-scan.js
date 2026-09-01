@@ -65,6 +65,32 @@
  * rejected candidate instead of a contaminant. The dimension crop is
  * unchanged (it was already reported working) - see
  * deriveDimensionRegionFromNormalizedLabel/deriveDimensionRegionFromQrExtrapolation.
+ *
+ * HOTFIX 4 (2026-09-01) - "select by corner proximity, then fall back to a
+ * picker": across four real-label attempts, the true letter was NEVER among
+ * the candidates HOTFIX 3 produced - the winners were real characters found
+ * elsewhere on the label (fragments of other words), because "furthest from
+ * the QR" is satisfied by anything at the far end of the label, not
+ * specifically the corner. Three changes, all in
+ * app/services/ocr_service.py (never here - see parse_line_label): (1)
+ * candidates are now ranked by distance TO the expected corner (computed
+ * below and sent as corner_x/corner_y/qr_size), nearest wins, not distance
+ * FROM the QR; (2) a token OCR merged with neighbouring punctuation/digits
+ * (e.g. "3.5B") now yields a candidate letter extracted from its own
+ * leading/trailing edge, but ONLY when already near the expected corner;
+ * (3) a distance cap and a confidence floor are both enforced - a candidate
+ * beyond either is not a candidate, and if nothing qualifies the result is
+ * an honest "couldn't read it" (line_label: null), never a distant guess.
+ * This file's own job for this fix is narrow: compute the expected corner
+ * (expectedCornerInNormalizedSpace/expectedCornerFromQrExtrapolation) and
+ * run one MORE recognition pass - PSM_SPARSE_TEXT over a generously padded
+ * region around that corner specifically (scattered-character segmentation
+ * suits an isolated letter better than the whole-label block pass) - whose
+ * words feed into the exact same `lines` list posted to the server, right
+ * alongside the whole-label pass's words. When OCR still can't produce a
+ * confident result, the New Defect form shows a manual letter-picker instead
+ * of leaving the operator with an empty field and no path forward - see
+ * app/templates/defect_entry.html.
  */
 
 (function () {
@@ -76,6 +102,7 @@
   // https://github.com/tesseract-ocr/tesseract/blob/main/include/tesseract/publictypes.h
   const PSM_SINGLE_LINE = "7"; // a line of text with normal word spacing - the dimension crop
   const PSM_BLOCK_OF_TEXT = "6"; // a single uniform block of text - the whole-label pass (HOTFIX 3)
+  const PSM_SPARSE_TEXT = "11"; // scattered characters, no block layout assumed - the corner pass (HOTFIX 4)
 
   const OCR_UPSCALE = 3; // Tesseract reads small, tightly-cropped text far better upscaled - the dimension crop
   // The whole-label region is already a few hundred pixels across at typical
@@ -105,6 +132,17 @@
   // not need to be precise - the position-ranking parser in ocr_service.py is
   // what makes a sloppy region safe, not a tight boundary.
   const FULL_LABEL_FALLBACK_MARGIN_QR_MULTIPLE = 1.5;
+
+  // HOTFIX 4 - the sparse-text pass over the EXPECTED CORNER (where the line
+  // label is expected diagonally opposite the QR): scattered-character
+  // segmentation suits an isolated letter far better than the whole-label
+  // block pass, and this crop is small/targeted enough to be worth
+  // upscaling (see OCR_UPSCALE) the way the dimension crop already is. Sized
+  // generously ("does not need to be precise") - ocr_service.py's distance
+  // cap from the expected corner is what actually decides which recognised
+  // token counts as a candidate, not how tightly this region is drawn.
+  const SPARSE_CORNER_NORM_FRACTION = 0.48; // normalised-label-space case
+  const SPARSE_CORNER_FALLBACK_QR_MULTIPLE = 3.0; // QR-extrapolated fallback case
 
   const BOUNDARY_WALK_STEP_PX = 4;
   const BOUNDARY_CONSECUTIVE_DEVIATIONS_TO_CONFIRM_EDGE = 5; // a run this long is "left the label", not a brushed-past line of text
@@ -622,6 +660,61 @@
     return { rect, toOriginalFrame: identityToOriginalFrame, sourceCanvas };
   }
 
+  /** HOTFIX 4 - "select by corner proximity": the corner diagonally opposite
+   * the QR, in NORMALISED space - a known constant fraction of the label
+   * (one of its 4 literal corners), not an estimate. Reuses the exact same
+   * "which side is the QR nearer" comparison already used to place the
+   * dimension crop, so this is guaranteed to agree with it. */
+  function expectedCornerInNormalizedSpace(normalized) {
+    const W = NORMALIZED_LABEL_WIDTH;
+    const H = NORMALIZED_LABEL_HEIGHT;
+    return {
+      x: normalized.qrNormX < W / 2 ? W : 0,
+      y: normalized.qrNormY < H / 2 ? H : 0,
+    };
+  }
+
+  /** HOTFIX 4 fallback: when label-boundary detection fails, the same
+   * QR-position-mirrored-across-the-frame estimate the original Phase 9 crop
+   * used - a real point, in ORIGINAL FRAME coordinates. */
+  function expectedCornerFromQrExtrapolation(qrBox, frameWidth, frameHeight) {
+    return { x: frameWidth - qrBox.centerX, y: frameHeight - qrBox.centerY };
+  }
+
+  /** HOTFIX 4 - the sparse-text pass's region: anchored AT the expected
+   * corner (a true normalised-space vertex), extending inward - same
+   * anchoring style as the pre-hotfix-3 line-label crop, just generously
+   * sized and no longer whitelisted/depended upon alone. */
+  function deriveSparseCornerRegionFromNormalizedLabel(normalized) {
+    const W = NORMALIZED_LABEL_WIDTH;
+    const H = NORMALIZED_LABEL_HEIGHT;
+    const corner = expectedCornerInNormalizedSpace(normalized);
+    const w = W * SPARSE_CORNER_NORM_FRACTION;
+    const h = H * SPARSE_CORNER_NORM_FRACTION;
+    const rect = clampRect(
+      { x: corner.x === 0 ? 0 : corner.x - w, y: corner.y === 0 ? 0 : corner.y - h, width: w, height: h },
+      W,
+      H
+    );
+    const inverse = invertAffine(normalized.forwardMatrix);
+    return { rect, toOriginalFrame: (p) => applyAffine(inverse, p), sourceCanvas: normalized.canvas, corner };
+  }
+
+  /** HOTFIX 4 fallback: centered on the mirrored expected-corner estimate
+   * (unlike the normalised case, this isn't a true vertex, so centering
+   * rather than anchoring-and-extending-inward is the safer bet against the
+   * estimate being off in either direction). */
+  function deriveSparseCornerRegionFromQrExtrapolation(sourceCanvas, qrBox, frameWidth, frameHeight) {
+    const corner = expectedCornerFromQrExtrapolation(qrBox, frameWidth, frameHeight);
+    const size = qrBox.size * SPARSE_CORNER_FALLBACK_QR_MULTIPLE;
+    const rect = clampRect(
+      { x: corner.x - size / 2, y: corner.y - size / 2, width: size, height: size },
+      frameWidth,
+      frameHeight
+    );
+    return { rect, toOriginalFrame: identityToOriginalFrame, sourceCanvas, corner };
+  }
+
   /** Pads a crop rect generously (PROJECT_SPEC_PHASE9.md hotfix 2 - "the
    * letter sits at the extreme edge of the label, a crop sized exactly to the
    * expected position clips it when the photo is slightly off") and clamps it
@@ -668,7 +761,7 @@
         const localX = rect.x + (bbox.x0 + bbox.x1) / 2 / scale;
         const localY = rect.y + (bbox.y0 + bbox.y1) / 2 / scale;
         const framePoint = toOriginalFrame({ x: localX, y: localY });
-        return { text, x: framePoint.x, y: framePoint.y };
+        return { text, x: framePoint.x, y: framePoint.y, confidence: line.confidence };
       })
       .filter(Boolean);
   }
@@ -690,7 +783,7 @@
         const localX = rect.x + (bbox.x0 + bbox.x1) / 2 / scale;
         const localY = rect.y + (bbox.y0 + bbox.y1) / 2 / scale;
         const framePoint = toOriginalFrame({ x: localX, y: localY });
-        return { text, x: framePoint.x, y: framePoint.y };
+        return { text, x: framePoint.x, y: framePoint.y, confidence: word.confidence };
       })
       .filter(Boolean);
   }
@@ -920,6 +1013,24 @@
           : deriveFullLabelRegionFromQrExtrapolation(canvas, qrBox, canvas.width, canvas.height);
         const fullLabelCrop = cropToCanvas(fullLabelRegion.sourceCanvas, fullLabelRegion.rect, FULL_LABEL_UPSCALE);
 
+        // HOTFIX 4 - "add a sparse-text recognition pass for the corner": a
+        // second, smaller/upscaled/differently-segmented pass over the
+        // EXPECTED corner specifically, to recover a letter the whole-label
+        // block pass merged into a neighbouring token. Its results are just
+        // MORE candidate entries in the same `lines` list sent to the
+        // server - ocr_service.py dedupes/ranks/filters everything in one
+        // place, this never decides anything on its own.
+        const sparseCornerRegion = normalized
+          ? deriveSparseCornerRegionFromNormalizedLabel(normalized)
+          : deriveSparseCornerRegionFromQrExtrapolation(canvas, qrBox, canvas.width, canvas.height);
+        const sparseCornerRect = padRect(
+          sparseCornerRegion.rect,
+          sparseCornerRegion.sourceCanvas.width,
+          sparseCornerRegion.sourceCanvas.height
+        );
+        const sparseCornerCrop = cropToCanvas(sparseCornerRegion.sourceCanvas, sparseCornerRect, OCR_UPSCALE);
+        const expectedCorner = sparseCornerRegion.toOriginalFrame(sparseCornerRegion.corner);
+
         const worker = await createTesseractWorker(cb.onPreparingScanner);
         if (state.stopped) {
           try {
@@ -934,16 +1045,27 @@
         // Sequential, not concurrent, and each with its OWN page segmentation
         // mode + whitelist set explicitly on every call (see recognizeCrop's
         // docstring) - BLOCK_OF_TEXT with NO whitelist for the whole label
-        // (it has letters, digits, fractions and punctuation - restricting
-        // the alphabet here would corrupt everything else on it), SINGLE_LINE
-        // with a digit whitelist for the dimension text. Neither ever leaks
-        // into the other's call.
+        // and SPARSE_TEXT with NO whitelist for the corner pass (both have
+        // letters, digits, fractions and punctuation - restricting the
+        // alphabet would corrupt everything else on them), SINGLE_LINE with
+        // a digit whitelist for the dimension text. None of the three ever
+        // leaks into another's call.
         const fullLabelData = await recognizeCrop(worker, fullLabelCrop, "", PSM_BLOCK_OF_TEXT).catch(
           (err) => {
             log("whole-label recognition failed", err);
             return null;
           }
         );
+        if (state.stopped) return;
+        const sparseCornerData = await recognizeCrop(
+          worker,
+          sparseCornerCrop,
+          "",
+          PSM_SPARSE_TEXT
+        ).catch((err) => {
+          log("sparse-corner recognition failed", err);
+          return null;
+        });
         if (state.stopped) return;
         const dimensionData = await recognizeCrop(
           worker,
@@ -964,6 +1086,14 @@
               FULL_LABEL_UPSCALE
             )
           : [];
+        const sparseWords = sparseCornerData
+          ? wordsFromTesseractResult(
+              sparseCornerData,
+              sparseCornerRect,
+              sparseCornerRegion.toOriginalFrame,
+              OCR_UPSCALE
+            )
+          : [];
         const dimensionLines = dimensionData
           ? linesFromTesseractResult(
               dimensionData,
@@ -972,13 +1102,20 @@
               OCR_UPSCALE
             )
           : [];
-        const lines = [...words, ...dimensionLines];
+        const lines = [...words, ...sparseWords, ...dimensionLines];
 
+        // corner_x/corner_y/qr_size (HOTFIX 4) switch ocr_service.py's line-
+        // label ranking from "furthest from the QR" to "nearest the expected
+        // corner, with a distance cap and confidence floor" - see
+        // app/services/ocr_service.py parse_line_label.
         const result = await window.Api.scanParseLabel({
           lines,
           qr_order_number: orderNumber,
           qr_x: qrBox.centerX,
           qr_y: qrBox.centerY,
+          corner_x: expectedCorner.x,
+          corner_y: expectedCorner.y,
+          qr_size: qrBox.size,
         });
         if (state.stopped) return;
         safeCall(cb.onLineLabelResult, result);
@@ -989,15 +1126,21 @@
             qrCorners,
             boundary,
             normalizedCanvas: normalized ? normalized.canvas : null,
+            expectedCorner,
             fullLabelCropCanvas: fullLabelCrop,
-            dimensionCropCanvas: dimensionCrop,
             fullLabelRect: fullLabelRegion.rect,
-            dimensionRect,
-            words,
             fullLabelText: (fullLabelData && fullLabelData.text) || "",
             fullLabelConfidence: fullLabelData ? fullLabelData.confidence : null,
+            sparseCornerCropCanvas: sparseCornerCrop,
+            sparseCornerRect,
+            sparseCornerText: (sparseCornerData && sparseCornerData.text) || "",
+            sparseCornerConfidence: sparseCornerData ? sparseCornerData.confidence : null,
+            dimensionCropCanvas: dimensionCrop,
+            dimensionRect,
             dimensionText: (dimensionData && dimensionData.text) || "",
             dimensionConfidence: dimensionData ? dimensionData.confidence : null,
+            words,
+            sparseWords,
             parseResult: result,
           });
         }
@@ -1078,6 +1221,10 @@
     deriveDimensionRegionFromQrExtrapolation,
     deriveFullLabelRegionFromNormalizedLabel,
     deriveFullLabelRegionFromQrExtrapolation,
+    expectedCornerInNormalizedSpace,
+    expectedCornerFromQrExtrapolation,
+    deriveSparseCornerRegionFromNormalizedLabel,
+    deriveSparseCornerRegionFromQrExtrapolation,
     padRect,
   };
 })();

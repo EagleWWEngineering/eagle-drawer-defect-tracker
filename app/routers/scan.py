@@ -64,6 +64,9 @@ def parse_label(payload: ScanParseIn) -> ScanDiagnosticOut:
         qr_order_number=payload.qr_order_number,
         qr_x=payload.qr_x,
         qr_y=payload.qr_y,
+        corner_x=payload.corner_x,
+        corner_y=payload.corner_y,
+        qr_size=payload.qr_size,
     )
     return ScanDiagnosticOut(**result)
 

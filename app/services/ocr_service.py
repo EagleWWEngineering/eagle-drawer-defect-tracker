@@ -331,7 +331,63 @@ _CORNER_BLOCK_RE = re.compile(r"(\d/\d)\s*[|IlL!]\s*(\d+(?:\.\d+)?)")
 # find_line_label below), never by a word list.
 _LINE_LABEL_CANDIDATE_RE = re.compile(r"^[A-Z]{1,2}$")
 _LINE_LABEL_STRIP_CHARS = ".:|,()[]"
-_LINE_LABEL_BLOCKLIST: frozenset[str] = frozenset({"SS", "FH", "MSK", "PRE", "MDF", "WW", "BOT"})
+_LINE_LABEL_BLOCKLIST: frozenset[str] = frozenset(
+    {"SS", "FH", "MSK", "PRE", "MDF", "WW", "BOT", "X"}
+)
+
+# PROJECT_SPEC_PHASE9.md "select by corner proximity, then fall back to a
+# picker" fix: on real labels, the corner block ("5/8 | 6") sits immediately
+# beside the line-label letter, on the SAME LINE - a whole-label OCR pass can
+# merge them into one token ("3.5 B", "N+B") that the isolated-token match
+# above rejects outright, so the true letter never even becomes a candidate.
+# These extract a 1-2 letter run from the very START or END of a token
+# (never the middle - "WW-2606" must never become "WW" by stripping interior
+# digits) for tokens that survive the corner-proximity gate below.
+_TRAILING_LETTERS_RE = re.compile(r"([A-Z]{1,2})$")
+_LEADING_LETTERS_RE = re.compile(r"^([A-Z]{1,2})")
+
+#: How many multiples of the QR's own size a candidate may sit from the
+#: expected corner and still qualify - "does not need to be precise" (the
+#: corner estimate itself has some error), but text from elsewhere on the
+#: label (a different word entirely) must not qualify just because nothing
+#: better was found. First-pass value, not calibrated against a real label.
+CORNER_DISTANCE_CAP_QR_MULTIPLE = 2.5
+
+#: Tesseract confidence (0-100) a candidate must clear to be trusted. Chosen
+#: deliberately on the strict side: a wrong line label silently written to
+#: the database is worse than a blank one (the whole point of this field is
+#: being able to trust it), so this fix would rather show the manual letter
+#: picker (see app/static/js/label-scan.js) than guess. A candidate with no
+#: confidence value at all (e.g. a hypothetical future source that doesn't
+#: report one) is treated as unverified, not rejected - never blocking on
+#: data the caller didn't provide.
+LINE_LABEL_MIN_CONFIDENCE = 65.0
+
+#: Two candidates with the same extracted letter within this many multiples
+#: of the QR's size are the same physical letter, seen twice - once by the
+#: block-of-text pass, once by the sparse-text pass over the same corner
+#: (see app/static/js/label-scan.js) - not two different letters.
+CANDIDATE_DEDUPE_DISTANCE_QR_MULTIPLE = 0.5
+
+
+def _extract_line_label_candidates_from_token(raw_text: str) -> list[str]:
+    """A token that survived intact as an isolated 1-2 letter word is handled
+    by the exact-match path in find_line_label_candidates already; this is
+    the fallback for a token OCR merged with neighbouring punctuation/digits
+    (e.g. "3.5B", "|3.5B", "N+B") - looks only at the token's own leading and
+    trailing run of letters, NEVER removes characters from the middle, so a
+    token like "WW-2606" doesn't spuriously yield "WW" by stripping its
+    interior digits. Deduplicates leading==trailing (the isolated-token case,
+    e.g. "A" alone, matches both ends identically)."""
+    cleaned = raw_text.strip().strip(_LINE_LABEL_STRIP_CHARS).upper()
+    found: list[str] = []
+    trailing = _TRAILING_LETTERS_RE.search(cleaned)
+    if trailing and trailing.group(1) not in found:
+        found.append(trailing.group(1))
+    leading = _LEADING_LETTERS_RE.search(cleaned)
+    if leading and leading.group(1) not in found:
+        found.append(leading.group(1))
+    return [text for text in found if text not in _LINE_LABEL_BLOCKLIST]
 
 
 def _is_decoy_line(text: str) -> bool:
@@ -433,45 +489,198 @@ def _strip_line_label_token(text: str) -> str:
     return text.strip().strip(_LINE_LABEL_STRIP_CHARS).upper()
 
 
-def find_line_label_candidates(lines: list[dict]) -> list[dict]:
-    """Every OCR line whose (stripped, uppercased) text is 1-2 letters and not on
-    the blocklist - a candidate set to be ranked by geometry, not narrowed by
-    content alone (see parse_line_label)."""
+def find_line_label_candidates(
+    lines: list[dict],
+    *,
+    corner_x: float | None = None,
+    corner_y: float | None = None,
+    max_distance: float | None = None,
+) -> list[dict]:
+    """Every OCR line/word that could plausibly BE the line label - a candidate
+    set to be ranked/filtered by geometry and confidence, not narrowed by
+    content alone (see parse_line_label). Two ways a token qualifies:
+
+      1. Isolated: the whole (stripped, uppercased) token is 1-2 letters and
+         not on the blocklist - attempted for EVERY token regardless of
+         position (unchanged from before this fix; the distance cap below is
+         what actually decides whether a far-away isolated match survives).
+      2. Merged: for tokens within `max_distance` of (corner_x, corner_y)
+         ONLY, a 1-2 letter run extracted from the token's own leading/
+         trailing edge (see _extract_line_label_candidates_from_token) -
+         PROJECT_SPEC_PHASE9.md "select by corner proximity" fix. Scoped to
+         near-corner tokens on purpose: extracting letter fragments from
+         every multi-word phrase on the label (species names, customer name,
+         ...) would flood the candidate pool for no reason.
+
+    `corner_x`/`corner_y`/`max_distance` are all optional - when any is
+    omitted, only the isolated-token path runs and every candidate's
+    "distance"/"confidence" come back None (the cloud-provider path's
+    original behaviour, byte-for-byte - see parse_line_label).
+    """
+    gated_by_corner = corner_x is not None and corner_y is not None and max_distance is not None
     candidates: list[dict] = []
     for line in lines:
-        token = _strip_line_label_token(line.get("text", ""))
-        if not token or not _LINE_LABEL_CANDIDATE_RE.match(token):
-            continue
-        if token in _LINE_LABEL_BLOCKLIST:
-            continue
-        candidates.append({"text": token, "x": line["x"], "y": line["y"]})
+        raw_text = line.get("text", "")
+        distance = (
+            _squared_distance(line["x"], line["y"], corner_x, corner_y) ** 0.5
+            if gated_by_corner
+            else None
+        )
+
+        isolated = _strip_line_label_token(raw_text)
+        if (
+            isolated
+            and _LINE_LABEL_CANDIDATE_RE.match(isolated)
+            and isolated not in _LINE_LABEL_BLOCKLIST
+        ):
+            texts = [isolated]
+        elif gated_by_corner and distance is not None and distance <= max_distance:
+            texts = _extract_line_label_candidates_from_token(raw_text)
+        else:
+            texts = []
+
+        for text in texts:
+            candidates.append(
+                {
+                    "text": text,
+                    "x": line["x"],
+                    "y": line["y"],
+                    "confidence": line.get("confidence"),
+                    "distance": distance,
+                }
+            )
     return candidates
+
+
+def _dedupe_candidates_by_position(candidates: list[dict], *, threshold: float) -> list[dict]:
+    """Two candidates with the same extracted text within `threshold` pixels
+    of each other are the same physical letter seen twice - once by the
+    block-of-text pass, once by the sparse-text pass over the same corner
+    (PROJECT_SPEC_PHASE9.md "sparse-text recognition pass" fix). Keeps
+    whichever occurrence has the higher confidence (first-seen on a tie)."""
+    kept: list[dict] = []
+    for candidate in candidates:
+        duplicate_index = next(
+            (
+                i
+                for i, existing in enumerate(kept)
+                if existing["text"] == candidate["text"]
+                and _squared_distance(existing["x"], existing["y"], candidate["x"], candidate["y"])
+                ** 0.5
+                <= threshold
+            ),
+            None,
+        )
+        if duplicate_index is None:
+            kept.append(candidate)
+            continue
+        existing = kept[duplicate_index]
+        existing_confidence = existing["confidence"] if existing["confidence"] is not None else -1.0
+        new_confidence = candidate["confidence"] if candidate["confidence"] is not None else -1.0
+        if new_confidence > existing_confidence:
+            kept[duplicate_index] = candidate
+    return kept
 
 
 def _squared_distance(ax: float, ay: float, bx: float, by: float) -> float:
     return (ax - bx) ** 2 + (ay - by) ** 2
 
 
-def parse_line_label(lines: list[dict], *, qr_x: float | None, qr_y: float | None) -> dict:
-    """The line label sits diagonally opposite the QR code; the ship code sits
-    right beside it. Ranking every 1-2 letter candidate by squared distance from
-    the QR's position, furthest first, is what separates a line label from a
-    ship-code letter of the same value (e.g. "D" as both) - never a word list,
-    since D/S/P are all valid line labels too.
+def _rank_by_expected_corner(
+    candidates: list[dict], *, corner_x: float, corner_y: float, qr_size: float
+) -> dict:
+    """PROJECT_SPEC_PHASE9.md "select by corner proximity, then fall back to a
+    picker": rank every candidate by distance TO the expected corner
+    (nearest wins) instead of distance FROM the QR (furthest wins) - these are
+    NOT equivalent. "Furthest from the QR" is satisfied by anything at the
+    far end of the label, including text along an edge that isn't the corner
+    at all; "nearest the expected corner" is satisfied only by what's
+    actually there.
 
-    Falls back to distance from the centroid of every OCR line when the browser
-    didn't supply a QR position (`used_centroid_fallback` records that this
-    happened, so a caller can tell a low-confidence read from a normal one).
+    A candidate beyond CORNER_DISTANCE_CAP_QR_MULTIPLE * qr_size, or below
+    LINE_LABEL_MIN_CONFIDENCE, is NOT a candidate at all - if nothing
+    qualifies, the line genuinely could not be read (value=None). A wrong
+    line label silently written to the database is worse than a blank one,
+    so this never reaches for a distant token just because it's the closest
+    thing available; see app/static/js/label-scan.js for the manual letter
+    picker this is designed to hand off to on failure.
 
-    Returns {"value": str | None, "alternates": list[str], "used_centroid_fallback": bool,
-    "ranked_candidates": list[dict]}. Alternates are the next-furthest candidates
-    (up to 3) - required so a wrong answer's near-misses are visible, not just the
-    one field parse_label() commits to. `ranked_candidates` is every candidate in
-    ranked (furthest-first) order with its own distance - PROJECT_SPEC_PHASE9.md
-    "read the whole label" fix: exposed so `?scandebug=1` can show the full
-    ranking a real word-level OCR pass produced, not just the winner.
+    Every candidate (qualifying or not) comes back in `ranked_candidates`,
+    annotated with why it was rejected (if it was) - `?scandebug=1` shows
+    this so a bad read is diagnosable, not just invisible.
     """
-    candidates = find_line_label_candidates(lines)
+    deduped = _dedupe_candidates_by_position(
+        candidates, threshold=qr_size * CANDIDATE_DEDUPE_DISTANCE_QR_MULTIPLE
+    )
+    max_distance = qr_size * CORNER_DISTANCE_CAP_QR_MULTIPLE
+
+    annotated = []
+    for c in deduped:
+        if c["distance"] is None or c["distance"] > max_distance:
+            reason = "distance"
+        elif c["confidence"] is not None and c["confidence"] < LINE_LABEL_MIN_CONFIDENCE:
+            reason = "confidence"
+        else:
+            reason = None
+        annotated.append({**c, "rejected_reason": reason})
+    annotated.sort(key=lambda c: c["distance"] if c["distance"] is not None else float("inf"))
+
+    qualifying = [c for c in annotated if c["rejected_reason"] is None]
+    return {
+        "value": qualifying[0]["text"] if qualifying else None,
+        "alternates": [c["text"] for c in qualifying[1:4]],
+        "used_centroid_fallback": False,
+        "ranked_candidates": annotated,
+    }
+
+
+def parse_line_label(
+    lines: list[dict],
+    *,
+    qr_x: float | None,
+    qr_y: float | None,
+    corner_x: float | None = None,
+    corner_y: float | None = None,
+    qr_size: float | None = None,
+) -> dict:
+    """When `corner_x`/`corner_y`/`qr_size` are all supplied (the default
+    browser-side Tesseract path - see app/static/js/label-scan.js), candidates
+    are ranked by distance to the expected corner (nearest wins), with a
+    distance cap and confidence floor both enforced - see
+    _rank_by_expected_corner. This is the path real labels need: the label's
+    own corner-block text ("5/8 | 6") sits right beside the line label, so
+    OCR frequently merges them into one token and/or fragments neighbouring
+    words into stray isolated letters elsewhere on the label - ranking by
+    proximity to a known expected point, with a hard cap, is what keeps a
+    distant fragment from winning just because nothing better showed up.
+
+    Otherwise (the optional cloud providers, which don't compute this
+    geometry) falls back to the ORIGINAL ranking: every 1-2 letter candidate
+    by squared distance from the QR's position, furthest first - the line
+    label sits diagonally opposite the QR, the ship code right beside it, so
+    "furthest from the QR" told them apart there. Falls back further still to
+    distance from the centroid of every OCR line when even the QR position is
+    missing (`used_centroid_fallback` records that this happened).
+
+    Returns {"value": str | None, "alternates": list[str],
+    "used_centroid_fallback": bool, "ranked_candidates": list[dict]}.
+    Alternates are the next-best candidates (up to 3) that themselves qualify
+    (never a rejected filler) - required so a wrong answer's near-misses are
+    visible as one-tap corrections, not just the one field parse_label()
+    commits to. `ranked_candidates` is every candidate found (qualifying or
+    not, each with its own distance and rejection reason if any) -
+    PROJECT_SPEC_PHASE9.md fix: exposed so `?scandebug=1` can show the real
+    decision, not a recomputed guess.
+    """
+    use_corner_ranking = corner_x is not None and corner_y is not None and qr_size is not None
+    max_distance = qr_size * CORNER_DISTANCE_CAP_QR_MULTIPLE if use_corner_ranking else None
+
+    candidates = find_line_label_candidates(
+        lines,
+        corner_x=corner_x if use_corner_ranking else None,
+        corner_y=corner_y if use_corner_ranking else None,
+        max_distance=max_distance,
+    )
     if not candidates:
         return {
             "value": None,
@@ -480,6 +689,12 @@ def parse_line_label(lines: list[dict], *, qr_x: float | None, qr_y: float | Non
             "ranked_candidates": [],
         }
 
+    if use_corner_ranking:
+        return _rank_by_expected_corner(
+            candidates, corner_x=corner_x, corner_y=corner_y, qr_size=qr_size
+        )
+
+    # --- Original furthest-from-QR ranking (cloud providers) - unchanged ---
     used_centroid_fallback = qr_x is None or qr_y is None
     if used_centroid_fallback:
         ref_x = sum(line["x"] for line in lines) / len(lines)
@@ -498,6 +713,8 @@ def parse_line_label(lines: list[dict], *, qr_x: float | None, qr_y: float | Non
             "x": c["x"],
             "y": c["y"],
             "distance": _squared_distance(c["x"], c["y"], ref_x, ref_y) ** 0.5,
+            "confidence": c.get("confidence"),
+            "rejected_reason": None,  # this ranking path has no cap/floor to reject against
         }
         for c in ranked
     ]
@@ -524,7 +741,13 @@ class ParsedLabel:
 
 
 def parse_label(
-    lines: list[dict], *, qr_x: float | None = None, qr_y: float | None = None
+    lines: list[dict],
+    *,
+    qr_x: float | None = None,
+    qr_y: float | None = None,
+    corner_x: float | None = None,
+    corner_y: float | None = None,
+    qr_size: float | None = None,
 ) -> ParsedLabel:
     """Run every field parser above against one normalised line list. Any field
     may come back None - that is a normal, expected outcome for a label read under
@@ -532,14 +755,22 @@ def parse_label(
     missing field is reported (skipped, never silently treated as a pass).
 
     `lines` may be WORD-level or LINE-level entries - this function (and every
-    parser it calls) only ever looks at {"text", "x", "y"}, so it makes no
-    difference which granularity produced them. The default browser-side path
-    now sends word-level entries from a single whole-label recognition pass
-    (see app/static/js/label-scan.js) instead of per-crop lines; the optional
-    cloud providers still send line-level entries. One implementation either
-    way (PROJECT_SPEC_PHASE9.md "read the whole label" fix)."""
+    parser it calls) only ever looks at {"text", "x", "y"} (plus an optional
+    "confidence" - see parse_line_label), so it makes no difference which
+    granularity produced them. The default browser-side path sends word-level
+    entries from a whole-label pass plus a sparse-text pass over the expected
+    corner (see app/static/js/label-scan.js); the optional cloud providers
+    still send line-level entries with no confidence and no corner_x/corner_y/
+    qr_size - one implementation either way, see parse_line_label for how the
+    two paths' ranking differs.
+
+    `corner_x`/`corner_y`/`qr_size` are the browser's own estimate of where
+    the line label should be and the QR's size (the distance-cap reference
+    unit) - see parse_line_label."""
     order_qty_ship = parse_order_qty_ship(lines)
-    line_label = parse_line_label(lines, qr_x=qr_x, qr_y=qr_y)
+    line_label = parse_line_label(
+        lines, qr_x=qr_x, qr_y=qr_y, corner_x=corner_x, corner_y=corner_y, qr_size=qr_size
+    )
     return ParsedLabel(
         order_number=order_qty_ship["order_number"],
         quantity=order_qty_ship["quantity"],
@@ -763,13 +994,24 @@ def diagnose_scanned_label(
     qr_order_number: str | None,
     qr_x: float | None,
     qr_y: float | None,
+    corner_x: float | None = None,
+    corner_y: float | None = None,
+    qr_size: float | None = None,
 ) -> dict:
     """The default, browser-side path (POST /api/v1/scan/parse-label - see
     app/routers/scan.py and app/static/js/label-scan.js). `lines` are raw text
-    lines Tesseract.js already recognised client-side, from the line-label and
-    dimension crops it derived from the QR's geometry, each translated back into
-    the photo's original coordinate space so they rank against qr_x/qr_y exactly
-    like a cloud provider's lines already do (parse_line_label).
+    entries Tesseract.js already recognised client-side - word-level, from a
+    whole-label pass and a sparse-text pass over the expected line-label
+    corner, plus the dimension crop's own line-level entries - each translated
+    back into the photo's original coordinate space so they rank against
+    qr_x/qr_y (and corner_x/corner_y) exactly like a cloud provider's lines
+    already do (parse_line_label).
+
+    `corner_x`/`corner_y`/`qr_size` are the browser's own estimate of the
+    expected line-label corner and the QR's size - when supplied, the line
+    label is ranked by proximity to that point with a distance cap and
+    confidence floor instead of the older furthest-from-QR ranking (see
+    parse_line_label / _rank_by_expected_corner).
 
     Synchronous and network-free on purpose: this never calls a provider, so it
     needs no OCR_API_KEY and keeps working even when every cloud provider is
@@ -777,7 +1019,9 @@ def diagnose_scanned_label(
     text parsing + the same cross-field validation diagnose_label() uses, one
     implementation, never duplicated in JavaScript (PROJECT_SPEC_PHASE9.md Part 3).
     """
-    parsed = parse_label(lines, qr_x=qr_x, qr_y=qr_y)
+    parsed = parse_label(
+        lines, qr_x=qr_x, qr_y=qr_y, corner_x=corner_x, corner_y=corner_y, qr_size=qr_size
+    )
     return _build_scan_result(
         parsed, qr_order_number=qr_order_number, raw_lines=lines, elapsed_ms=0.0
     )

@@ -231,6 +231,193 @@ def test_whole_label_word_level_entries_also_parse_order_ship_and_dimensions():
 
 
 # ---------------------------------------------------------------------------
+# PROJECT_SPEC_PHASE9.md "select by corner proximity, then fall back to a
+# picker": the label's own corner-block text ("5/8 | 6") sits right beside
+# the line label, on the same line - OCR can merge them into one token that
+# the isolated-token match rejects outright, so the true letter never even
+# becomes a candidate, and stray single-letter fragments from elsewhere on
+# the label (fragmented word segmentation) win by default under a pure
+# furthest-from-QR ranking with no cap. These exercise the corner-aware
+# ranking path (corner_x/corner_y/qr_size all supplied) directly.
+# ---------------------------------------------------------------------------
+
+
+def test_corner_ranking_picks_the_candidate_nearest_the_expected_corner():
+    """Not equivalent to furthest-from-QR: a nearer-but-still-far candidate
+    must win over one that's merely further from the QR but not actually at
+    the expected corner."""
+    lines = [
+        {"text": "B", "x": 900, "y": 500},  # right at the expected corner
+        {"text": "A", "x": 50, "y": 900},  # further from the QR, but NOT near the corner
+    ]
+    result = ocr_service.parse_line_label(
+        lines, qr_x=60, qr_y=60, corner_x=900, corner_y=500, qr_size=100
+    )
+    assert result["value"] == "B"
+
+
+def test_merged_token_yields_the_letter_at_its_trailing_edge():
+    """ "3.5B" (the corner block and line label merged into one OCR token) must
+    still yield "B" - extracted from the token's own edge, near the corner."""
+    lines = [{"text": "3.5B", "x": 900, "y": 500}]
+    result = ocr_service.parse_line_label(
+        lines, qr_x=60, qr_y=60, corner_x=900, corner_y=500, qr_size=100
+    )
+    assert result["value"] == "B"
+
+
+def test_merged_token_with_pipe_separator_still_yields_the_letter():
+    lines = [{"text": "|3.5B", "x": 900, "y": 500}]
+    result = ocr_service.parse_line_label(
+        lines, qr_x=60, qr_y=60, corner_x=900, corner_y=500, qr_size=100
+    )
+    assert result["value"] == "B"
+
+
+def test_merged_token_extracts_from_both_ends_never_the_middle():
+    """ "N+B" must yield candidates "N" and "B" (the two ends), never "NB" -
+    the middle is never stripped out. "WW-2606" must still never yield "WW"
+    (the interior digits are never stripped either - it isn't a merged-letter
+    token at all, it's a real multi-character code)."""
+    lines = [
+        {"text": "N+B", "x": 900, "y": 500},
+        {"text": "WW-2606", "x": 905, "y": 505},
+    ]
+    result = ocr_service.parse_line_label(
+        lines, qr_x=60, qr_y=60, corner_x=900, corner_y=500, qr_size=100
+    )
+    texts = {c["text"] for c in result["ranked_candidates"]}
+    assert "N" in texts
+    assert "B" in texts
+    assert "NB" not in texts
+    assert "WW" not in texts
+
+
+def test_merged_token_extraction_only_attempted_near_the_expected_corner():
+    """A multi-word phrase far from the corner (e.g. a species name) must
+    never be scanned for embedded letter fragments - only isolated exact
+    1-2 letter tokens are considered there."""
+    lines = [{"text": "MAPLEWOOD", "x": 50, "y": 50}]  # far from the corner at (900,500)
+    result = ocr_service.parse_line_label(
+        lines, qr_x=60, qr_y=60, corner_x=900, corner_y=500, qr_size=100
+    )
+    assert result["value"] is None
+    assert result["ranked_candidates"] == []
+
+
+def test_distant_matching_token_is_rejected_by_the_distance_cap():
+    """A clean, isolated 1-2 letter token that is simply somewhere else on the
+    label (not near the expected corner) must not win by default - this is
+    the exact "AN"/"EE" failure mode: reaching across the label instead of
+    admitting nothing qualified."""
+    lines = [{"text": "AN", "x": 200, "y": 200}]  # far from the corner at (900, 500)
+    result = ocr_service.parse_line_label(
+        lines, qr_x=60, qr_y=60, corner_x=900, corner_y=500, qr_size=100
+    )
+    assert result["value"] is None
+    assert len(result["ranked_candidates"]) == 1
+    assert result["ranked_candidates"][0]["text"] == "AN"
+    assert result["ranked_candidates"][0]["rejected_reason"] == "distance"
+
+
+def test_low_confidence_candidate_near_the_corner_is_rejected_not_guessed():
+    lines = [{"text": "B", "x": 900, "y": 500, "confidence": 40.0}]
+    result = ocr_service.parse_line_label(
+        lines, qr_x=60, qr_y=60, corner_x=900, corner_y=500, qr_size=100
+    )
+    assert result["value"] is None
+    assert result["ranked_candidates"][0]["rejected_reason"] == "confidence"
+
+
+def test_missing_confidence_is_not_treated_as_a_rejection():
+    lines = [{"text": "B", "x": 900, "y": 500}]  # no "confidence" key at all
+    result = ocr_service.parse_line_label(
+        lines, qr_x=60, qr_y=60, corner_x=900, corner_y=500, qr_size=100
+    )
+    assert result["value"] == "B"
+
+
+def test_nothing_qualifying_returns_unread_result_never_a_guess():
+    """Every candidate present, but none clears BOTH checks - value must be
+    None, not the least-bad option."""
+    lines = [
+        {"text": "AN", "x": 200, "y": 200, "confidence": 90.0},  # too far
+        {"text": "B", "x": 900, "y": 500, "confidence": 30.0},  # near enough, too low confidence
+    ]
+    result = ocr_service.parse_line_label(
+        lines, qr_x=60, qr_y=60, corner_x=900, corner_y=500, qr_size=100
+    )
+    assert result["value"] is None
+    assert result["alternates"] == []
+    reasons = {c["text"]: c["rejected_reason"] for c in result["ranked_candidates"]}
+    assert reasons == {"AN": "distance", "B": "confidence"}
+
+
+def test_alternates_never_include_a_rejected_candidate():
+    lines = [
+        {"text": "B", "x": 900, "y": 500, "confidence": 90.0},  # winner
+        {"text": "C", "x": 910, "y": 510, "confidence": 90.0},  # qualifies too - real alternate
+        {"text": "AN", "x": 200, "y": 200, "confidence": 90.0},  # too far - never an alternate
+    ]
+    result = ocr_service.parse_line_label(
+        lines, qr_x=60, qr_y=60, corner_x=900, corner_y=500, qr_size=100
+    )
+    assert result["value"] == "B"
+    assert result["alternates"] == ["C"]
+
+
+def test_sparse_and_block_pass_results_merge_without_duplicates():
+    """The same physical letter, recognised independently by both the
+    block-of-text pass and the sparse-text pass over the same corner, must
+    collapse into ONE candidate (kept: whichever reading has higher
+    confidence) - not appear twice in ranked_candidates or as its own
+    alternate of itself."""
+    lines = [
+        {"text": "B", "x": 900, "y": 500, "confidence": 70.0},  # block pass
+        {"text": "B", "x": 902, "y": 501, "confidence": 95.0},  # sparse pass, same letter
+    ]
+    result = ocr_service.parse_line_label(
+        lines, qr_x=60, qr_y=60, corner_x=900, corner_y=500, qr_size=100
+    )
+    assert result["value"] == "B"
+    assert len(result["ranked_candidates"]) == 1
+    assert result["ranked_candidates"][0]["confidence"] == 95.0  # kept the higher-confidence read
+
+
+def test_sparse_and_block_pass_do_not_merge_different_letters_at_different_positions():
+    lines = [
+        {"text": "B", "x": 900, "y": 500, "confidence": 90.0},
+        {"text": "C", "x": 300, "y": 300, "confidence": 90.0},  # different letter, far away
+    ]
+    result = ocr_service.parse_line_label(
+        lines, qr_x=60, qr_y=60, corner_x=900, corner_y=500, qr_size=100
+    )
+    assert len(result["ranked_candidates"]) == 2
+
+
+def test_x_is_always_blocklisted_even_near_the_corner():
+    """A stray multiplication-sign "x" recognised near the corner (e.g. by an
+    overlapping whole-label read of the dimension text) must never become the
+    line label."""
+    lines = [{"text": "x", "x": 900, "y": 500, "confidence": 95.0}]
+    result = ocr_service.parse_line_label(
+        lines, qr_x=60, qr_y=60, corner_x=900, corner_y=500, qr_size=100
+    )
+    assert result["value"] is None
+
+
+def test_corner_ranking_requires_all_three_of_corner_x_corner_y_qr_size():
+    """Falls back to the original furthest-from-QR ranking, unchanged, when
+    any one of the three is missing - never a partial/broken corner ranking."""
+    lines = [
+        {"text": "D", "x": 62, "y": 62},
+        {"text": "A", "x": 900, "y": 900},
+    ]
+    result = ocr_service.parse_line_label(lines, qr_x=60, qr_y=60, corner_x=900, corner_y=900)
+    assert result["value"] == "A"  # furthest-from-QR fallback, same as with no corner args at all
+
+
+# ---------------------------------------------------------------------------
 # Corner block separator OCR misreads
 # ---------------------------------------------------------------------------
 

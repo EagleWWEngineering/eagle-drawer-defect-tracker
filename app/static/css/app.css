@@ -317,6 +317,33 @@ button.danger, .btn.danger {
   margin-bottom: 0.5rem;
 }
 
+/* Line-label picker (PROJECT_SPEC_PHASE9.md hotfix 4, Fix 5) - compact
+   single-letter buttons in a wrapping row. Deliberately its own small class
+   rather than .tap-btn/.button-grid above, which are sized for a handful of
+   category/station buttons, not a 26-letter alphabet. */
+.letter-picker-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.letter-picker-btn {
+  background: #fff;
+  color: var(--color-text);
+  border: 2px solid var(--color-border);
+  min-width: 36px;
+  min-height: 36px;
+  font-weight: 600;
+  padding: 0.2rem;
+  text-align: center;
+}
+
+.letter-picker-btn.selected {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: var(--color-primary-dark);
+}
+
 /* Secondary "leave this case open" opt-out (PROJECT_SPEC.md section 3.3) - a small
    plain checkbox + label, deliberately understated next to the big primary
    disposition button and repair-action presets above it. */

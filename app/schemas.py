@@ -890,13 +890,17 @@ class BriefSummaryOut(BaseModel):
 
 
 class ScanLineOut(BaseModel):
-    """One normalised OCR text line - identical shape regardless of which
-    provider (Azure or Google) produced it. See
-    app/services/ocr_service.py normalize_azure_response/normalize_google_response."""
+    """One normalised OCR text line/word - identical shape regardless of which
+    provider (Azure or Google) or which Tesseract.js pass produced it. See
+    app/services/ocr_service.py normalize_azure_response/normalize_google_response.
+    `confidence` (0-100) is only ever populated by the browser-side Tesseract.js
+    path - the line-label ranking treats a missing confidence as unverified,
+    never as a rejection (see ocr_service.py parse_line_label)."""
 
     text: str
     x: float
     y: float
+    confidence: float | None = None
 
 
 class ScanDimensionsOut(BaseModel):
@@ -911,16 +915,25 @@ class ScanCornerBlockOut(BaseModel):
 
 
 class ScanLineLabelCandidateOut(BaseModel):
-    """One 1-2 letter token found anywhere in the recognised text, ranked by
-    distance from the QR (furthest first - see ocr_service.py parse_line_label).
-    Diagnostic only (?scandebug=1) - the ranking itself, and which candidate
-    wins, is decided entirely in ocr_service.py; this just exposes what it
-    already computed so the read is visible, not a second implementation."""
+    """One 1-2 letter candidate found anywhere in the recognised text -
+    either an isolated token, or a letter run extracted from one OCR merged
+    with neighbouring punctuation/digits (see ocr_service.py
+    find_line_label_candidates). Ranked by distance to the expected corner
+    (nearest first) when the browser supplied one, otherwise by distance from
+    the QR (furthest first) - see ocr_service.py parse_line_label.
+    `rejected_reason` is set ("distance" or "confidence") when this candidate
+    did NOT qualify as the winner or an alternate - included so
+    `?scandebug=1` can show what was rejected and why, never silently
+    dropped. Diagnostic only - the ranking/rejection decision itself is made
+    entirely in ocr_service.py; this just exposes what it already computed,
+    never a second implementation."""
 
     text: str
     x: float
     y: float
-    distance: float
+    distance: float | None = None
+    confidence: float | None = None
+    rejected_reason: str | None = None
 
 
 class ScanDiagnosticOut(BaseModel):
@@ -973,6 +986,16 @@ class ScanParseIn(BaseModel):
     qr_order_number: str | None = None
     qr_x: float | None = None
     qr_y: float | None = None
+    # PROJECT_SPEC_PHASE9.md "select by corner proximity" fix: the browser's
+    # own estimate of where the line label should be (the corner diagonally
+    # opposite the QR - see app/static/js/label-scan.js) and the QR's own
+    # size (the reference unit for the distance cap). When any of these three
+    # is missing, ocr_service.py falls back to the older furthest-from-QR
+    # ranking with no distance cap or confidence floor - see
+    # ocr_service.py parse_line_label.
+    corner_x: float | None = None
+    corner_y: float | None = None
+    qr_size: float | None = None
 
 
 class ScanConfigOut(BaseModel):

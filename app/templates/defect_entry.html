@@ -22,6 +22,22 @@
     <input type="text" id="line_label" name="line_label" maxlength="2" style="text-transform:uppercase; max-width:6ch;">
     <div id="line-label-alternates" style="display:none; margin-top:0.4rem;"></div>
     <p id="scan-status-hint" class="hint" style="display:none;"></p>
+    <!-- Letter picker (PROJECT_SPEC_PHASE9.md hotfix 4, Fix 5) - shown
+         whenever OCR does not produce a confident result. Required, not a
+         nice-to-have: this is what keeps a failed scan from being a dead
+         end. See defect_entry.html's script block for the show/hide logic. -->
+    <div id="line-label-picker" style="display:none; margin-top:0.5rem;">
+      <div id="line-label-picker-singles" class="letter-picker-grid" role="group" aria-label="Line letter picker"></div>
+      <button type="button" id="line-label-picker-two-letter-toggle" class="secondary" style="margin-top:0.4rem;">Two-letter line (AA–ZZ)…</button>
+      <div id="line-label-picker-two-letter" style="display:none; margin-top:0.4rem;">
+        <p class="hint" style="margin-bottom:0.2rem;">First letter:</p>
+        <div id="line-label-picker-first" class="letter-picker-grid" role="group" aria-label="First letter"></div>
+        <div id="line-label-picker-second-wrap" style="display:none; margin-top:0.4rem;">
+          <p class="hint" style="margin-bottom:0.2rem;">Second letter:</p>
+          <div id="line-label-picker-second" class="letter-picker-grid" role="group" aria-label="Second letter"></div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div class="filters">
@@ -204,13 +220,17 @@ let qty = 1;
 let leaveOpen = false;
 let selectedRepairPreset = null;
 let selectedInstantCloseOutcome = DEFAULT_INSTANT_CLOSE_OUTCOME;
-// PROJECT_SPEC_PHASE9.md Part 3: entry_source tracking. `active` becomes true
-// the moment ANY field gets prefilled by scanning (QR order number or OCR'd
-// line); `edited` becomes true only if the operator then actually types into
-// one of those fields afterward (setting .value via JS never fires an "input"
-// event, so a scan-then-immediately-submit never looks "edited"). See
-// collectPayload() and resetFormForNextEntry() below.
-let scanState = { active: false, edited: false };
+// PROJECT_SPEC_PHASE9.md hotfix 4, Fix 5: entry_source tracks the LINE field
+// SPECIFICALLY (not the whole case/order number) - "manual" when the letter
+// came from a tap (keyboard OR the letter picker), "scanned" when OCR
+// supplied it, "scanned_edited" when OCR supplied it and the operator then
+// changed it (typing, or tapping an alternate/picker letter afterward).
+// Starts "manual" and only ever moves to "scanned" from a successful OCR
+// read - so a case where the operator never used the scanner, or where OCR
+// found nothing and the operator typed/tapped the letter themselves, is
+// correctly "manual" either way. See collectPayload() and
+// resetFormForNextEntry() below.
+let lineEntrySource = "manual";
 let scanController = null;
 
 function dispositionSupportsInstantClose(disposition) {
@@ -404,11 +424,12 @@ function wireStationGroup(commonId, allId, moreBtnId, onSelect) {
 // path keeps working unchanged if the camera fails or OCR is disabled).
 // ---------------------------------------------------------------------------
 
-function markScanActive() {
-  scanState.active = true;
-}
-function markScanEdited() {
-  if (scanState.active) scanState.edited = true;
+/** A scanned/tapped value can still be corrected by hand afterward - this is
+ * what turns that correction into "scanned_edited" rather than leaving it
+ * looking like a clean OCR read (PROJECT_SPEC_PHASE9.md hotfix 4, Fix 5). A
+ * no-op unless the line is currently marked "scanned". */
+function markLineEdited() {
+  if (lineEntrySource === "scanned") lineEntrySource = "scanned_edited";
 }
 
 function applyLineLabelResult(result) {
@@ -418,15 +439,15 @@ function applyLineLabelResult(result) {
 
   if (result.line_label) {
     input.value = result.line_label;
-    markScanActive();
+    lineEntrySource = "scanned";
     hint.style.display = "none";
   } else if (result.line_label_discarded) {
     hint.textContent =
       "The scanned order number didn't match this label's QR code, so the line read was " +
-      "discarded. Enter the line manually.";
+      "discarded. Enter the line manually, or tap a letter below.";
     hint.style.display = "block";
   } else {
-    hint.textContent = "Couldn't read the line label automatically. Enter it manually.";
+    hint.textContent = "Couldn't read the line label automatically. Enter it manually, or tap a letter below.";
     hint.style.display = "block";
   }
 
@@ -445,6 +466,45 @@ function applyLineLabelResult(result) {
     altContainer.style.display = "none";
     altContainer.innerHTML = "";
   }
+}
+
+// ---------------------------------------------------------------------------
+// Letter picker (PROJECT_SPEC_PHASE9.md hotfix 4, Fix 5 - required, not
+// optional): whenever OCR does not produce a confident result, the operator
+// has the label in hand and can read one character - a tap is always
+// correct. Shown once the scan session concludes (see onScanComplete below)
+// if the Line field is STILL empty at that point, whatever the reason
+// (nothing confident found, OCR disabled, camera/QR failure, ...) - one
+// check, every failure mode covered, never a dead end.
+// ---------------------------------------------------------------------------
+
+const LINE_LABEL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+let pickedFirstLetter = null;
+
+function renderLetterButtons(containerId) {
+  document.getElementById(containerId).innerHTML = LINE_LABEL_ALPHABET.map(
+    (letter) => `<button type="button" class="letter-picker-btn" data-letter="${letter}">${letter}</button>`
+  ).join("");
+}
+
+function applyPickedLetter(letter) {
+  document.getElementById("line_label").value = letter;
+  // A tap is always manual entry - never "scanned", even though OCR may
+  // have already run (and failed) in this same session (PROJECT_SPEC_PHASE9.md
+  // hotfix 4, Fix 5).
+  lineEntrySource = "manual";
+  hideLineLabelPicker();
+}
+
+function showLineLabelPicker() {
+  document.getElementById("line-label-picker").style.display = "block";
+  document.getElementById("line-label-picker-two-letter").style.display = "none";
+  document.getElementById("line-label-picker-second-wrap").style.display = "none";
+  pickedFirstLetter = null;
+}
+
+function hideLineLabelPicker() {
+  document.getElementById("line-label-picker").style.display = "none";
 }
 
 /** Plain-language messages inside the modal - error/unavailable states get the
@@ -651,7 +711,6 @@ function openScanModal() {
   scanController = window.LabelScan.startScan(video, canvas, {
     onOrderNumber: (orderNumber) => {
       document.getElementById("work_order_number").value = orderNumber;
-      markScanActive();
       setScanStatus("Order number found — reading the line label...", false);
     },
     onPreparingScanner: () => {
@@ -668,6 +727,13 @@ function openScanModal() {
       setScanStatus(message, true);
     },
     onScanComplete: () => {
+      // Whatever the reason - nothing confident found, OCR disabled, a
+      // camera/QR failure - if the Line field is still empty once the scan
+      // session concludes, hand the operator a picker instead of a dead end
+      // (PROJECT_SPEC_PHASE9.md hotfix 4, Fix 5 - required, not optional).
+      if (!document.getElementById("line_label").value) {
+        showLineLabelPicker();
+      }
       // Debug mode never auto-closes - that would hide the very output it
       // exists to show (PROJECT_SPEC_PHASE9.md hotfix 2, Step 5).
       if (window.LabelScan.isDebugEnabled()) return;
@@ -712,7 +778,7 @@ function collectPayload() {
     detected_at: buildDetectedAtIso(),
     work_order_number: document.getElementById("work_order_number").value,
     line_label: document.getElementById("line_label").value || null,
-    entry_source: scanState.active ? (scanState.edited ? "scanned_edited" : "scanned") : "manual",
+    entry_source: lineEntrySource,
     drawer_part_reference: document.getElementById("drawer_part_reference").value || null,
     found_station_id: selectedFoundStationId,
     possible_source_station_id: selectedSourceStationId,
@@ -795,11 +861,12 @@ function resetFormForNextEntry() {
   selectedRepairPreset = null;
   selectedInstantCloseOutcome = DEFAULT_INSTANT_CLOSE_OUTCOME;
   qty = 1;
-  scanState = { active: false, edited: false };
+  lineEntrySource = "manual";
   document.getElementById("line_label").value = "";
   document.getElementById("line-label-alternates").style.display = "none";
   document.getElementById("line-label-alternates").innerHTML = "";
   document.getElementById("scan-status-hint").style.display = "none";
+  hideLineLabelPicker();
   document.getElementById("drawer_part_reference").value = "";
   document.getElementById("notes").value = "";
   document.getElementById("repair-preset-other-text").value = "";
@@ -915,14 +982,39 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   document.getElementById("work_order_number").addEventListener("blur", maybePrefillStationFromWorkOrder);
-  document.getElementById("work_order_number").addEventListener("input", markScanEdited);
-  document.getElementById("line_label").addEventListener("input", markScanEdited);
+  document.getElementById("line_label").addEventListener("input", markLineEdited);
 
   document.getElementById("line-label-alternates").addEventListener("click", (e) => {
     const btn = e.target.closest(".line-label-alt-btn");
     if (!btn) return;
     document.getElementById("line_label").value = btn.dataset.value;
-    markScanEdited(); // tapping an alternate is a correction, same as typing one
+    markLineEdited(); // tapping an alternate is a correction, same as typing one
+  });
+
+  // Letter picker (PROJECT_SPEC_PHASE9.md hotfix 4, Fix 5).
+  renderLetterButtons("line-label-picker-singles");
+  document.getElementById("line-label-picker-singles").addEventListener("click", (e) => {
+    const btn = e.target.closest(".letter-picker-btn");
+    if (!btn) return;
+    applyPickedLetter(btn.dataset.letter);
+  });
+  document.getElementById("line-label-picker-two-letter-toggle").addEventListener("click", () => {
+    const panel = document.getElementById("line-label-picker-two-letter");
+    const showing = panel.style.display !== "none";
+    panel.style.display = showing ? "none" : "block";
+    if (!showing) renderLetterButtons("line-label-picker-first");
+  });
+  document.getElementById("line-label-picker-first").addEventListener("click", (e) => {
+    const btn = e.target.closest(".letter-picker-btn");
+    if (!btn) return;
+    pickedFirstLetter = btn.dataset.letter;
+    document.getElementById("line-label-picker-second-wrap").style.display = "block";
+    renderLetterButtons("line-label-picker-second");
+  });
+  document.getElementById("line-label-picker-second").addEventListener("click", (e) => {
+    const btn = e.target.closest(".letter-picker-btn");
+    if (!btn || !pickedFirstLetter) return;
+    applyPickedLetter(pickedFirstLetter + btn.dataset.letter);
   });
 
   // "Scan label" (PROJECT_SPEC_PHASE9.md Part 3): hidden outright on a browser
