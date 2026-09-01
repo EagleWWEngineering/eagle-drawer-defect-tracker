@@ -14,6 +14,9 @@ CSV_COLUMNS = [
     "production_date",
     "detected_at_utc",
     "work_order_number",
+    # PROJECT_SPEC_PHASE9.md Part 2: its own column, never concatenated into
+    # work_order_number - blank (not a dash) when this case has no line recorded.
+    "line_label",
     "drawer_part_reference",
     "found_station",
     "possible_source_station",
@@ -96,6 +99,7 @@ def build_defect_items_csv(
                 case.production_date.isoformat(),
                 case.detected_at.isoformat(),
                 case.work_order_number,
+                case.line_label or "",
                 case.drawer_part_reference or "",
                 case.found_station.name,
                 case.possible_source_station.name if case.possible_source_station else "",

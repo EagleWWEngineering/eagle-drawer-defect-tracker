@@ -27,6 +27,12 @@ from app.services import settings_service
 
 VALID_PRIORITIES: list[str] = ["Urgent", "High", "Normal"]
 
+# PROJECT_SPEC_PHASE9.md Part 3: how a case's line (and QR-filled order number)
+# got onto the form. A soft analytics signal, not an enforced vocabulary - no
+# ValidationError for an unrecognised value, so a future entry path never has to
+# come back here first. See create_defect_case / app/routers/defect_cases.py.
+ENTRY_SOURCES: list[str] = ["manual", "scanned", "scanned_edited"]
+
 # PROJECT_SPEC_PHASE7.md: statuses/dispositions simplified to a small vocabulary
 # for new entry. Retired values remain valid STORED data (never dropped/rewritten
 # on existing rows - see the Phase 7 migration) and must still render/filter/export
@@ -184,6 +190,21 @@ def generate_case_number(db: Session, production_date: dt.date) -> str:
     return f"DF-{production_date.strftime('%Y%m%d')}-{sequence:04d}"
 
 
+def normalize_line_label(value: str | None) -> str | None:
+    """Work order line label: uppercase, whitespace-stripped, blank -> None.
+
+    'a' and 'A' are the same line - without this, a filter or a report grouped
+    by line would silently miss half the data (PROJECT_SPEC_PHASE9.md Part 1).
+    Deliberately never rejects a value (no length/character check): the New
+    Defect form's line field must never block submission, so this only ever
+    cleans up what it's given, it doesn't validate it.
+    """
+    if value is None:
+        return None
+    cleaned = value.strip().upper()
+    return cleaned or None
+
+
 def _merge_duplicate_items(
     items: list[dict],
 ) -> dict[int, dict]:
@@ -233,6 +254,8 @@ def create_defect_case(
     root_cause: str | None = None,
     corrective_action: str | None = None,
     notes: str | None = None,
+    line_label: str | None = None,
+    entry_source: str | None = None,
 ) -> DefectCase:
     """instant_close_outcome: only meaningful when resolved_on_the_spot=True and
     disposition="Rework" - "Repaired" (default) or "Use As Is", see
@@ -306,6 +329,8 @@ def create_defect_case(
         detected_at=detected_at,
         work_order_number=work_order_number.strip(),
         drawer_part_reference=(drawer_part_reference or None),
+        line_label=normalize_line_label(line_label),
+        entry_source=entry_source,
         found_station_id=found_station_id,
         possible_source_station_id=possible_source_station_id,
         priority=priority,

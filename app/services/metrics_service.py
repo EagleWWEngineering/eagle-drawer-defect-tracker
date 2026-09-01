@@ -291,6 +291,7 @@ def filtered_defect_items_query(
     start_date: dt.date | None = None,
     end_date: dt.date | None = None,
     work_order_number: str | None = None,
+    line_label: str | None = None,
     category_id: int | None = None,
     found_station_id: int | None = None,
     possible_source_station_id: int | None = None,
@@ -299,11 +300,13 @@ def filtered_defect_items_query(
     disposition: str | None = None,
 ):
     """Shared report filter set (PROJECT_SPEC.md section 9: 'chart totals must match
-    the filtered record total'). Used by /reports/summary, /reports/pareto, and
-    /reports/trend so they can never disagree with each other over what "filtered"
-    means. Returns a query over (DefectItem, DefectCase) joined rows.
+    the filtered record total'). Used by /reports/summary, /reports/pareto,
+    /reports/trend, and the CSV export so they can never disagree with each other
+    over what "filtered" means. Returns a query over (DefectItem, DefectCase)
+    joined rows.
     """
     from app.models import DefectCase, DefectItem
+    from app.services.defect_service import normalize_line_label
 
     query = (
         db.query(DefectItem, DefectCase)
@@ -317,6 +320,12 @@ def filtered_defect_items_query(
         query = query.filter(DefectCase.production_date <= end_date)
     if work_order_number:
         query = query.filter(DefectCase.work_order_number.ilike(f"%{work_order_number}%"))
+    if line_label:
+        # PROJECT_SPEC_PHASE9.md Part 2: works together with work_order_number
+        # above so KPI/Pareto/Trend/CSV totals never disagree with a line-filtered
+        # record list (the same invariant this function already keeps for every
+        # other filter).
+        query = query.filter(DefectCase.line_label == normalize_line_label(line_label))
     if category_id is not None:
         query = query.filter(DefectItem.defect_category_id == category_id)
     if found_station_id is not None:

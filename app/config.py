@@ -78,14 +78,17 @@ class Settings:
         self.default_cost_per_drawer: decimal.Decimal = decimal.Decimal(
             os.getenv("DEFAULT_COST_PER_DRAWER", "35.00")
         )
-        # Phase 8a (docs/PROJECT_SPEC_PHASE8A.md): label-scan OCR diagnostic. Ships
-        # dormant - ocr_enabled defaults to False, and app/routers/scan.py refuses
-        # every request with a 503 unless it's explicitly true AND an API key is
-        # configured, so an unconfigured/misconfigured deployment fails obviously
-        # rather than silently. See app/services/ocr_service.py for the provider
-        # abstraction these four settings select between.
-        self.ocr_enabled: bool = _env_bool("OCR_ENABLED", False)
-        self.ocr_provider: str = os.getenv("OCR_PROVIDER", "azure")
+        # Label-scan OCR (PROJECT_SPEC_PHASE9.md Part 3). Deliberately ships LIVE
+        # by default, unlike every other optional feature in this app: the default
+        # engine (OCR_PROVIDER="tesseract") runs entirely in the browser, costs
+        # nothing, sends no data anywhere, and needs no credential - there is
+        # nothing to ship dormant, because there is nothing that can incur a bill
+        # or fail on a missing key. Only the cloud providers (azure/google/
+        # anthropic) need OCR_API_KEY - see app/routers/scan.py, which still 503s
+        # for those if a key isn't configured. OCR_ENABLED=false remains a full
+        # kill switch (QR decoding and manual entry keep working regardless).
+        self.ocr_enabled: bool = _env_bool("OCR_ENABLED", True)
+        self.ocr_provider: str = os.getenv("OCR_PROVIDER", "tesseract")
         self.ocr_endpoint: str = os.getenv("OCR_ENDPOINT", "")
         self.ocr_api_key: str = os.getenv("OCR_API_KEY", "")
 

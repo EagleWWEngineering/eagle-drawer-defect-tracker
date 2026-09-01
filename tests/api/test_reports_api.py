@@ -11,6 +11,7 @@ def _create_case(
     priority="Normal",
     qty=1,
     production_date="2026-07-24",
+    line_label=None,
 ):
     payload = {
         "production_date": production_date,
@@ -18,6 +19,7 @@ def _create_case(
         "work_order_number": wo,
         "found_station_id": master_data["stations"]["QC / Sorting / Shipping"],
         "priority": priority,
+        "line_label": line_label,
         "items": [
             {
                 "defect_category_id": master_data["categories"][category_name],
@@ -124,6 +126,52 @@ def test_work_order_history_returns_only_that_work_order(client, master_data):
     body = resp.json()
     assert len(body["cases"]) == 2
     assert body["total_defect_events"] == 2
+
+
+def test_work_order_history_groups_by_order_and_line(client, master_data):
+    _create_case(client, master_data, "Sanding / Surface", wo="178414", line_label="E", qty=2)
+    _create_case(client, master_data, "Dado / Bottom Groove", wo="178414", line_label="e", qty=1)
+    _create_case(client, master_data, "Other", wo="178414", line_label="F", qty=3)
+    _create_case(client, master_data, "Sanding / Surface", wo="178414")  # no line
+
+    resp = client.get("/api/v1/reports/work-orders/178414")
+    body = resp.json()
+    assert len(body["cases"]) == 4
+    assert body["total_defect_events"] == 7
+
+    by_line = {row["line_label"]: row for row in body["by_line"]}
+    assert set(by_line) == {None, "E", "F"}
+    assert by_line["E"]["case_count"] == 2  # "e" normalised into the same "E" bucket
+    assert by_line["E"]["total_defect_events"] == 3
+    assert by_line["F"]["case_count"] == 1
+    assert by_line["F"]["total_defect_events"] == 3
+    assert by_line[None]["case_count"] == 1
+    # No-line group first, then alphabetical - a predictable rendering order.
+    assert [row["line_label"] for row in body["by_line"]] == [None, "E", "F"]
+
+
+def test_filter_by_line_label_narrows_summary_and_pareto(client, master_data):
+    _create_case(client, master_data, "Sanding / Surface", wo="178414", line_label="E", qty=5)
+    _create_case(client, master_data, "Dado / Bottom Groove", wo="178414", line_label="F", qty=3)
+
+    resp = client.get(
+        "/api/v1/reports/summary",
+        params={"start_date": "2026-07-24", "end_date": "2026-07-24", "line_label": "E"},
+    )
+    assert resp.json()["defect_events"] == 5
+
+    pareto_resp = client.get(
+        "/api/v1/reports/pareto",
+        params={"start_date": "2026-07-24", "end_date": "2026-07-24", "line_label": "E"},
+    )
+    rows = pareto_resp.json()
+    assert [r["label"] for r in rows] == ["Sanding / Surface"]
+
+    list_resp = client.get(
+        "/api/v1/defect-cases",
+        params={"start_date": "2026-07-24", "end_date": "2026-07-24", "line_label": "E"},
+    )
+    assert list_resp.json()["total"] == 1
 
 
 def test_rework_queue_sorts_urgent_first_then_oldest(client, master_data):

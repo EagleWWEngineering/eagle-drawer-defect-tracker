@@ -54,6 +54,13 @@ function formatCurrency(value) {
   return `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+/** Work order + line, formatted "178414-E" (PROJECT_SPEC_PHASE9.md Part 2). No
+ * dangling separator when there's no line - just the order number alone. */
+function formatWorkOrderLine(workOrderNumber, lineLabel) {
+  const wo = escapeHtml(workOrderNumber);
+  return lineLabel ? `${wo}-${escapeHtml(lineLabel)}` : wo;
+}
+
 /** "5 minutes ago", "2 hours ago", "3 days ago" - for sync-status style displays. */
 function timeAgo(isoString) {
   if (!isoString) return "never";
@@ -299,7 +306,18 @@ async function renderCaseDetail(caseId) {
   document.getElementById("case-detail-body").innerHTML = `
     <div class="case-detail-meta">
       ${priorityBadge(c.priority)} ${statusBadge(c.status)}
-      <p><strong>Work order:</strong> ${escapeHtml(c.work_order_number)}${c.drawer_part_reference ? ` — ${escapeHtml(c.drawer_part_reference)}` : ""}</p>
+      <p><strong>Work order:</strong> ${formatWorkOrderLine(c.work_order_number, c.line_label)}${c.drawer_part_reference ? ` — ${escapeHtml(c.drawer_part_reference)}` : ""}</p>
+      <p>
+        <strong>Line:</strong>
+        <span id="case-detail-line-label-display">${c.line_label ? escapeHtml(c.line_label) : "(none)"}</span>
+        <button type="button" id="case-detail-line-label-edit-btn" class="secondary" style="padding:0.1rem 0.5rem; margin-left:0.5rem;">Edit</button>
+        <span id="case-detail-line-label-form" style="display:none;">
+          <input type="text" id="case-detail-line-label-input" maxlength="2" style="text-transform:uppercase; width:4ch;" value="${c.line_label ? escapeHtml(c.line_label) : ""}">
+          <button type="button" id="case-detail-line-label-save-btn" class="secondary" style="padding:0.1rem 0.5rem;">Save</button>
+          <button type="button" id="case-detail-line-label-cancel-btn" class="secondary" style="padding:0.1rem 0.5rem;">Cancel</button>
+        </span>
+        ${c.entry_source ? `<span class="hint">(${escapeHtml(c.entry_source)})</span>` : ""}
+      </p>
       <p><strong>Detected:</strong> ${escapeHtml(c.detected_at_local || "")} &nbsp; <strong>Production date:</strong> ${c.production_date}</p>
       <p><strong>Found station:</strong> ${escapeHtml(c.found_station_name)} &nbsp; <strong>Possible source station:</strong> ${escapeHtml(c.possible_source_station_name || "unknown")}</p>
       ${c.disposition ? `<p><strong>Disposition:</strong> ${escapeHtml(c.disposition)}</p>` : ""}
@@ -326,6 +344,41 @@ async function renderCaseDetail(caseId) {
       <button type="submit" class="secondary">Upload photo</button>
     </form>
   `;
+
+  // Line label is editable inline, right in the modal - the only case field
+  // with its own dedicated edit control here (everything else that's editable
+  // today is edited from Rework Queue's forms instead). See
+  // PROJECT_SPEC_PHASE9.md Part 2: "Case detail and edit — displayed and editable."
+  const editBtn = document.getElementById("case-detail-line-label-edit-btn");
+  const displaySpan = document.getElementById("case-detail-line-label-display");
+  const formSpan = document.getElementById("case-detail-line-label-form");
+  const input = document.getElementById("case-detail-line-label-input");
+  const saveBtn = document.getElementById("case-detail-line-label-save-btn");
+  const cancelBtn = document.getElementById("case-detail-line-label-cancel-btn");
+  editBtn.addEventListener("click", () => {
+    editBtn.style.display = "none";
+    displaySpan.style.display = "none";
+    formSpan.style.display = "inline";
+    input.focus();
+  });
+  cancelBtn.addEventListener("click", () => {
+    formSpan.style.display = "none";
+    displaySpan.style.display = "inline";
+    editBtn.style.display = "inline";
+    input.value = c.line_label || "";
+  });
+  saveBtn.addEventListener(
+    "click",
+    guardDoubleSubmit(saveBtn, async () => {
+      try {
+        await Api.updateDefectCase(caseId, { line_label: input.value });
+        showToast("Line updated.", "success");
+        await renderCaseDetail(caseId);
+      } catch (err) {
+        showToast(err.message, "error");
+      }
+    })
+  );
 
   const uploadForm = document.getElementById("case-photo-upload-form");
   const uploadBtn = uploadForm.querySelector("button");

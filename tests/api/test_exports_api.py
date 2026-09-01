@@ -93,6 +93,36 @@ def test_csv_export_use_as_is_case_cost_is_zero_and_avoided_is_populated(client,
     assert row[header.index("case_cost_avoided")] == "35.0"
 
 
+def test_csv_export_has_its_own_line_column(client, master_data):
+    _create_case(client, master_data, "Sanding / Surface", "178414", line_label="E")
+    _create_case(client, master_data, "Sanding / Surface", "178414")  # no line
+
+    resp = client.get("/api/v1/exports/defects.csv", params={"work_order_number": "178414"})
+    rows = list(csv.reader(io.StringIO(resp.text)))
+    header, data_rows = rows[0], rows[1:]
+    assert "line_label" in header
+    line_idx = header.index("line_label")
+    values = {row[line_idx] for row in data_rows}
+    assert values == {"E", ""}
+    # Not concatenated into work_order_number - that column stays the raw number.
+    wo_idx = header.index("work_order_number")
+    assert all(row[wo_idx] == "178414" for row in data_rows)
+
+
+def test_csv_export_filters_by_line_label(client, master_data):
+    _create_case(client, master_data, "Sanding / Surface", "178414", line_label="E")
+    _create_case(client, master_data, "Dado / Bottom Groove", "178414", line_label="F")
+
+    resp = client.get(
+        "/api/v1/exports/defects.csv",
+        params={"work_order_number": "178414", "line_label": "E"},
+    )
+    rows = list(csv.reader(io.StringIO(resp.text)))
+    header, data_rows = rows[0], rows[1:]
+    assert len(data_rows) == 1
+    assert data_rows[0][header.index("line_label")] == "E"
+
+
 def test_export_is_audited(client, master_data):
     _create_case(client, master_data, "Sanding / Surface", "WO-CSV-E")
     client.get("/api/v1/exports/defects.csv")

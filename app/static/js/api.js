@@ -152,6 +152,20 @@ const Api = {
   exportCsvUrl: (params) => "/api/v1/exports/defects.csv" + buildQueryString(params),
 
   health: () => request("GET", "/api/v1/health"),
+
+  // Label-scan OCR (Phase 9 Part 3) - see app/static/js/label-scan.js.
+  // getScanConfig tells the New Defect form's scan button which engine is
+  // active: "tesseract" (default) runs client-side and calls scanParseLabel;
+  // any other provider captures a photo and calls scanDiagnose instead.
+  getScanConfig: () => request("GET", "/api/v1/scan/config"),
+  // The default path: Tesseract.js already recognised `lines` client-side -
+  // this posts the raw text for parsing/validation only (no image, no
+  // provider call - see app/routers/scan.py parse_label).
+  scanParseLabel: (payload) => request("POST", "/api/v1/scan/parse-label", { body: payload }),
+  // The optional cloud-provider path - `formData` contains the captured image
+  // plus any qr_* fields decoded client-side. Writes nothing server-side.
+  scanDiagnose: (formData) =>
+    request("POST", "/api/v1/scan/diagnose", { body: formData, isForm: true }),
 };
 
 window.Api = Api;

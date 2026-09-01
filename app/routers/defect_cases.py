@@ -72,6 +72,8 @@ def create_case(
         root_cause=payload.root_cause,
         corrective_action=payload.corrective_action,
         notes=payload.notes,
+        line_label=payload.line_label,
+        entry_source=payload.entry_source,
     )
     audit_service.record(
         db,
@@ -91,6 +93,7 @@ def list_cases(
     start_date: dt.date | None = None,
     end_date: dt.date | None = None,
     work_order_number: str | None = None,
+    line_label: str | None = None,
     category_id: int | None = None,
     found_station_id: int | None = None,
     possible_source_station_id: int | None = None,
@@ -110,6 +113,12 @@ def list_cases(
         query = query.filter(DefectCase.production_date <= end_date)
     if work_order_number:
         query = query.filter(DefectCase.work_order_number.ilike(f"%{work_order_number}%"))
+    if line_label:
+        # PROJECT_SPEC_PHASE9.md Part 2: "order 178414, line E, see everything
+        # wrong with that line" - exact match on the same normalised value
+        # create/update already store, so 'e' and 'E' filter identically.
+        normalized_line = defect_service.normalize_line_label(line_label)
+        query = query.filter(DefectCase.line_label == normalized_line)
     if found_station_id is not None:
         query = query.filter(DefectCase.found_station_id == found_station_id)
     if possible_source_station_id is not None:
@@ -204,6 +213,10 @@ def update_case(
     before = defect_case_to_out(case).model_dump(mode="json")
 
     updates = payload.model_dump(exclude_unset=True, exclude={"add_items"})
+    if "line_label" in updates:
+        # PROJECT_SPEC_PHASE9.md Part 1: same normalisation as creation - 'a'
+        # edited in here must land as 'A', same as it would on the New Defect form.
+        updates["line_label"] = defect_service.normalize_line_label(updates["line_label"])
     for field, value in updates.items():
         setattr(case, field, value)
     db.commit()

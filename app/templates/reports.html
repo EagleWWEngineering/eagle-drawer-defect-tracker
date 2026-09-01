@@ -20,6 +20,10 @@
       <input type="text" id="f-work-order" name="work_order_number">
     </div>
     <div class="field">
+      <label for="f-line">Line <span class="hint">(optional)</span></label>
+      <input type="text" id="f-line" name="line_label" maxlength="2" style="text-transform:uppercase; max-width:6ch;">
+    </div>
+    <div class="field">
       <label for="f-category">Category</label>
       <select id="f-category" name="category_id"><option value="">All</option></select>
     </div>
@@ -244,7 +248,7 @@ async function loadRecords(params) {
           <td class="row-check-cell"><input type="checkbox" class="row-check" data-id="${c.id}" aria-label="Select ${escapeHtml(c.case_number)}"></td>
           <td><a href="#" data-case="${c.id}">${escapeHtml(c.case_number)}</a></td>
           <td>${c.production_date}</td>
-          <td>${escapeHtml(c.work_order_number)}</td>
+          <td>${formatWorkOrderLine(c.work_order_number, c.line_label)}</td>
           <td>${c.items.map((i) => escapeHtml(i.defect_category_name)).join(", ")}</td>
           <td>${priorityBadge(c.priority)}</td>
           <td>${statusBadge(c.status)}</td>
@@ -340,11 +344,27 @@ document.addEventListener("DOMContentLoaded", async () => {
         container.innerHTML = `<p>No cases found for ${escapeHtml(wo)}.</p>`;
         return;
       }
+      // Grouped by order AND line (PROJECT_SPEC_PHASE9.md Part 2) - defects per
+      // line are visible, not only per order. "(no line)" groups every case with
+      // nothing recorded, always listed first.
+      const byLineHtml = history.by_line
+        .map(
+          (row) => `<tr>
+            <td>${row.line_label ? escapeHtml(row.line_label) : "(no line)"}</td>
+            <td>${row.case_count}</td>
+            <td>${row.total_defect_events}</td>
+          </tr>`
+        )
+        .join("");
       container.innerHTML = `<p>${history.total_defect_events} total defect events across ${history.cases.length} case(s).</p>
-        <table><thead><tr><th>Case</th><th>Date</th><th>Categories</th><th>Status</th></tr></thead><tbody>
+        <table><thead><tr><th>Line</th><th>Cases</th><th>Defect events</th></tr></thead><tbody>
+        ${byLineHtml}
+        </tbody></table>
+        <table style="margin-top:0.75rem;"><thead><tr><th>Case</th><th>Date</th><th>Line</th><th>Categories</th><th>Status</th></tr></thead><tbody>
         ${history.cases
           .map(
             (c) => `<tr><td>${escapeHtml(c.case_number)}</td><td>${c.production_date}</td>
+              <td>${c.line_label ? escapeHtml(c.line_label) : ""}</td>
               <td>${c.items.map((i) => escapeHtml(i.defect_category_name)).join(", ")}</td>
               <td>${statusBadge(c.status)}</td></tr>`
           )

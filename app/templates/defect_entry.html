@@ -10,8 +10,18 @@
 <form id="defect-form" class="card">
   <div class="field">
     <label for="work_order_number">Work order number</label>
-    <input type="text" id="work_order_number" name="work_order_number" required autocomplete="off" list="recent-work-orders">
+    <div style="display:flex; gap:0.5rem; align-items:center;">
+      <input type="text" id="work_order_number" name="work_order_number" required autocomplete="off" list="recent-work-orders" style="flex:1;">
+      <button type="button" id="scan-label-btn" class="secondary">📷 Scan label</button>
+    </div>
     <datalist id="recent-work-orders"></datalist>
+  </div>
+
+  <div class="field">
+    <label for="line_label">Line <span class="hint">(optional — work order line, e.g. E)</span></label>
+    <input type="text" id="line_label" name="line_label" maxlength="2" style="text-transform:uppercase; max-width:6ch;">
+    <div id="line-label-alternates" style="display:none; margin-top:0.4rem;"></div>
+    <p id="scan-status-hint" class="hint" style="display:none;"></p>
   </div>
 
   <div class="filters">
@@ -113,9 +123,34 @@
     </table>
   </div>
 </section>
+
+<!-- "Scan label" camera view (PROJECT_SPEC_PHASE9.md Part 3) - see
+     app/static/js/label-scan.js. Reuses the same modal-overlay/modal-panel
+     styling as #case-detail-modal (base.html) - one visual pattern for every
+     modal in this app, not a second one invented here. -->
+<div id="label-scan-modal" class="modal-overlay no-print" style="display:none;">
+  <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="label-scan-title">
+    <div class="modal-header">
+      <h2 id="label-scan-title">Scan label</h2>
+      <button type="button" id="label-scan-close" class="modal-close" aria-label="Close scanner">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p id="label-scan-status" class="hint">Point the camera at the QR code on the label.</p>
+      <video id="label-scan-video" playsinline muted style="width:100%; max-width:480px; background:#000;"></video>
+      <canvas id="label-scan-canvas" style="display:none;"></canvas>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block extra_scripts %}
+<!-- Vendored - never a CDN (app/static/js/vendor/README is implicit in the file
+     headers themselves). jsQR is the QR fallback for browsers with no native
+     BarcodeDetector (iOS Safari); Tesseract.js is the default OCR engine and
+     runs entirely in this tab - see app/static/js/label-scan.js. -->
+<script src="/static/js/vendor/jsqr.js?v={{ static_version('js/vendor/jsqr.js') }}"></script>
+<script src="/static/js/vendor/tesseract.min.js?v={{ static_version('js/vendor/tesseract.min.js') }}"></script>
+<script src="/static/js/label-scan.js?v={{ static_version('js/label-scan.js') }}"></script>
 <script>
 // Real seeded station names (app/seed_data.py) that best match the common QC
 // catch points called out in the entry-speed redesign. Looked up by exact name at
@@ -164,6 +199,14 @@ let qty = 1;
 let leaveOpen = false;
 let selectedRepairPreset = null;
 let selectedInstantCloseOutcome = DEFAULT_INSTANT_CLOSE_OUTCOME;
+// PROJECT_SPEC_PHASE9.md Part 3: entry_source tracking. `active` becomes true
+// the moment ANY field gets prefilled by scanning (QR order number or OCR'd
+// line); `edited` becomes true only if the operator then actually types into
+// one of those fields afterward (setting .value via JS never fires an "input"
+// event, so a scan-then-immediately-submit never looks "edited"). See
+// collectPayload() and resetFormForNextEntry() below.
+let scanState = { active: false, edited: false };
+let scanController = null;
 
 function dispositionSupportsInstantClose(disposition) {
   return INSTANT_CLOSE_DISPOSITIONS.has(disposition);
@@ -349,6 +392,93 @@ function wireStationGroup(commonId, allId, moreBtnId, onSelect) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// "Scan label" (PROJECT_SPEC_PHASE9.md Part 3) - see app/static/js/label-scan.js.
+// Scanning only ever fills fields; it never submits the form, and every field
+// it touches stays fully editable afterward (this whole app's manual-entry
+// path keeps working unchanged if the camera fails or OCR is disabled).
+// ---------------------------------------------------------------------------
+
+function markScanActive() {
+  scanState.active = true;
+}
+function markScanEdited() {
+  if (scanState.active) scanState.edited = true;
+}
+
+function applyLineLabelResult(result) {
+  const input = document.getElementById("line_label");
+  const altContainer = document.getElementById("line-label-alternates");
+  const hint = document.getElementById("scan-status-hint");
+
+  if (result.line_label) {
+    input.value = result.line_label;
+    markScanActive();
+    hint.style.display = "none";
+  } else if (result.line_label_discarded) {
+    hint.textContent =
+      "The scanned order number didn't match this label's QR code, so the line read was " +
+      "discarded. Enter the line manually.";
+    hint.style.display = "block";
+  } else {
+    hint.textContent = "Couldn't read the line label automatically. Enter it manually.";
+    hint.style.display = "block";
+  }
+
+  const alternates = result.line_label_alternates || [];
+  if (alternates.length) {
+    altContainer.style.display = "block";
+    altContainer.innerHTML =
+      `<span class="hint">Not quite right?</span> ` +
+      alternates
+        .map(
+          (alt) =>
+            `<button type="button" class="secondary line-label-alt-btn" data-value="${escapeHtml(alt)}" style="padding:0.1rem 0.5rem; margin-left:0.3rem;">${escapeHtml(alt)}</button>`
+        )
+        .join("");
+  } else {
+    altContainer.style.display = "none";
+    altContainer.innerHTML = "";
+  }
+}
+
+function openScanModal() {
+  document.getElementById("label-scan-modal").style.display = "flex";
+  document.body.style.overflow = "hidden";
+  const video = document.getElementById("label-scan-video");
+  const canvas = document.getElementById("label-scan-canvas");
+  const statusEl = document.getElementById("label-scan-status");
+  statusEl.textContent = "Point the camera at the QR code on the label.";
+
+  scanController = window.LabelScan.startScan(video, canvas, {
+    onOrderNumber: (orderNumber) => {
+      document.getElementById("work_order_number").value = orderNumber;
+      markScanActive();
+      statusEl.textContent = "Order number found — reading the line label...";
+    },
+    onPreparingScanner: () => {
+      statusEl.textContent = "Preparing the scanner (first use only — this can take a moment)...";
+    },
+    onLineLabelResult: (result) => {
+      applyLineLabelResult(result);
+      statusEl.textContent = "Done — review the fields below, then close this window.";
+    },
+    onOcrUnavailable: (message) => {
+      statusEl.textContent = message;
+    },
+    onError: (message) => {
+      statusEl.textContent = message;
+    },
+  });
+}
+
+function closeScanModal() {
+  if (scanController) scanController.stop();
+  scanController = null;
+  document.getElementById("label-scan-modal").style.display = "none";
+  document.body.style.overflow = "";
+}
+
 function collectPayload() {
   const instantClose = isInstantClose();
   let repairAction = null;
@@ -362,6 +492,8 @@ function collectPayload() {
     production_date: document.getElementById("production_date").value,
     detected_at: buildDetectedAtIso(),
     work_order_number: document.getElementById("work_order_number").value,
+    line_label: document.getElementById("line_label").value || null,
+    entry_source: scanState.active ? (scanState.edited ? "scanned_edited" : "scanned") : "manual",
     drawer_part_reference: document.getElementById("drawer_part_reference").value || null,
     found_station_id: selectedFoundStationId,
     possible_source_station_id: selectedSourceStationId,
@@ -444,6 +576,11 @@ function resetFormForNextEntry() {
   selectedRepairPreset = null;
   selectedInstantCloseOutcome = DEFAULT_INSTANT_CLOSE_OUTCOME;
   qty = 1;
+  scanState = { active: false, edited: false };
+  document.getElementById("line_label").value = "";
+  document.getElementById("line-label-alternates").style.display = "none";
+  document.getElementById("line-label-alternates").innerHTML = "";
+  document.getElementById("scan-status-hint").style.display = "none";
   document.getElementById("drawer_part_reference").value = "";
   document.getElementById("notes").value = "";
   document.getElementById("repair-preset-other-text").value = "";
@@ -559,6 +696,29 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   document.getElementById("work_order_number").addEventListener("blur", maybePrefillStationFromWorkOrder);
+  document.getElementById("work_order_number").addEventListener("input", markScanEdited);
+  document.getElementById("line_label").addEventListener("input", markScanEdited);
+
+  document.getElementById("line-label-alternates").addEventListener("click", (e) => {
+    const btn = e.target.closest(".line-label-alt-btn");
+    if (!btn) return;
+    document.getElementById("line_label").value = btn.dataset.value;
+    markScanEdited(); // tapping an alternate is a correction, same as typing one
+  });
+
+  // "Scan label" (PROJECT_SPEC_PHASE9.md Part 3): hidden outright on a browser
+  // with no camera API at all, rather than opening a modal that can only fail -
+  // manual entry is unaffected either way.
+  const scanBtn = document.getElementById("scan-label-btn");
+  if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) {
+    scanBtn.style.display = "none";
+  } else {
+    scanBtn.addEventListener("click", openScanModal);
+  }
+  document.getElementById("label-scan-close").addEventListener("click", closeScanModal);
+  document.getElementById("label-scan-modal").addEventListener("click", (e) => {
+    if (e.target.id === "label-scan-modal") closeScanModal();
+  });
 
   document.getElementById("session-log-table").addEventListener("click", async (e) => {
     const btn = e.target.closest(".session-photo-btn");

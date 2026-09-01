@@ -328,6 +328,56 @@ def test_last_station_for_unknown_work_order_returns_null(client, master_data):
     assert resp.json() is None
 
 
+def test_create_case_with_line_label_is_normalized(client, master_data):
+    created = _create_case(
+        client, master_data, work_order_number="178414", line_label="  e  "
+    ).json()
+    assert created["line_label"] == "E"
+    assert created["entry_source"] is None
+
+
+def test_create_case_without_line_label_is_null(client, master_data):
+    created = _create_case(client, master_data, work_order_number="178414-NOLINE").json()
+    assert created["line_label"] is None
+
+
+def test_entry_source_round_trips(client, master_data):
+    created = _create_case(
+        client, master_data, work_order_number="178414", line_label="B", entry_source="scanned"
+    ).json()
+    assert created["entry_source"] == "scanned"
+
+
+def test_filter_by_work_order_and_line_together(client, master_data):
+    _create_case(client, master_data, work_order_number="178414", line_label="E")
+    _create_case(client, master_data, work_order_number="178414", line_label="F")
+    _create_case(client, master_data, work_order_number="178414")  # no line
+    _create_case(client, master_data, work_order_number="999999", line_label="E")
+
+    def count(**params):
+        return client.get("/api/v1/defect-cases", params=params).json()["total"]
+
+    assert count(work_order_number="178414") == 3
+    assert count(work_order_number="178414", line_label="E") == 1
+    assert count(work_order_number="178414", line_label="e") == 1  # case-insensitive filter input
+    assert count(line_label="E") == 2
+    assert count(work_order_number="178414", line_label="Z") == 0
+
+
+def test_update_case_normalizes_line_label(client, master_data):
+    case = _create_case(client, master_data, work_order_number="178414").json()
+    resp = client.patch(f"/api/v1/defect-cases/{case['id']}", json={"line_label": " ab "})
+    assert resp.status_code == 200
+    assert resp.json()["line_label"] == "AB"
+
+
+def test_update_case_can_clear_line_label(client, master_data):
+    case = _create_case(client, master_data, work_order_number="178414", line_label="E").json()
+    resp = client.patch(f"/api/v1/defect-cases/{case['id']}", json={"line_label": ""})
+    assert resp.status_code == 200
+    assert resp.json()["line_label"] is None
+
+
 def test_valid_photo_upload_succeeds(client, master_data, tmp_path, monkeypatch):
     from app import config
 

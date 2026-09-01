@@ -15,6 +15,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -138,6 +139,12 @@ class DefectCase(Base):
     """One QC finding for one work order: header for one or more DefectItems."""
 
     __tablename__ = "defect_cases"
+    __table_args__ = (
+        # PROJECT_SPEC_PHASE9.md Part 1: work_order_number + line_label is how
+        # this pair gets queried (app/routers/defect_cases.py list_cases) - no
+        # unique constraint, one line legitimately appears on many cases.
+        Index("ix_defect_cases_work_order_line", "work_order_number", "line_label"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     case_number: Mapped[str] = mapped_column(String(30), unique=True, nullable=False, index=True)
@@ -145,6 +152,16 @@ class DefectCase(Base):
     detected_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     work_order_number: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
     drawer_part_reference: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # PROJECT_SPEC_PHASE9.md Part 1/2: the work order line this case belongs to
+    # (A-Z, AA-ZZ) - optional, so tracing a problem narrows to one line instead
+    # of every drawer on the order. Normalised uppercase/stripped on save (see
+    # app/services/defect_service.py normalize_line_label) - never written raw.
+    line_label: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # PROJECT_SPEC_PHASE9.md Part 3: "manual" / "scanned" / "scanned_edited" -
+    # how the line (and QR-filled order number) got onto this case, so a field
+    # that's frequently "scanned_edited" in practice tells us its parsing needs
+    # work. Nullable - historical rows predate this feature entirely.
+    entry_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     found_station_id: Mapped[int] = mapped_column(ForeignKey("stations.id"), nullable=False)
     possible_source_station_id: Mapped[int | None] = mapped_column(

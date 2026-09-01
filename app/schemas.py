@@ -132,6 +132,14 @@ class DefectCaseCreate(BaseModel):
     detected_at: dt.datetime
     work_order_number: str = Field(min_length=1, max_length=60)
     drawer_part_reference: str | None = Field(default=None, max_length=120)
+    # PROJECT_SPEC_PHASE9.md Part 2: optional work order line (A-Z, AA-ZZ).
+    # Uppercased/stripped by app/services/defect_service.py normalize_line_label
+    # before it's stored - never validated/rejected here, so this field never
+    # blocks submission no matter what's typed (or misread by the scanner) into it.
+    line_label: str | None = None
+    # PROJECT_SPEC_PHASE9.md Part 3: "manual" (default)/"scanned"/"scanned_edited" -
+    # set by the New Defect form's scan flow, not user-visible as its own control.
+    entry_source: str | None = None
     found_station_id: int
     possible_source_station_id: int | None = None
     priority: str = "Normal"
@@ -164,6 +172,7 @@ class DefectCaseUpdate(BaseModel):
     detected_at: dt.datetime | None = None
     work_order_number: str | None = Field(default=None, min_length=1, max_length=60)
     drawer_part_reference: str | None = None
+    line_label: str | None = None
     found_station_id: int | None = None
     possible_source_station_id: int | None = None
     priority: str | None = None
@@ -188,6 +197,8 @@ class DefectCaseOut(BaseModel):
     detected_at: dt.datetime
     work_order_number: str
     drawer_part_reference: str | None
+    line_label: str | None
+    entry_source: str | None
     found_station_id: int
     found_station_name: str
     possible_source_station_id: int | None
@@ -263,6 +274,8 @@ def defect_case_to_out(case) -> DefectCaseOut:
         detected_at=case.detected_at,
         work_order_number=case.work_order_number,
         drawer_part_reference=case.drawer_part_reference,
+        line_label=case.line_label,
+        entry_source=case.entry_source,
         found_station_id=case.found_station_id,
         found_station_name=case.found_station.name,
         possible_source_station_id=case.possible_source_station_id,
@@ -565,10 +578,22 @@ class ReworkQueueItemOut(BaseModel):
         return sorted(direct_close_statuses(self.status))
 
 
+class WorkOrderLineBreakdownOut(BaseModel):
+    """PROJECT_SPEC_PHASE9.md Part 2: one row per distinct line_label found on
+    this work order's cases (line_label=None groups every case with no line
+    recorded) - so defects per line are visible, not only per order. See
+    app/routers/reports.py get_work_order_history."""
+
+    line_label: str | None
+    case_count: int
+    total_defect_events: int
+
+
 class WorkOrderHistoryOut(BaseModel):
     work_order_number: str
     cases: list[DefectCaseOut]
     total_defect_events: int
+    by_line: list[WorkOrderLineBreakdownOut]
 
 
 # ---------------------------------------------------------------------------
@@ -886,7 +911,8 @@ class ScanCornerBlockOut(BaseModel):
 
 
 class ScanDiagnosticOut(BaseModel):
-    """POST /api/v1/scan/diagnose - see app/services/ocr_service.py diagnose_label().
+    """POST /api/v1/scan/diagnose or /api/v1/scan/parse-label - see
+    app/services/ocr_service.py diagnose_label() / diagnose_scanned_label().
     Every field below may be null; a null field is a normal, expected outcome for
     a real shop-floor label read, not an error (see validator_skipped)."""
 
@@ -896,6 +922,11 @@ class ScanDiagnosticOut(BaseModel):
     line_label: str | None
     line_label_alternates: list[str]
     line_label_used_centroid_fallback: bool
+    # PROJECT_SPEC_PHASE9.md "Validate against the QR": True when the OCR'd order
+    # number disagreed with the QR's decoded order number, in which case
+    # line_label/line_label_alternates above have already been nulled out - the
+    # untrustworthy read is never handed to the caller, only this flag is.
+    line_label_discarded: bool = False
     dimensions: ScanDimensionsOut | None
     thickness: str | None
     corner_block: ScanCornerBlockOut | None
@@ -906,6 +937,34 @@ class ScanDiagnosticOut(BaseModel):
     validator_skipped: list[str]
     raw_lines: list[ScanLineOut]
     elapsed_ms: float
+
+
+class ScanParseIn(BaseModel):
+    """POST /api/v1/scan/parse-label body - the browser-side Tesseract.js default
+    path (PROJECT_SPEC_PHASE9.md Part 3). `lines` are raw OCR text lines
+    recognised client-side (from the line-label and dimension crops derived from
+    the QR's geometry - see app/static/js/label-scan.js), each translated back
+    into the ORIGINAL photo's coordinate space so they rank against qr_x/qr_y the
+    same way a cloud provider's lines already do (app/services/ocr_service.py
+    parse_line_label) - one parsing/validation implementation, reused by both
+    paths, never duplicated in JavaScript."""
+
+    lines: list[ScanLineOut] = Field(default_factory=list)
+    qr_order_number: str | None = None
+    qr_x: float | None = None
+    qr_y: float | None = None
+
+
+class ScanConfigOut(BaseModel):
+    """GET /api/v1/scan/config - tells the New Defect form's scan button which
+    engine to use: OCR_PROVIDER == "tesseract" (the default) runs entirely in the
+    browser and posts to /parse-label; any other provider captures a photo and
+    posts to /diagnose instead. `enabled=False` means QR decoding and manual
+    entry still work - only the OCR half of scanning is off (the OCR_ENABLED
+    kill switch)."""
+
+    enabled: bool
+    provider: str
 
 
 # ---------------------------------------------------------------------------

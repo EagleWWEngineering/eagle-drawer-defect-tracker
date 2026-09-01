@@ -51,13 +51,16 @@ services:
       - key: SYNC_INTERVAL_MINUTES
         value: "60"
 
-      # Phase 8a label-scan OCR diagnostic (docs/PROJECT_SPEC_PHASE8A.md). Ships
-      # dormant - false until Rodolfo deliberately turns it on for the pilot, and
-      # even then app/routers/scan.py still 503s without a real OCR_API_KEY below.
+      # Label-scan OCR (docs/PROJECT_SPEC_PHASE9.md Part 3). Ships LIVE by default,
+      # unlike other optional features here: OCR_PROVIDER=tesseract runs entirely
+      # in the browser (free, no key, no server round trip for recognition), so
+      # there is nothing dormant/unconfigured about the default path. Only
+      # switching OCR_PROVIDER to a cloud option below makes OCR_API_KEY matter -
+      # app/routers/scan.py still 503s that route without a real key.
       - key: OCR_ENABLED
-        value: "false"
+        value: "true"
       - key: OCR_PROVIDER
-        value: azure
+        value: tesseract
 
       # Secrets / sensitive values — Rodolfo enters the real value in
       # Render's dashboard after the Blueprint creates the service.
@@ -82,11 +85,11 @@ services:
       # machine, opposite direction; revoking one must never break the other.
       - key: BRIEF_API_KEY
         sync: false
-      # Phase 8a: the OCR provider's own API key (Azure Ocp-Apim-Subscription-Key
-      # or a Google Vision API key, depending on OCR_PROVIDER above) and, for
-      # Azure only, its resource endpoint. Leaving these unset keeps
-      # /api/v1/scan/diagnose returning a clean 503 even if OCR_ENABLED is ever
-      # flipped to true by mistake - see app/routers/scan.py.
+      # Only meaningful if OCR_PROVIDER above is switched to a cloud option
+      # ("azure", "google", or "anthropic") - the default "tesseract" path never
+      # reads either of these. Leaving them unset keeps /api/v1/scan/diagnose
+      # returning a clean 503 for a cloud provider selected without a key - see
+      # app/routers/scan.py. OCR_ENDPOINT is only used by "azure".
       - key: OCR_API_KEY
         sync: false
       - key: OCR_ENDPOINT

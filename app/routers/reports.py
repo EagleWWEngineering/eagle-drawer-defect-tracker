@@ -20,6 +20,7 @@ from app.schemas import (
     ReworkQueueItemOut,
     TrendPointOut,
     WorkOrderHistoryOut,
+    WorkOrderLineBreakdownOut,
     defect_case_to_out,
 )
 from app.services import metrics_service, schedule_service, settings_service, working_days_service
@@ -87,6 +88,7 @@ def get_summary(
     start_date: dt.date | None = None,
     end_date: dt.date | None = None,
     work_order_number: str | None = None,
+    line_label: str | None = None,
     category_id: int | None = None,
     found_station_id: int | None = None,
     possible_source_station_id: int | None = None,
@@ -99,6 +101,7 @@ def get_summary(
         start_date=start_date,
         end_date=end_date,
         work_order_number=work_order_number,
+        line_label=line_label,
         category_id=category_id,
         found_station_id=found_station_id,
         possible_source_station_id=possible_source_station_id,
@@ -152,6 +155,7 @@ def get_pareto(
     start_date: dt.date | None = None,
     end_date: dt.date | None = None,
     work_order_number: str | None = None,
+    line_label: str | None = None,
     found_station_id: int | None = None,
     possible_source_station_id: int | None = None,
     priority: str | None = None,
@@ -170,6 +174,7 @@ def get_pareto(
         start_date=start_date,
         end_date=end_date,
         work_order_number=work_order_number,
+        line_label=line_label,
         found_station_id=found_station_id,
         possible_source_station_id=possible_source_station_id,
         priority=priority,
@@ -302,10 +307,35 @@ def get_work_order_history(
         .all()
     )
     total_events = sum(i.affected_drawer_quantity for c in cases for i in c.items)
+
+    # PROJECT_SPEC_PHASE9.md Part 2: group by order AND line, so defects per line
+    # are visible rather than only per order - line_label=None groups every case
+    # on this work order with no line recorded (pre-Phase-9 rows, or a line that
+    # was never filled in). Sorted with the no-line group first, then
+    # alphabetically, so a work order with lines A/B/C/no-line always renders in
+    # the same predictable order.
+    by_line_totals: dict[str | None, dict[str, int]] = {}
+    for case in cases:
+        bucket = by_line_totals.setdefault(
+            case.line_label, {"case_count": 0, "total_defect_events": 0}
+        )
+        bucket["case_count"] += 1
+        bucket["total_defect_events"] += sum(i.affected_drawer_quantity for i in case.items)
+
+    def _sort_key(item: tuple[str | None, dict[str, int]]) -> tuple[bool, str | None]:
+        line_label = item[0]
+        return (line_label is not None, line_label)
+
+    by_line = [
+        WorkOrderLineBreakdownOut(line_label=line_label, **totals)
+        for line_label, totals in sorted(by_line_totals.items(), key=_sort_key)
+    ]
+
     return WorkOrderHistoryOut(
         work_order_number=work_order_number,
         cases=[defect_case_to_out(c) for c in cases],
         total_defect_events=total_events,
+        by_line=by_line,
     )
 
 
