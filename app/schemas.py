@@ -910,6 +910,19 @@ class ScanCornerBlockOut(BaseModel):
     height: float
 
 
+class ScanLineLabelCandidateOut(BaseModel):
+    """One 1-2 letter token found anywhere in the recognised text, ranked by
+    distance from the QR (furthest first - see ocr_service.py parse_line_label).
+    Diagnostic only (?scandebug=1) - the ranking itself, and which candidate
+    wins, is decided entirely in ocr_service.py; this just exposes what it
+    already computed so the read is visible, not a second implementation."""
+
+    text: str
+    x: float
+    y: float
+    distance: float
+
+
 class ScanDiagnosticOut(BaseModel):
     """POST /api/v1/scan/diagnose or /api/v1/scan/parse-label - see
     app/services/ocr_service.py diagnose_label() / diagnose_scanned_label().
@@ -927,6 +940,9 @@ class ScanDiagnosticOut(BaseModel):
     # line_label/line_label_alternates above have already been nulled out - the
     # untrustworthy read is never handed to the caller, only this flag is.
     line_label_discarded: bool = False
+    # Diagnostic only (?scandebug=1) - the full ranked candidate list, never
+    # gated by line_label_discarded (unlike line_label/alternates above).
+    line_label_candidates: list[ScanLineLabelCandidateOut] = []
     dimensions: ScanDimensionsOut | None
     thickness: str | None
     corner_block: ScanCornerBlockOut | None
@@ -941,13 +957,17 @@ class ScanDiagnosticOut(BaseModel):
 
 class ScanParseIn(BaseModel):
     """POST /api/v1/scan/parse-label body - the browser-side Tesseract.js default
-    path (PROJECT_SPEC_PHASE9.md Part 3). `lines` are raw OCR text lines
-    recognised client-side (from the line-label and dimension crops derived from
-    the QR's geometry - see app/static/js/label-scan.js), each translated back
-    into the ORIGINAL photo's coordinate space so they rank against qr_x/qr_y the
-    same way a cloud provider's lines already do (app/services/ocr_service.py
-    parse_line_label) - one parsing/validation implementation, reused by both
-    paths, never duplicated in JavaScript."""
+    path (PROJECT_SPEC_PHASE9.md Part 3). `lines` are raw OCR text ENTRIES
+    recognised client-side - WORD-level, from a single generous whole-label
+    recognition pass (see app/static/js/label-scan.js; the line label is no
+    longer read from its own tight corner crop, which was too fragile against
+    neighbouring printed text), plus the dimension crop's own LINE-level
+    entries. Either granularity works: ocr_service.py's parsers only ever look
+    at {"text", "x", "y"}. Each entry is translated back into the ORIGINAL
+    photo's coordinate space so it ranks against qr_x/qr_y the same way a cloud
+    provider's lines already do (app/services/ocr_service.py parse_line_label)
+    - one parsing/validation implementation, reused by both paths, never
+    duplicated in JavaScript."""
 
     lines: list[ScanLineOut] = Field(default_factory=list)
     qr_order_number: str | None = None

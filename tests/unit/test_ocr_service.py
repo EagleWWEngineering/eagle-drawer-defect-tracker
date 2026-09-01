@@ -159,6 +159,77 @@ def test_ss_and_fh_do_not_crowd_out_a_real_candidate():
     assert result["value"] == "C"
 
 
+def test_ranked_candidates_are_exposed_furthest_first_with_distances():
+    lines = [
+        {"text": "D", "x": 62, "y": 62},  # near the QR at (60, 60) - distance ~2.83
+        {"text": "A", "x": 900, "y": 900},  # far from the QR - distance ~1187
+    ]
+    result = ocr_service.parse_line_label(lines, qr_x=60, qr_y=60)
+    candidates = result["ranked_candidates"]
+    assert [c["text"] for c in candidates] == ["A", "D"]  # furthest first
+    assert candidates[0]["distance"] > candidates[1]["distance"]
+    assert candidates[0]["x"] == 900 and candidates[0]["y"] == 900
+    assert candidates[1]["distance"] == pytest.approx(2.828, abs=0.01)
+
+
+def test_ranked_candidates_empty_when_no_candidates_found():
+    result = ocr_service.parse_line_label([{"text": "no candidates here"}], qr_x=0, qr_y=0)
+    assert result["ranked_candidates"] == []
+
+
+# ---------------------------------------------------------------------------
+# PROJECT_SPEC_PHASE9.md "read the whole label" fix: a single whole-label OCR
+# pass produces WORD-level entries (not the old per-crop line-level entries),
+# and the label's own printed layout puts the thickness/corner block
+# ("5/8 | 6") immediately beside the line label letter - these must not be
+# confused with it, using the SAME candidate/blocklist/ranking logic a
+# line-level cloud-provider read already uses (no separate implementation).
+# ---------------------------------------------------------------------------
+
+
+def _whole_label_word_level_entries() -> list[dict]:
+    """A realistic tokenisation of one real label's top edge, as a single
+    PSM 6 (block of text) recognition pass would plausibly return it, word by
+    word: "WhiteberryWoodworks   WW-2606 / WW-26   5/8 | 6        A" - the QR
+    sits near the left (x~60), the line label "A" at the far right (x~900)."""
+    return [
+        {"text": "WhiteberryWoodworks", "x": 65, "y": 20},
+        {"text": "WW-2606", "x": 130, "y": 20},
+        {"text": "/", "x": 175, "y": 20},
+        {"text": "WW-26", "x": 195, "y": 20},
+        {"text": "5/8", "x": 780, "y": 20},  # immediately beside the line label
+        {"text": "|", "x": 800, "y": 20},
+        {"text": "6", "x": 815, "y": 20},
+        {"text": "A", "x": 900, "y": 20},  # the true line label, far corner
+    ]
+
+
+def test_whole_label_word_level_entries_find_the_correct_line_label():
+    lines = _whole_label_word_level_entries()
+    result = ocr_service.parse_line_label(lines, qr_x=60, qr_y=20)
+    assert result["value"] == "A"
+    # The neighbouring thickness/corner-block tokens are not letter-only
+    # 1-2 character candidates at all ("5/8", "|", "6" all fail the regex) -
+    # they never even entered the ranking to begin with.
+    assert [c["text"] for c in result["ranked_candidates"]] == ["A"]
+
+
+def test_whole_label_word_level_entries_also_parse_order_ship_and_dimensions():
+    """The same word-level entries a whole-label pass produces still parse
+    correctly through every other field parser - nothing here is line-label-
+    specific plumbing."""
+    lines = _whole_label_word_level_entries() + [
+        {"text": "#178414", "x": 300, "y": 20},
+        {"text": "[22]", "x": 350, "y": 20},
+        {"text": "S", "x": 380, "y": 20},
+    ]
+    parsed = ocr_service.parse_thickness(lines)
+    assert parsed == "5/8"
+    order_qty_ship = ocr_service.parse_order_qty_ship(lines)
+    assert order_qty_ship["order_number"] == "178414"
+    assert order_qty_ship["ship_code"] == "S"
+
+
 # ---------------------------------------------------------------------------
 # Corner block separator OCR misreads
 # ---------------------------------------------------------------------------

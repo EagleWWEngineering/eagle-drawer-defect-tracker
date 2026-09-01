@@ -9,8 +9,11 @@
  *      is Tesseract.js, vendored and running entirely in this browser tab -
  *      app/static/js/vendor/{tesseract.min.js,tesseract-worker.min.js,
  *      tesseract-core-lstm.wasm.js,eng.traineddata.gz}. Never a CDN, never a
- *      server round trip for recognition itself - only the already-recognised
- *      TEXT is posted to POST /api/v1/scan/parse-label for parsing/validation
+ *      server round trip for recognition itself. The line label is read from
+ *      a single, generous whole-label recognition pass (word-level output,
+ *      no character whitelist - see HOTFIX 3 below); dimensions still come
+ *      from their own small, targeted crop. Only the already-recognised TEXT
+ *      is posted to POST /api/v1/scan/parse-label for parsing/validation
  *      (app/services/ocr_service.py - one implementation, tested in Python,
  *      never duplicated here). If OCR_PROVIDER is a cloud option instead
  *      (azure/google/anthropic), the captured photo is posted to
@@ -33,16 +36,35 @@
  * that assumes a normal multi-word text line - Tesseract's segmentation step
  * frequently refuses to treat a single isolated 1-2 character glyph as a
  * recognisable "line" under that mode and returns empty rather than a wrong
- * guess. Fixed by using SINGLE_WORD (8) for the line-label crop specifically
- * (set independently per crop, never leaking between the two - see
- * recognizeCrop). Also replaced blind QR-corner extrapolation for the crop
- * geometry with label-boundary detection seeded from the QR (falling back to
- * the old extrapolation when the boundary can't be found) - extrapolating the
- * line-label crop position across the whole label from the QR's corners
- * magnifies any small error in the QR's detected rotation/scale, worst
- * exactly at the far corner where the line label sits. See
- * detectLabelBoundary/buildNormalizedLabelCanvas below, and `?scandebug=1`
- * for a way to see exactly what geometry a given scan used.
+ * guess. Also replaced blind QR-corner extrapolation for the crop geometry
+ * with label-boundary detection seeded from the QR - extrapolating a crop
+ * position across the whole label from the QR's corners alone magnifies any
+ * small error in the QR's detected rotation/scale, worst exactly at the far
+ * corner where the line label sits. See detectLabelBoundary/
+ * buildNormalizedLabelCanvas below.
+ *
+ * HOTFIX 3 (2026-09-01) - "read the whole label, rank by position, drop the
+ * corner crop": tested against real printed labels, HOTFIX 2's corner crop
+ * for the line label STILL failed - confirmed across real labels that the
+ * label's own thickness/corner-block text ("5/8 | 6") sits immediately beside
+ * the line-label letter, on the same line. A crop off by even a few percent
+ * captures that neighbouring digit/punctuation instead of the letter, and
+ * under an A-Z whitelist a digit either gets forced into a wrong letter or
+ * (per HOTFIX 2's PSM fix) correctly returns nothing. No crop of that corner
+ * is narrow enough to exclude the neighbour and wide enough to reliably
+ * contain the letter despite normal geometry error - so this drops corner
+ * cropping for the line label ENTIRELY. The line label is now read from a
+ * single, generous whole-label recognition pass (PSM_BLOCK_OF_TEXT, no
+ * character whitelist - the label has letters, digits, fractions and
+ * punctuation) producing WORD-level output, converted to the same
+ * {text, x, y} shape the cloud providers already send and run through
+ * app/services/ocr_service.py's EXISTING candidate/blocklist/distance-ranking
+ * logic unchanged - ranking by relative distance from the QR survives a
+ * sloppy bounding box (this generous region does not need to be precise),
+ * whereas a tight crop does not; neighbouring text becomes just another
+ * rejected candidate instead of a contaminant. The dimension crop is
+ * unchanged (it was already reported working) - see
+ * deriveDimensionRegionFromNormalizedLabel/deriveDimensionRegionFromQrExtrapolation.
  */
 
 (function () {
@@ -53,23 +75,36 @@
   // Tesseract PSM (page segmentation mode) values used explicitly below - see
   // https://github.com/tesseract-ocr/tesseract/blob/main/include/tesseract/publictypes.h
   const PSM_SINGLE_LINE = "7"; // a line of text with normal word spacing - the dimension crop
-  const PSM_SINGLE_WORD = "8"; // one word (1-2 characters counts) - the line-label crop
+  const PSM_BLOCK_OF_TEXT = "6"; // a single uniform block of text - the whole-label pass (HOTFIX 3)
 
-  const OCR_UPSCALE = 3; // Tesseract reads small, tightly-cropped text far better upscaled
-  const CROP_PADDING_FACTOR = 1.35; // "pad generously" (PROJECT_SPEC_PHASE9.md hotfix 2) - better an oversized crop with a constrained whitelist than a tight one that clips the letter
+  const OCR_UPSCALE = 3; // Tesseract reads small, tightly-cropped text far better upscaled - the dimension crop
+  // The whole-label region is already a few hundred pixels across at typical
+  // phone resolution - upscaling it the same 3x as the tiny dimension crop
+  // would multiply a full recognition pass's runtime for no benefit
+  // (PROJECT_SPEC_PHASE9.md hotfix 3, "Performance": downscale/adjust here
+  // first if a real device turns out to need it, never reintroduce a corner
+  // crop to claw back speed).
+  const FULL_LABEL_UPSCALE = 1;
+  const CROP_PADDING_FACTOR = 1.35; // "pad generously" - better an oversized crop with a constrained whitelist than a tight one that clips something
 
   // --- Label-boundary detection (see HOTFIX 2 above) ----------------------
   const NORMALIZED_LABEL_WIDTH = 900;
   const NORMALIZED_LABEL_HEIGHT = 560;
-  // Crops as fractions of the normalised label - anchored at whichever corner
-  // the QR turns out to occupy (line label at the far corner, dimension text
-  // near the QR's own corner) rather than fixed pixel offsets, so distance/
-  // angle/rotation stop mattering once the label is normalised. First-pass
-  // values, same caveat as ever: not measured against a real printed label.
-  const LINE_LABEL_NORM_FRACTION = 0.42;
+  // The dimension crop, as a fraction of the normalised label - anchored near
+  // the QR's own corner (same general area as the order/qty/ship text) rather
+  // than a fixed pixel offset, so distance/angle/rotation stop mattering once
+  // the label is normalised. Unchanged by hotfix 3 - this crop already works
+  // in the field; only the line label's OWN crop was removed (see HOTFIX 3).
   const DIMENSION_NORM_WIDTH_FRACTION = 0.62;
   const DIMENSION_NORM_HEIGHT_FRACTION = 0.28;
   const DIMENSION_NORM_INSET_FRACTION = 0.08; // skip past the QR's own footprint
+  // The whole-label region used for the line-label pass, when label-boundary
+  // detection fails and the QR-extrapolated fallback is used instead - a
+  // generous margin (in multiples of qrSize) added around the span from the
+  // QR's own position out to its mirrored (estimated far-corner) point. Does
+  // not need to be precise - the position-ranking parser in ocr_service.py is
+  // what makes a sloppy region safe, not a tight boundary.
+  const FULL_LABEL_FALLBACK_MARGIN_QR_MULTIPLE = 1.5;
 
   const BOUNDARY_WALK_STEP_PX = 4;
   const BOUNDARY_CONSECUTIVE_DEVIATIONS_TO_CONFIRM_EDGE = 5; // a run this long is "left the label", not a brushed-past line of text
@@ -509,47 +544,24 @@
   }
 
   const IDENTITY_MATRIX = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+  const identityToOriginalFrame = (p) => applyAffine(IDENTITY_MATRIX, p);
 
-  /** Crops as fixed fractions of the normalised label, anchored at whichever
-   * corner the QR turns out to occupy - the line label at the corner
-   * diagonally opposite the QR, the dimension text near the QR's own corner
-   * (see the NORM_FRACTION constants at the top of this file). */
-  function deriveCropsFromNormalizedLabel(normalized) {
+  /** The dimension crop, as a fraction of the normalised label - anchored
+   * near the QR's own corner (see the NORM_FRACTION constants above).
+   * Unchanged by hotfix 3 - this crop was already reported working in the
+   * field; only the line label's own crop was removed (see HOTFIX 3). */
+  function deriveDimensionRegionFromNormalizedLabel(normalized) {
     const W = NORMALIZED_LABEL_WIDTH;
     const H = NORMALIZED_LABEL_HEIGHT;
     const { qrNormX, qrNormY, forwardMatrix } = normalized;
     const inverse = invertAffine(forwardMatrix);
 
-    // The corner diagonally opposite the QR, and the QR's own corner - both
-    // snapped to whichever normalised-space corner (0 or W/H) each is nearer
-    // to, since the boundary walk measures independent extents in every
-    // direction and the QR is expected to sit close to one real corner.
     const farX = qrNormX < W / 2 ? W : 0;
-    const farY = qrNormY < H / 2 ? H : 0;
     const nearX = W - farX;
-
-    // Line label: anchored at the far corner, extending inward toward center.
-    const lineLabelWidth = W * LINE_LABEL_NORM_FRACTION;
-    const lineLabelHeight = H * LINE_LABEL_NORM_FRACTION;
-    const lineLabelRect = clampRect(
-      {
-        x: farX === 0 ? 0 : farX - lineLabelWidth,
-        y: farY === 0 ? 0 : farY - lineLabelHeight,
-        width: lineLabelWidth,
-        height: lineLabelHeight,
-      },
-      W,
-      H
-    );
-
-    // Dimension text: near the QR's own corner (same general area as the
-    // order/qty/ship text - see PROJECT_SPEC_PHASE9.md) but inset past the
-    // QR's own footprint, extending toward the far corner, centered on the
-    // QR's own normalised Y.
     const dimensionWidth = W * DIMENSION_NORM_WIDTH_FRACTION;
     const dimensionHeight = H * DIMENSION_NORM_HEIGHT_FRACTION;
     const inset = W * DIMENSION_NORM_INSET_FRACTION;
-    const dimensionRect = clampRect(
+    const rect = clampRect(
       {
         x: nearX === 0 ? inset : nearX - inset - dimensionWidth,
         y: qrNormY - dimensionHeight / 2,
@@ -559,37 +571,14 @@
       W,
       H
     );
-
-    const toOriginalFrame = (p) => applyAffine(inverse, p);
-    return {
-      lineLabel: { rect: lineLabelRect, toOriginalFrame },
-      dimension: { rect: dimensionRect, toOriginalFrame },
-      sourceCanvas: normalized.canvas,
-    };
+    return { rect, toOriginalFrame: (p) => applyAffine(inverse, p), sourceCanvas: normalized.canvas };
   }
 
-  /** Fallback when label-boundary detection fails: the original, simpler
-   * heuristic - extrapolate directly from the QR's corners against the raw
-   * captured frame. Kept deliberately simple (no normalisation) since this
-   * path only runs when the more robust approach above couldn't be trusted
-   * anyway - see PROJECT_SPEC_PHASE9.md hotfix 2 for why relying on this
-   * alone (the ORIGINAL Phase 9 implementation) was the leading suspect for
-   * crops landing beside the letter rather than on it. */
-  function deriveCropsFromQrExtrapolation(sourceCanvas, qrBox, frameWidth, frameHeight) {
-    const mirroredX = frameWidth - qrBox.centerX;
-    const mirroredY = frameHeight - qrBox.centerY;
-    const lineLabelSize = qrBox.size * 1.6;
-    const lineLabelRect = clampRect(
-      {
-        x: mirroredX - lineLabelSize / 2,
-        y: mirroredY - lineLabelSize / 2,
-        width: lineLabelSize,
-        height: lineLabelSize,
-      },
-      frameWidth,
-      frameHeight
-    );
-    const dimensionRect = clampRect(
+  /** The dimension crop's fallback when label-boundary detection fails -
+   * extrapolate directly from the QR's corners against the raw captured
+   * frame. Unchanged by hotfix 3 (see above). */
+  function deriveDimensionRegionFromQrExtrapolation(sourceCanvas, qrBox, frameWidth, frameHeight) {
+    const rect = clampRect(
       {
         x: qrBox.x + qrBox.size * 1.1,
         y: qrBox.centerY - qrBox.size / 2,
@@ -599,12 +588,38 @@
       frameWidth,
       frameHeight
     );
-    const identity = (p) => applyAffine(IDENTITY_MATRIX, p);
+    return { rect, toOriginalFrame: identityToOriginalFrame, sourceCanvas };
+  }
+
+  /** HOTFIX 3 - "read the whole label": the region recognised for the line
+   * label is now the ENTIRE normalised label (no crop of just one corner),
+   * word-level, no whitelist - see the module docstring. When boundary
+   * detection succeeded, that IS the normalised label canvas in full. */
+  function deriveFullLabelRegionFromNormalizedLabel(normalized) {
+    const inverse = invertAffine(normalized.forwardMatrix);
     return {
-      lineLabel: { rect: lineLabelRect, toOriginalFrame: identity },
-      dimension: { rect: dimensionRect, toOriginalFrame: identity },
-      sourceCanvas,
+      rect: { x: 0, y: 0, width: NORMALIZED_LABEL_WIDTH, height: NORMALIZED_LABEL_HEIGHT },
+      toOriginalFrame: (p) => applyAffine(inverse, p),
+      sourceCanvas: normalized.canvas,
     };
+  }
+
+  /** HOTFIX 3 fallback: when label-boundary detection fails, a generous
+   * (deliberately imprecise - "does not need to be precise, err large") box
+   * spanning from the QR's own position out to its mirrored (estimated far
+   * corner) point, plus a flat margin - derived from the QR exactly the way
+   * the original Phase 9 crop was, just far larger and covering the whole
+   * label rather than one corner. */
+  function deriveFullLabelRegionFromQrExtrapolation(sourceCanvas, qrBox, frameWidth, frameHeight) {
+    const mirroredX = frameWidth - qrBox.centerX;
+    const mirroredY = frameHeight - qrBox.centerY;
+    const margin = qrBox.size * FULL_LABEL_FALLBACK_MARGIN_QR_MULTIPLE;
+    const x0 = Math.min(qrBox.centerX, mirroredX) - margin;
+    const y0 = Math.min(qrBox.centerY, mirroredY) - margin;
+    const x1 = Math.max(qrBox.centerX, mirroredX) + margin;
+    const y1 = Math.max(qrBox.centerY, mirroredY) + margin;
+    const rect = clampRect({ x: x0, y: y0, width: x1 - x0, height: y1 - y0 }, frameWidth, frameHeight);
+    return { rect, toOriginalFrame: identityToOriginalFrame, sourceCanvas };
   }
 
   /** Pads a crop rect generously (PROJECT_SPEC_PHASE9.md hotfix 2 - "the
@@ -626,10 +641,10 @@
     );
   }
 
-  function cropToCanvas(sourceCanvas, rect) {
+  function cropToCanvas(sourceCanvas, rect, scale) {
     const out = document.createElement("canvas");
-    out.width = Math.max(1, Math.round(rect.width * OCR_UPSCALE));
-    out.height = Math.max(1, Math.round(rect.height * OCR_UPSCALE));
+    out.width = Math.max(1, Math.round(rect.width * scale));
+    out.height = Math.max(1, Math.round(rect.height * scale));
     const ctx = out.getContext("2d");
     ctx.imageSmoothingEnabled = true;
     ctx.drawImage(sourceCanvas, rect.x, rect.y, rect.width, rect.height, 0, 0, out.width, out.height);
@@ -641,16 +656,39 @@
    * coordinates, then through toOriginalFrame() into the ORIGINAL captured
    * frame's coordinate space, so every line ranks against qr_x/qr_y exactly
    * like a cloud provider's lines already do (app/services/ocr_service.py
-   * parse_line_label), regardless of which crop strategy produced it. */
-  function linesFromTesseractResult(data, rect, toOriginalFrame) {
+   * parse_line_label), regardless of which crop strategy produced it. Used
+   * for the dimension crop (line-level Tesseract output). */
+  function linesFromTesseractResult(data, rect, toOriginalFrame, scale) {
     const lines = (data && data.lines) || [];
     return lines
       .map((line) => {
         const text = (line.text || "").trim();
         if (!text) return null;
         const bbox = line.bbox || { x0: 0, x1: 0, y0: 0, y1: 0 };
-        const localX = rect.x + (bbox.x0 + bbox.x1) / 2 / OCR_UPSCALE;
-        const localY = rect.y + (bbox.y0 + bbox.y1) / 2 / OCR_UPSCALE;
+        const localX = rect.x + (bbox.x0 + bbox.x1) / 2 / scale;
+        const localY = rect.y + (bbox.y0 + bbox.y1) / 2 / scale;
+        const framePoint = toOriginalFrame({ x: localX, y: localY });
+        return { text, x: framePoint.x, y: framePoint.y };
+      })
+      .filter(Boolean);
+  }
+
+  /** HOTFIX 3 - "read the whole label": same idea as linesFromTesseractResult
+   * above, but over Tesseract's WORD-level output (data.words) from the
+   * whole-label pass - the line label is now just one word among many in that
+   * result, told apart from the rest by app/services/ocr_service.py's
+   * existing candidate/blocklist/distance-ranking logic once these are posted
+   * to /api/v1/scan/parse-label, exactly like a cloud provider's lines
+   * already are - no separate implementation. */
+  function wordsFromTesseractResult(data, rect, toOriginalFrame, scale) {
+    const words = (data && data.words) || [];
+    return words
+      .map((word) => {
+        const text = (word.text || "").trim();
+        if (!text) return null;
+        const bbox = word.bbox || { x0: 0, x1: 0, y0: 0, y1: 0 };
+        const localX = rect.x + (bbox.x0 + bbox.x1) / 2 / scale;
+        const localY = rect.y + (bbox.y0 + bbox.y1) / 2 / scale;
         const framePoint = toOriginalFrame({ x: localX, y: localY });
         return { text, x: framePoint.x, y: framePoint.y };
       })
@@ -680,11 +718,13 @@
    *     closes the modal before a QR is ever found.
    *   onDebugFrame(info) - only meaningful with `?scandebug=1` (see
    *     isDebugEnabled) - a snapshot of exactly what this scan attempt
-   *     recognised: both crop canvases, their raw text/confidence, the
+   *     recognised: the whole-label region and its recognised words (text +
+   *     position), the dimension crop and its raw text/confidence, the
    *     detected label boundary (or that the QR-extrapolated fallback was
    *     used instead), the normalised label canvas if one was built, and the
-   *     server's parsed/validated result. Fired once per OCR attempt whether
-   *     it succeeded or not.
+   *     server's parsed/validated result (including the ranked line-label
+   *     candidate list - see ocr_service.py parse_line_label). Fired once per
+   *     OCR attempt whether it succeeded or not.
    *
    * Returns a controller ({ stop() }) SYNCHRONOUSLY and immediately - stop()
    * is fully functional the instant this returns, before camera permission has
@@ -857,22 +897,28 @@
         }
 
         const method = normalized ? "label-boundary" : "qr-extrapolated";
-        const crops = normalized
-          ? deriveCropsFromNormalizedLabel(normalized)
-          : deriveCropsFromQrExtrapolation(canvas, qrBox, canvas.width, canvas.height);
 
-        const lineLabelRect = padRect(
-          crops.lineLabel.rect,
-          crops.sourceCanvas.width,
-          crops.sourceCanvas.height
-        );
+        // Dimension crop: UNCHANGED strategy (already reported working) - a
+        // small, targeted crop near the QR's own corner.
+        const dimensionRegion = normalized
+          ? deriveDimensionRegionFromNormalizedLabel(normalized)
+          : deriveDimensionRegionFromQrExtrapolation(canvas, qrBox, canvas.width, canvas.height);
         const dimensionRect = padRect(
-          crops.dimension.rect,
-          crops.sourceCanvas.width,
-          crops.sourceCanvas.height
+          dimensionRegion.rect,
+          dimensionRegion.sourceCanvas.width,
+          dimensionRegion.sourceCanvas.height
         );
-        const lineLabelCrop = cropToCanvas(crops.sourceCanvas, lineLabelRect);
-        const dimensionCrop = cropToCanvas(crops.sourceCanvas, dimensionRect);
+        const dimensionCrop = cropToCanvas(dimensionRegion.sourceCanvas, dimensionRect, OCR_UPSCALE);
+
+        // Line label: HOTFIX 3 - no longer its own tight corner crop. A
+        // single, generous whole-label region, recognised in one pass and
+        // ranked by distance from the QR using the SAME logic a line-level
+        // cloud-provider read already goes through server-side (see the
+        // module docstring).
+        const fullLabelRegion = normalized
+          ? deriveFullLabelRegionFromNormalizedLabel(normalized)
+          : deriveFullLabelRegionFromQrExtrapolation(canvas, qrBox, canvas.width, canvas.height);
+        const fullLabelCrop = cropToCanvas(fullLabelRegion.sourceCanvas, fullLabelRegion.rect, FULL_LABEL_UPSCALE);
 
         const worker = await createTesseractWorker(cb.onPreparingScanner);
         if (state.stopped) {
@@ -886,18 +932,18 @@
         state.tesseractWorker = worker;
 
         // Sequential, not concurrent, and each with its OWN page segmentation
-        // mode set explicitly on every call (see recognizeCrop's docstring) -
-        // SINGLE_WORD for the 1-2 character line label, SINGLE_LINE for the
-        // dimension text, neither ever leaking into the other's call.
-        const lineLabelData = await recognizeCrop(
-          worker,
-          lineLabelCrop,
-          "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-          PSM_SINGLE_WORD
-        ).catch((err) => {
-          log("line-label recognition failed", err);
-          return null;
-        });
+        // mode + whitelist set explicitly on every call (see recognizeCrop's
+        // docstring) - BLOCK_OF_TEXT with NO whitelist for the whole label
+        // (it has letters, digits, fractions and punctuation - restricting
+        // the alphabet here would corrupt everything else on it), SINGLE_LINE
+        // with a digit whitelist for the dimension text. Neither ever leaks
+        // into the other's call.
+        const fullLabelData = await recognizeCrop(worker, fullLabelCrop, "", PSM_BLOCK_OF_TEXT).catch(
+          (err) => {
+            log("whole-label recognition failed", err);
+            return null;
+          }
+        );
         if (state.stopped) return;
         const dimensionData = await recognizeCrop(
           worker,
@@ -910,14 +956,23 @@
         });
         if (state.stopped) return;
 
-        const lines = [
-          ...(lineLabelData
-            ? linesFromTesseractResult(lineLabelData, lineLabelRect, crops.lineLabel.toOriginalFrame)
-            : []),
-          ...(dimensionData
-            ? linesFromTesseractResult(dimensionData, dimensionRect, crops.dimension.toOriginalFrame)
-            : []),
-        ];
+        const words = fullLabelData
+          ? wordsFromTesseractResult(
+              fullLabelData,
+              fullLabelRegion.rect,
+              fullLabelRegion.toOriginalFrame,
+              FULL_LABEL_UPSCALE
+            )
+          : [];
+        const dimensionLines = dimensionData
+          ? linesFromTesseractResult(
+              dimensionData,
+              dimensionRect,
+              dimensionRegion.toOriginalFrame,
+              OCR_UPSCALE
+            )
+          : [];
+        const lines = [...words, ...dimensionLines];
 
         const result = await window.Api.scanParseLabel({
           lines,
@@ -934,12 +989,13 @@
             qrCorners,
             boundary,
             normalizedCanvas: normalized ? normalized.canvas : null,
-            lineLabelCropCanvas: lineLabelCrop,
+            fullLabelCropCanvas: fullLabelCrop,
             dimensionCropCanvas: dimensionCrop,
-            lineLabelRect,
+            fullLabelRect: fullLabelRegion.rect,
             dimensionRect,
-            lineLabelText: (lineLabelData && lineLabelData.text) || "",
-            lineLabelConfidence: lineLabelData ? lineLabelData.confidence : null,
+            words,
+            fullLabelText: (fullLabelData && fullLabelData.text) || "",
+            fullLabelConfidence: fullLabelData ? fullLabelData.confidence : null,
             dimensionText: (dimensionData && dimensionData.text) || "",
             dimensionConfidence: dimensionData ? dimensionData.confidence : null,
             parseResult: result,
@@ -1018,8 +1074,10 @@
     walkToEdge,
     detectLabelBoundary,
     buildNormalizedLabelCanvas,
-    deriveCropsFromNormalizedLabel,
-    deriveCropsFromQrExtrapolation,
+    deriveDimensionRegionFromNormalizedLabel,
+    deriveDimensionRegionFromQrExtrapolation,
+    deriveFullLabelRegionFromNormalizedLabel,
+    deriveFullLabelRegionFromQrExtrapolation,
     padRect,
   };
 })();

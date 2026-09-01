@@ -463,13 +463,22 @@ def parse_line_label(lines: list[dict], *, qr_x: float | None, qr_y: float | Non
     didn't supply a QR position (`used_centroid_fallback` records that this
     happened, so a caller can tell a low-confidence read from a normal one).
 
-    Returns {"value": str | None, "alternates": list[str], "used_centroid_fallback": bool}.
-    Alternates are the next-furthest candidates (up to 3) - required so a wrong
-    answer's near-misses are visible, not just the one field parse_label() commits to.
+    Returns {"value": str | None, "alternates": list[str], "used_centroid_fallback": bool,
+    "ranked_candidates": list[dict]}. Alternates are the next-furthest candidates
+    (up to 3) - required so a wrong answer's near-misses are visible, not just the
+    one field parse_label() commits to. `ranked_candidates` is every candidate in
+    ranked (furthest-first) order with its own distance - PROJECT_SPEC_PHASE9.md
+    "read the whole label" fix: exposed so `?scandebug=1` can show the full
+    ranking a real word-level OCR pass produced, not just the winner.
     """
     candidates = find_line_label_candidates(lines)
     if not candidates:
-        return {"value": None, "alternates": [], "used_centroid_fallback": False}
+        return {
+            "value": None,
+            "alternates": [],
+            "used_centroid_fallback": False,
+            "ranked_candidates": [],
+        }
 
     used_centroid_fallback = qr_x is None or qr_y is None
     if used_centroid_fallback:
@@ -483,10 +492,20 @@ def parse_line_label(lines: list[dict], *, qr_x: float | None, qr_y: float | Non
         key=lambda c: _squared_distance(c["x"], c["y"], ref_x, ref_y),
         reverse=True,
     )
+    ranked_candidates = [
+        {
+            "text": c["text"],
+            "x": c["x"],
+            "y": c["y"],
+            "distance": _squared_distance(c["x"], c["y"], ref_x, ref_y) ** 0.5,
+        }
+        for c in ranked
+    ]
     return {
         "value": ranked[0]["text"],
         "alternates": [c["text"] for c in ranked[1:4]],
         "used_centroid_fallback": used_centroid_fallback,
+        "ranked_candidates": ranked_candidates,
     }
 
 
@@ -498,6 +517,7 @@ class ParsedLabel:
     line_label: str | None
     line_label_alternates: list[str]
     line_label_used_centroid_fallback: bool
+    line_label_candidates: list[dict]
     dimensions: dict | None
     thickness: str | None
     corner_block: dict | None
@@ -509,7 +529,15 @@ def parse_label(
     """Run every field parser above against one normalised line list. Any field
     may come back None - that is a normal, expected outcome for a label read under
     real shop-floor conditions, not an error; see validate_parsed_label for how a
-    missing field is reported (skipped, never silently treated as a pass)."""
+    missing field is reported (skipped, never silently treated as a pass).
+
+    `lines` may be WORD-level or LINE-level entries - this function (and every
+    parser it calls) only ever looks at {"text", "x", "y"}, so it makes no
+    difference which granularity produced them. The default browser-side path
+    now sends word-level entries from a single whole-label recognition pass
+    (see app/static/js/label-scan.js) instead of per-crop lines; the optional
+    cloud providers still send line-level entries. One implementation either
+    way (PROJECT_SPEC_PHASE9.md "read the whole label" fix)."""
     order_qty_ship = parse_order_qty_ship(lines)
     line_label = parse_line_label(lines, qr_x=qr_x, qr_y=qr_y)
     return ParsedLabel(
@@ -519,6 +547,7 @@ def parse_label(
         line_label=line_label["value"],
         line_label_alternates=line_label["alternates"],
         line_label_used_centroid_fallback=line_label["used_centroid_fallback"],
+        line_label_candidates=line_label["ranked_candidates"],
         dimensions=parse_dimensions(lines),
         thickness=parse_thickness(lines),
         corner_block=parse_corner_block(lines),
@@ -653,6 +682,12 @@ def _build_scan_result(
         "line_label_alternates": [] if discarded else parsed.line_label_alternates,
         "line_label_used_centroid_fallback": parsed.line_label_used_centroid_fallback,
         "line_label_discarded": discarded,
+        # Diagnostic only - never gated by `discarded` (unlike line_label/
+        # alternates above, which the operator could act on) - ?scandebug=1
+        # shows the full ranking a real word-level pass produced regardless of
+        # whether the read was ultimately trusted (PROJECT_SPEC_PHASE9.md
+        # "read the whole label" fix).
+        "line_label_candidates": parsed.line_label_candidates,
         "dimensions": parsed.dimensions,
         "thickness": parsed.thickness,
         "corner_block": parsed.corner_block,
@@ -701,6 +736,7 @@ async def diagnose_label(
             # dependency here at all).
             line_label_alternates=[],
             line_label_used_centroid_fallback=False,
+            line_label_candidates=[],
             dimensions=fields.get("dimensions"),
             thickness=fields.get("thickness"),
             corner_block=fields.get("corner_block"),

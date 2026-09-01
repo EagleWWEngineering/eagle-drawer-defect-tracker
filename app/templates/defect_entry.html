@@ -494,13 +494,17 @@ function describeCaptureMessage(result) {
   return result.line_label ? summary : summary + " Line couldn't be read — type it in.";
 }
 
-/** ?scandebug=1 (PROJECT_SPEC_PHASE9.md hotfix 2, Step 1) - shows exactly what
- * the recogniser was handed for this scan attempt: both crops as actual
- * images, their raw text/confidence, the detected label boundary (or that the
+/** ?scandebug=1 (PROJECT_SPEC_PHASE9.md hotfix 2, extended by hotfix 3) - shows
+ * exactly what the recogniser was handed for this scan attempt: the
+ * whole-label region actually recognised (no longer a tight corner crop -
+ * see label-scan.js HOTFIX 3) with every word it found and their positions,
+ * the dimension crop (unchanged), the detected label boundary (or that the
  * QR-extrapolated fallback ran instead), the normalised flat label image when
- * boundary detection succeeded, and the server's parsed/validated result.
- * Kept in the codebase permanently - the crop geometry will need retuning
- * whenever the label changes. */
+ * boundary detection succeeded, the ranked line-label candidate list the
+ * server computed (app/services/ocr_service.py parse_line_label - never
+ * recomputed here), and the server's full parsed/validated result. Kept in
+ * the codebase permanently - the crop geometry will need retuning whenever
+ * the label changes. */
 function renderDebugFrame(info) {
   const panel = document.getElementById("label-scan-debug");
   panel.style.display = "block";
@@ -540,14 +544,14 @@ function renderDebugFrame(info) {
     panel.appendChild(info.normalizedCanvas);
   }
 
-  function cropBlock(title, cropCanvas, rect, text, confidence) {
+  function cropBlock(title, cropCanvas, rect, text, confidence, widthPx) {
     const wrap = document.createElement("div");
-    wrap.style.minWidth = "200px";
+    wrap.style.minWidth = `${widthPx}px`;
     const h = document.createElement("p");
     h.innerHTML = `<strong>${escapeHtml(title)}</strong>`;
     wrap.appendChild(h);
     cropCanvas.style.imageRendering = "pixelated";
-    cropCanvas.style.width = "200px";
+    cropCanvas.style.width = `${widthPx}px`;
     cropCanvas.style.height = "auto";
     cropCanvas.style.border = "1px solid var(--color-border, #ccc)";
     wrap.appendChild(cropCanvas);
@@ -572,25 +576,61 @@ function renderDebugFrame(info) {
   cropsWrap.style.marginTop = "0.5rem";
   cropsWrap.appendChild(
     cropBlock(
-      "Line label crop",
-      info.lineLabelCropCanvas,
-      info.lineLabelRect,
-      info.lineLabelText,
-      info.lineLabelConfidence
+      "Whole-label region (line label read from here - no more corner crop)",
+      info.fullLabelCropCanvas,
+      info.fullLabelRect,
+      info.fullLabelText,
+      info.fullLabelConfidence,
+      400
     )
   );
   cropsWrap.appendChild(
-    cropBlock(
-      "Dimension crop",
-      info.dimensionCropCanvas,
-      info.dimensionRect,
-      info.dimensionText,
-      info.dimensionConfidence
-    )
+    cropBlock("Dimension crop", info.dimensionCropCanvas, info.dimensionRect, info.dimensionText, info.dimensionConfidence, 200)
   );
   panel.appendChild(cropsWrap);
 
-  row("Parsed result", escapeHtml(JSON.stringify(info.parseResult)));
+  // Every word Tesseract found in the whole-label pass, with its position -
+  // "a picture of exactly what the recogniser was handed" extends to the raw
+  // word list too, not just the crop image.
+  const wordsHeading = document.createElement("p");
+  wordsHeading.innerHTML = "<strong>Recognised words (whole-label pass):</strong>";
+  panel.appendChild(wordsHeading);
+  const wordsList = document.createElement("ul");
+  wordsList.innerHTML =
+    (info.words || [])
+      .map((w) => `<li>${escapeHtml(JSON.stringify(w.text))} — x=${Math.round(w.x)}, y=${Math.round(w.y)}</li>`)
+      .join("") || "<li>(none)</li>";
+  panel.appendChild(wordsList);
+
+  // The candidate ranking is computed entirely server-side
+  // (app/services/ocr_service.py parse_line_label) - shown here, not
+  // recomputed, so the debug view can never drift from the real decision.
+  const candidates = (info.parseResult && info.parseResult.line_label_candidates) || [];
+  const candidatesHeading = document.createElement("p");
+  candidatesHeading.innerHTML =
+    "<strong>Line-label candidates, ranked furthest-from-QR first (server-computed):</strong>";
+  panel.appendChild(candidatesHeading);
+  const candidatesList = document.createElement("ol");
+  candidatesList.innerHTML =
+    candidates
+      .map(
+        (c, i) =>
+          `<li>${escapeHtml(c.text)} — distance=${Math.round(c.distance)}px${i === 0 ? " ← winner" : ""}</li>`
+      )
+      .join("") || "<li>(none found)</li>";
+  panel.appendChild(candidatesList);
+
+  row(
+    "Winner / alternates",
+    escapeHtml(
+      JSON.stringify({
+        line_label: info.parseResult.line_label,
+        alternates: info.parseResult.line_label_alternates,
+        discarded: info.parseResult.line_label_discarded,
+      })
+    )
+  );
+  row("Parsed result (full)", escapeHtml(JSON.stringify(info.parseResult)));
 }
 
 function openScanModal() {
