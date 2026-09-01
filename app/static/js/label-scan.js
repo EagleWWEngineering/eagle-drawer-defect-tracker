@@ -91,6 +91,36 @@
  * confident result, the New Defect form shows a manual letter-picker instead
  * of leaving the operator with an empty field and no path forward - see
  * app/templates/defect_entry.html.
+ *
+ * HOTFIX 5 (2026-09-01) - "the boundary walk stops short of the real edge on
+ * a real label": given an actual photo of a real work-order label (not a
+ * synthetic harness - the only way HOTFIX 4's premise was ever visible),
+ * HOTFIX 2's boundary walk was measured stopping as little as ~1 qrSize out
+ * from the QR on one side, versus the label's real edge over 4 qrSizes out -
+ * a norm nowhere close to a printed label. Root cause: comparing a sample's
+ * Euclidean distance from a sampled "label white" reference cannot
+ * distinguish "crossed onto the wood background" from "the ray crossed a
+ * black text line, a red QC stamp dot, or a yellow highlighter band" - every
+ * one of those deviates from white just as much as wood does, and on a
+ * label with print running most of the way to its own edge (confirmed on
+ * the real label used to diagnose this), no length of "sustained" run fixes
+ * that - extending the run only ever finds MORE printed content, never
+ * distinguishes it from background. Fix: replaced the white-distance check
+ * with isWoodBackgroundColor - wood has a warm color cast (red channel
+ * clearly above blue) that stays close between red and green; none of black
+ * ink (no warm cast), a red stamp (red enormously above green, not just
+ * blue), or yellow highlighter (red BELOW green) can satisfy it. Verified by
+ * porting this exact walk to a disposable Python script run directly against
+ * the real photo's pixels (not a synthetic harness) with the QR's actual
+ * detected corners: the previous check placed the expected corner over 1000px
+ * from the label's true far corner (the line label sits there) - beyond
+ * ocr_service.py's own distance cap, and short enough that the normalised
+ * label canvas didn't contain that corner's pixels AT ALL, so no amount of
+ * OCR tuning downstream could have recovered it. This fix placed it about
+ * 110px away - comfortably inside both the sparse-corner crop and the
+ * existing distance cap, with no change needed to ocr_service.py itself.
+ * Still not verified against a live camera capture end-to-end, or against
+ * any label but this one real photo - see the final report for this hotfix.
  */
 
 (function () {
@@ -147,10 +177,36 @@
   const BOUNDARY_WALK_STEP_PX = 4;
   const BOUNDARY_CONSECUTIVE_DEVIATIONS_TO_CONFIRM_EDGE = 5; // a run this long is "left the label", not a brushed-past line of text
   const BOUNDARY_MAX_WALK_QR_MULTIPLE = 10; // give up looking this many qrSizes out
-  const BOUNDARY_MIN_PLAUSIBLE_QR_MULTIPLE = 0.4; // an edge closer than this is implausible - probably a bad white reference, not a real boundary
-  const BOUNDARY_COLOR_DEVIATION_THRESHOLD = 42; // Euclidean RGB distance from the SAMPLED (not hardcoded) reference white
-  const BOUNDARY_REFERENCE_PATCH_RADIUS_PX = 3;
-  const BOUNDARY_REFERENCE_OFFSET_QR_MULTIPLE = 0.55; // just outside the QR's own bounding box, in its quiet zone
+  const BOUNDARY_MIN_PLAUSIBLE_QR_MULTIPLE = 0.4; // an edge closer than this is implausible - not a real boundary
+
+  // HOTFIX 5 (2026-09-01) - "the boundary walk stops at a printed feature,
+  // not the physical edge": the previous check (a sample's Euclidean RGB
+  // distance from a sampled reference white exceeding a flat threshold) could
+  // not tell "left the label onto the wood" apart from "the ray crossed a
+  // black text line / red QC stamp dot / yellow highlighter band" - all of
+  // those deviate from white too, and on a real photographed label (see the
+  // module docstring) that made the walk stop as little as ~1 qrSize out,
+  // sometimes over a thousand pixels short of that label's real edge, on a
+  // long label whose printed content runs close to it. Every drawer part
+  // this app scans a label on is wood (see CLAUDE.md) - wood has a color
+  // signature under normal lighting that none of those three printed
+  // elements share: a clearly WARM cast (red channel well above blue) where
+  // red and green stay close together. Plain black ink is desaturated (all
+  // three channels roughly equal - no warm cast at all). A red QC stamp's red
+  // channel is enormously above its green channel, not just its blue. Yellow
+  // highlighter's red channel sits BELOW its green channel - not warm by this
+  // measure at all. None of the three can satisfy all of the checks below,
+  // calibrated against real photos of Eagle's own maple/plywood stock - only
+  // genuine wood background can. If a label ever sits on a non-wood surface
+  // this fails to match, the walk simply doesn't find a confirmed edge in
+  // that direction and returns null like it always could - callers already
+  // fall back to the QR-extrapolated crops in that case (see
+  // deriveDimensionRegionFromQrExtrapolation and friends below), so an
+  // unfamiliar background degrades gracefully, it doesn't produce a
+  // confidently wrong corner.
+  const BOUNDARY_WOOD_RED_MINUS_BLUE_MIN = 12;
+  const BOUNDARY_WOOD_RED_MINUS_GREEN_MIN = 2;
+  const BOUNDARY_WOOD_RED_MINUS_GREEN_MAX = 35;
 
   function log(...args) {
     if (window.LABEL_SCAN_DEBUG) console.log("[label-scan]", ...args);
@@ -400,75 +456,36 @@
     return { r: d[i], g: d[i + 1], b: d[i + 2] };
   }
 
-  function averagePatchColor(imageData, cx, cy, radius) {
-    let r = 0;
-    let g = 0;
-    let b = 0;
-    let n = 0;
-    for (let dx = -radius; dx <= radius; dx++) {
-      for (let dy = -radius; dy <= radius; dy++) {
-        const p = getPixel(imageData, cx + dx, cy + dy);
-        r += p.r;
-        g += p.g;
-        b += p.b;
-        n++;
-      }
-    }
-    return { r: r / n, g: g / n, b: b / n };
-  }
-
-  function colorDistance(c1, c2) {
-    return Math.sqrt((c1.r - c2.r) ** 2 + (c1.g - c2.g) ** 2 + (c1.b - c2.b) ** 2);
-  }
-
-  function median3(values) {
-    const sorted = [...values].sort((x, y) => x - y);
-    return sorted[Math.floor(sorted.length / 2)];
-  }
-
-  /** "The label is white; sample the known-white region immediately around
-   * the QR to establish what 'label white' is IN THIS PHOTO" - every QR code
-   * has a mandatory white "quiet zone" just outside its own modules, so
-   * sampling a ring just past the QR's bounding box is reliably real label
-   * white, whatever the shop's lighting is doing to it right now. Four
-   * samples (one per side), combined per-channel by median rather than mean,
-   * so one sample that happens to land on a nearby printed character doesn't
-   * skew the reference. */
-  function sampleLabelWhiteReference(imageData, axes) {
-    const offset = axes.qrSize * BOUNDARY_REFERENCE_OFFSET_QR_MULTIPLE;
-    const points = [
-      vecAdd(axes.origin, vecScale(axes.axisU, offset)),
-      vecAdd(axes.origin, vecScale(axes.axisU, -offset)),
-      vecAdd(axes.origin, vecScale(axes.axisV, offset)),
-      vecAdd(axes.origin, vecScale(axes.axisV, -offset)),
-    ];
-    const samples = points.map((p) =>
-      averagePatchColor(imageData, p.x, p.y, BOUNDARY_REFERENCE_PATCH_RADIUS_PX)
+  /** HOTFIX 5 - see the constants above: true only for a color with wood's
+   * warm-but-not-saturated signature, which black ink, a red QC stamp, and
+   * yellow highlighter all fail. */
+  function isWoodBackgroundColor(color) {
+    const redMinusBlue = color.r - color.b;
+    const redMinusGreen = color.r - color.g;
+    return (
+      redMinusBlue > BOUNDARY_WOOD_RED_MINUS_BLUE_MIN &&
+      redMinusGreen > BOUNDARY_WOOD_RED_MINUS_GREEN_MIN &&
+      redMinusGreen < BOUNDARY_WOOD_RED_MINUS_GREEN_MAX
     );
-    return {
-      r: median3(samples.map((s) => s.r)),
-      g: median3(samples.map((s) => s.g)),
-      b: median3(samples.map((s) => s.b)),
-    };
   }
 
   /** Walks outward from `start` along `direction` (a unit vector) in
    * BOUNDARY_WALK_STEP_PX increments, looking for a SUSTAINED run of
-   * BOUNDARY_CONSECUTIVE_DEVIATIONS_TO_CONFIRM_EDGE samples that all deviate
-   * from `reference` by more than BOUNDARY_COLOR_DEVIATION_THRESHOLD.
-   * Requiring a sustained run (not just one deviating sample) is what tells
-   * "crossed into the wood background" apart from "the ray briefly grazed a
-   * printed character on the label" - a single line of text is not
-   * BOUNDARY_CONSECUTIVE_DEVIATIONS_TO_CONFIRM_EDGE * BOUNDARY_WALK_STEP_PX
-   * pixels wide, sustained background is. Returns the distance (from `start`)
-   * where the deviation run began, or null if no such run was found within
+   * BOUNDARY_CONSECUTIVE_DEVIATIONS_TO_CONFIRM_EDGE samples that all match
+   * isWoodBackgroundColor. Requiring a sustained run (not just one matching
+   * sample) is defense in depth against a single mis-colored pixel (JPEG
+   * noise, antialiasing at a stroke edge); HOTFIX 5 is what stops printed
+   * label content from matching in the first place, so this run no longer
+   * needs to be long enough to out-wait a whole printed word the way the
+   * previous white-distance version did. Returns the distance (from `start`)
+   * where the run began, or null if no such run was found within
    * `maxDistance`. */
-  function walkToEdge(imageData, start, direction, reference, maxDistance) {
+  function walkToEdge(imageData, start, direction, maxDistance) {
     let consecutiveDeviations = 0;
     for (let dist = 0; dist <= maxDistance; dist += BOUNDARY_WALK_STEP_PX) {
       const p = vecAdd(start, vecScale(direction, dist));
       const color = getPixel(imageData, p.x, p.y);
-      if (colorDistance(color, reference) > BOUNDARY_COLOR_DEVIATION_THRESHOLD) {
+      if (isWoodBackgroundColor(color)) {
         consecutiveDeviations++;
         if (consecutiveDeviations >= BOUNDARY_CONSECUTIVE_DEVIATIONS_TO_CONFIRM_EDGE) {
           return dist - (consecutiveDeviations - 1) * BOUNDARY_WALK_STEP_PX;
@@ -485,11 +502,11 @@
    * frame - the QR already gives exact position/scale/rotation. Returns
    * {distNegU, distPosU, distNegV, distPosV} (all in pixels, measured from
    * the QR's own center) on success, or null if the label boundary couldn't
-   * be confidently found in every direction (glare, low contrast, the label
-   * partly out of frame, ...) - callers must fall back to the QR-extrapolated
-   * crop rectangles when this returns null, never fail outright. */
+   * be confidently found in every direction (glare, low contrast, a
+   * non-wood surface, the label partly out of frame, ...) - callers must
+   * fall back to the QR-extrapolated crop rectangles when this returns null,
+   * never fail outright. */
   function detectLabelBoundary(imageData, axes) {
-    const reference = sampleLabelWhiteReference(imageData, axes);
     const startOffset = axes.qrSize / 2 + BOUNDARY_WALK_STEP_PX; // just outside the QR's own bounding box
     const maxDistance = axes.qrSize * BOUNDARY_MAX_WALK_QR_MULTIPLE;
     const minPlausible = axes.qrSize * BOUNDARY_MIN_PLAUSIBLE_QR_MULTIPLE;
@@ -504,10 +521,10 @@
     const result = {};
     for (const { key, dir } of directions) {
       const start = vecAdd(axes.origin, vecScale(dir, startOffset));
-      const found = walkToEdge(imageData, start, dir, reference, maxDistance - startOffset);
+      const found = walkToEdge(imageData, start, dir, maxDistance - startOffset);
       if (found === null) return null; // frame edge reached / label bigger than frame - can't trust this
       const totalFromCenter = startOffset + found;
-      if (totalFromCenter < minPlausible) return null; // implausibly close - bad white reference, not a real edge
+      if (totalFromCenter < minPlausible) return null; // implausibly close - not a real edge
       result[key] = totalFromCenter;
     }
     return result;
@@ -1213,7 +1230,7 @@
     solveAffine,
     invertAffine,
     applyAffine,
-    colorDistance,
+    isWoodBackgroundColor,
     walkToEdge,
     detectLabelBoundary,
     buildNormalizedLabelCanvas,
