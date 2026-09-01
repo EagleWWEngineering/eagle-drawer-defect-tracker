@@ -442,40 +442,67 @@ function applyLineLabelResult(result) {
   }
 }
 
+/** Plain-language messages inside the modal - error/unavailable states get the
+ * same red ".field-error" styling used for form validation errors elsewhere in
+ * this app (app/static/css/app.css), so a real problem visibly stands out from
+ * a normal status update instead of blending in (PROJECT_SPEC_PHASE9.md hotfix
+ * Step 2B - "failures must be visible, never silent"). */
+function setScanStatus(text, isError) {
+  const statusEl = document.getElementById("label-scan-status");
+  statusEl.textContent = text;
+  statusEl.classList.toggle("field-error", Boolean(isError));
+}
+
 function openScanModal() {
   document.getElementById("label-scan-modal").style.display = "flex";
   document.body.style.overflow = "hidden";
   const video = document.getElementById("label-scan-video");
   const canvas = document.getElementById("label-scan-canvas");
-  const statusEl = document.getElementById("label-scan-status");
-  statusEl.textContent = "Point the camera at the QR code on the label.";
+  setScanStatus("Point the camera at the QR code on the label.", false);
 
+  // startScan() returns its {stop} controller SYNCHRONOUSLY (see
+  // app/static/js/label-scan.js) - it is fully usable the instant this line
+  // returns, before the camera permission prompt has even been shown, let
+  // alone resolved. Do NOT await/`.then()` this - closing must never depend
+  // on the scan itself succeeding.
   scanController = window.LabelScan.startScan(video, canvas, {
     onOrderNumber: (orderNumber) => {
       document.getElementById("work_order_number").value = orderNumber;
       markScanActive();
-      statusEl.textContent = "Order number found — reading the line label...";
+      setScanStatus("Order number found — reading the line label...", false);
     },
     onPreparingScanner: () => {
-      statusEl.textContent = "Preparing the scanner (first use only — this can take a moment)...";
+      setScanStatus("Preparing the scanner (this can take a moment)...", false);
     },
     onLineLabelResult: (result) => {
       applyLineLabelResult(result);
-      statusEl.textContent = "Done — review the fields below, then close this window.";
+      setScanStatus("Done — review the fields below, then close this window.", false);
     },
     onOcrUnavailable: (message) => {
-      statusEl.textContent = message;
+      setScanStatus(message, true);
     },
     onError: (message) => {
-      statusEl.textContent = message;
+      setScanStatus(message, true);
     },
   });
 }
 
+/** Closing must never depend on anything else succeeding
+ * (PROJECT_SPEC_PHASE9.md hotfix) - every step below is independent and
+ * individually guarded so one failing step can never block the others. Safe
+ * to call more than once (e.g. Escape after the X was already clicked). */
 function closeScanModal() {
-  if (scanController) scanController.stop();
+  try {
+    if (scanController) scanController.stop();
+  } catch (err) {
+    console.error("[defect-entry] scanController.stop() failed", err);
+  }
   scanController = null;
-  document.getElementById("label-scan-modal").style.display = "none";
+  try {
+    document.getElementById("label-scan-modal").style.display = "none";
+  } catch (err) {
+    console.error("[defect-entry] hiding the scan modal failed", err);
+  }
   document.body.style.overflow = "";
 }
 
@@ -718,6 +745,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("label-scan-close").addEventListener("click", closeScanModal);
   document.getElementById("label-scan-modal").addEventListener("click", (e) => {
     if (e.target.id === "label-scan-modal") closeScanModal();
+  });
+  // Escape closes it too - same three close paths (X, backdrop, Escape) as
+  // the shared case-detail modal (app/static/js/app.js initCaseDetailModal).
+  document.addEventListener("keydown", (e) => {
+    const modal = document.getElementById("label-scan-modal");
+    if (e.key === "Escape" && modal.style.display !== "none") closeScanModal();
   });
 
   document.getElementById("session-log-table").addEventListener("click", async (e) => {

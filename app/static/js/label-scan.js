@@ -20,12 +20,35 @@
  * fields via the callbacks the caller supplies; it never submits anything, and
  * every field it touches stays a normal, editable input afterward.
  *
+ * HOTFIX (2026-09-01) - "scan modal will not close, label is never read":
+ * startScan() used to be a single `async function` that did camera setup, QR
+ * looping, and OCR all in one linear sequence, returning its {stop} controller
+ * only as the RESOLVED VALUE of the promise it implicitly returned. The caller
+ * (app/templates/defect_entry.html) never awaited that promise, so
+ * `scanController` was bound to the pending/rejecting PROMISE itself, not the
+ * controller - `scanController.stop()` then threw `TypeError: scanController.
+ * stop is not a function` on every close attempt, which aborted
+ * closeScanModal() before it could hide the modal, restore body.overflow, or
+ * stop the camera. Worse: because everything (including starting the QR loop)
+ * was sequenced strictly after `await video.play()`, ANY rejection there (a
+ * real, fairly common browser condition - e.g. an AbortError when play() is
+ * interrupted) silently killed the entire session, QR included, before the
+ * loop ever started - reproduced and confirmed via a Node-based simulation
+ * harness (no camera/browser available in the environment this was fixed in).
+ *
+ * Fixed by restructuring startScan() to build and return a fully-working
+ * `{stop}` controller SYNCHRONOUSLY, before any fallible async setup runs at
+ * all (see startScan below) - closing never depends on anything else
+ * succeeding, and every fallible stage reports failure via a callback instead
+ * of an unhandled rejection that silently ends the session.
+ *
  * NOTE ON THE CROP GEOMETRY BELOW: this repo's label layout ("line label sits
  * diagonally opposite the QR code", "ship code sits beside it") comes from the
  * phase's written spec, not a physical sample label measured in this
- * environment (no camera/hardware access here). deriveCrops() below is a
- * documented first-pass heuristic - expect to tune LINE_LABEL_CROP_* /
- * DIMENSION_CROP_* against a real printed label during pilot rollout.
+ * environment (no camera/hardware access here). deriveLineLabelCrop/
+ * deriveDimensionCrop below are a documented first-pass heuristic - expect to
+ * tune LINE_LABEL_CROP_SIZE_FACTOR / DIMENSION_CROP_* against a real printed label during
+ * pilot rollout.
  */
 
 (function () {
@@ -41,41 +64,62 @@
   const DIMENSION_CROP_HEIGHT_FACTOR = 1.0;
   const OCR_UPSCALE = 3; // Tesseract reads small, tightly-cropped text far better upscaled
 
-  let tesseractWorkerPromise = null;
-  let preparingIndicatorShown = false;
-
   function log(...args) {
     if (window.LABEL_SCAN_DEBUG) console.log("[label-scan]", ...args);
   }
 
-  // -------------------------------------------------------------------------
-  // Tesseract.js worker (lazy singleton - created once per page load, reused
-  // across scans so only the FIRST scan pays the "preparing scanner" delay)
-  // -------------------------------------------------------------------------
-
-  function getTesseractWorker(onPreparing) {
-    if (!tesseractWorkerPromise) {
-      if (onPreparing && !preparingIndicatorShown) {
-        preparingIndicatorShown = true;
-        onPreparing();
-      }
-      tesseractWorkerPromise = window.Tesseract.createWorker("eng", 1, {
-        workerPath: VENDOR_BASE + "tesseract-worker.min.js",
-        corePath: VENDOR_BASE + "tesseract-core-lstm.wasm.js",
-        langPath: VENDOR_BASE,
-        logger: (m) => log("tesseract", m.status, m.progress),
-      }).catch((err) => {
-        // Let the next scan attempt retry from scratch instead of being stuck
-        // on a permanently-rejected promise.
-        tesseractWorkerPromise = null;
-        throw err;
-      });
-    }
-    return tesseractWorkerPromise;
+  /** Every failure in this module goes through here at least once - console
+   * output is UNCONDITIONAL (never gated behind a debug flag), so a real
+   * problem is always diagnosable from DevTools even when nobody is watching
+   * for it (fail-loud, matching the rest of this app - see the hotfix note
+   * above: a silently-swallowed failure is exactly what caused "nothing is
+   * ever read" to go unnoticed). */
+  function logError(context, err) {
+    console.error("[label-scan]", context, err);
   }
 
-  async function recognizeCrop(canvas, whitelist) {
-    const worker = await getTesseractWorker();
+  /** Calls a caller-supplied callback defensively - a callback that itself
+   * throws (e.g. a missing DOM element on the caller's side) must never take
+   * down this module's own control flow (teardown in particular - see stop()
+   * below). */
+  function safeCall(fn, ...args) {
+    if (!fn) return;
+    try {
+      fn(...args);
+    } catch (err) {
+      logError("a scan callback threw", err);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Tesseract.js worker
+  // -------------------------------------------------------------------------
+  //
+  // Deliberately NOT a page-level singleton (it used to be, to amortise the
+  // ~6MB first-load cost across repeated scans) - the hotfix above requires
+  // every scan session's worker to be fully terminated on close, with no
+  // shared state that could outlive one "Scan label" attempt. The underlying
+  // vendored files are still served from this app's own static handler and
+  // cached by the browser's normal HTTP cache after the first load, so a
+  // fresh worker on the next scan is still fast in practice.
+
+  async function createTesseractWorker(onPreparing) {
+    safeCall(onPreparing);
+    return window.Tesseract.createWorker("eng", 1, {
+      workerPath: VENDOR_BASE + "tesseract-worker.min.js",
+      corePath: VENDOR_BASE + "tesseract-core-lstm.wasm.js",
+      langPath: VENDOR_BASE,
+      logger: (m) => log("tesseract", m.status, m.progress),
+    });
+  }
+
+  /** Sequential, not Promise.all'd: tessedit_char_whitelist is a WORKER-wide
+   * parameter (setParameters), not a per-call option, so recognising the two
+   * crops "concurrently" on one worker would race two different whitelists
+   * against each other and could silently corrupt either result. This is a
+   * second, independent correctness bug found auditing this code path during
+   * the same hotfix - not just a performance choice. */
+  async function recognizeCrop(worker, canvas, whitelist) {
     await worker.setParameters({
       tessedit_char_whitelist: whitelist,
       tessedit_pageseg_mode: "7", // PSM.SINGLE_LINE - a tight, single-line crop
@@ -100,21 +144,25 @@
 
   /** Normalises both native BarcodeDetector and jsQR results to
    * { text, corners: [{x,y} x4] } (corners in video-pixel coordinates), or null. */
-  async function detectQrOnce(video, canvas, ctx) {
-    if (window.BarcodeDetector) {
+  async function detectQrOnce(video, canvas, ctx, state) {
+    if (window.BarcodeDetector && !state.barcodeDetectorUnsupported) {
       try {
-        if (!detectQrOnce._detector) {
-          detectQrOnce._detector = new window.BarcodeDetector({ formats: ["qr_code"] });
+        if (!state.barcodeDetector) {
+          state.barcodeDetector = new window.BarcodeDetector({ formats: ["qr_code"] });
         }
-        const results = await detectQrOnce._detector.detect(video);
+        const results = await state.barcodeDetector.detect(video);
         if (results && results.length) {
           const r = results[0];
           return { text: r.rawValue, corners: r.cornerPoints };
         }
         return null;
       } catch (err) {
-        log("BarcodeDetector failed, falling back to jsQR", err);
-        // fall through to jsQR below
+        // A genuine "not supported on this platform" failure (e.g. some
+        // desktop Chrome builds advertise BarcodeDetector without a working
+        // backend) would otherwise retry - and fail - on every single frame.
+        // Fall back to jsQR for the rest of this session instead.
+        state.barcodeDetectorUnsupported = true;
+        log("BarcodeDetector unavailable, falling back to jsQR for this session", err);
       }
     }
     if (window.jsQR) {
@@ -238,156 +286,272 @@
   // -------------------------------------------------------------------------
 
   /** Opens the camera against the given <video>/<canvas> elements and scans
-   * until a QR code is found (or the caller calls stop()). Callbacks:
-   *   onOrderNumber(orderNumber) - QR decoded; fired once per open() call.
-   *   onPreparingScanner() - first-ever Tesseract use on this device/session;
-   *     show a "preparing scanner" indicator so the delay doesn't look like a hang.
+   * until a QR code is found (or the caller calls the returned controller's
+   * stop()). Callbacks:
+   *   onOrderNumber(orderNumber) - QR decoded; fired once per startScan() call.
+   *   onPreparingScanner() - Tesseract is about to initialise (this can take a
+   *     moment on a slow connection/device) - show a "preparing scanner"
+   *     indicator so the delay doesn't look like a hang.
    *   onLineLabelResult(result) - the parsed/validated result from either
    *     /parse-label or /diagnose (see app/schemas.py ScanDiagnosticOut) - may
    *     have line_label: null (nothing readable, or line_label_discarded).
    *   onOcrUnavailable(message) - OCR disabled or errored; line stays manual.
    *   onError(message) - camera/QR-level failure; manual entry is the only path.
-   * Returns a controller: { stop() }.
+   *
+   * Returns a controller ({ stop() }) SYNCHRONOUSLY and immediately - stop()
+   * is fully functional the instant this returns, before camera permission has
+   * even been requested, let alone granted. Closing must never depend on
+   * anything else in this module succeeding (see the hotfix note at the top
+   * of this file).
    */
-  async function startScan(video, canvas, callbacks) {
+  function startScan(video, canvas, callbacks) {
     const cb = callbacks || {};
-    let stopped = false;
-    let stream = null;
-    let ocrFired = false;
+    const state = {
+      stopped: false,
+      stream: null,
+      rafHandle: null,
+      tesseractWorker: null,
+      ocrFired: false,
+      barcodeDetector: null,
+      barcodeDetectorUnsupported: false,
+    };
 
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment" },
-        audio: false,
-      });
-    } catch (err) {
-      (cb.onError || function () {})(
-        "Could not access the camera (" + err.message + "). Enter the order number and line manually."
-      );
-      return { stop() {} };
-    }
-
-    video.srcObject = stream;
-    await video.play();
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-
+    // --- Teardown: built before any fallible setup runs, resilient to every
+    // step below never having happened at all. Each piece is independent -
+    // one failing/missing piece must never block the others. ---
     function stop() {
-      stopped = true;
-      stream.getTracks().forEach((t) => t.stop());
-      video.srcObject = null;
-    }
+      if (state.stopped) return;
+      state.stopped = true;
 
-    async function handleQrFound(qr) {
-      if (ocrFired) return;
-      ocrFired = true;
-
-      const orderNumber = extractOrderNumberFromQrText(qr.text);
-      if (orderNumber) {
-        (cb.onOrderNumber || function () {})(orderNumber);
-      } else {
-        (cb.onError || function () {})(
-          "QR code didn't look like a work order label. Enter the order number manually."
-        );
-      }
-
-      let scanConfig;
-      try {
-        scanConfig = await window.Api.getScanConfig();
-      } catch (err) {
-        (cb.onOcrUnavailable || function () {})("Could not reach the server to check OCR settings.");
-        return;
-      }
-      if (!scanConfig.enabled) {
-        (cb.onOcrUnavailable || function () {})("OCR is turned off on this server. Type the line.");
-        return;
-      }
-
-      const qrBox = qrBoundingBox(qr.corners);
-
-      try {
-        if (scanConfig.provider === "tesseract") {
-          await runTesseractPath(qrBox, orderNumber, cb);
-        } else {
-          await runCloudProviderPath(qrBox, orderNumber, cb);
+      if (state.rafHandle !== null) {
+        try {
+          cancelAnimationFrame(state.rafHandle);
+        } catch (err) {
+          logError("cancelAnimationFrame failed", err);
         }
+        state.rafHandle = null;
+      }
+      if (state.stream) {
+        try {
+          state.stream.getTracks().forEach((track) => track.stop());
+        } catch (err) {
+          logError("stopping camera tracks failed", err);
+        }
+        state.stream = null;
+      }
+      try {
+        video.srcObject = null;
       } catch (err) {
-        (cb.onOcrUnavailable || function () {})(
-          "Couldn't read the line label automatically (" + err.message + "). Type it in."
-        );
+        logError("clearing video.srcObject failed", err);
+      }
+      if (state.tesseractWorker) {
+        try {
+          state.tesseractWorker.terminate();
+        } catch (err) {
+          logError("terminating the Tesseract worker failed", err);
+        }
+        state.tesseractWorker = null;
       }
     }
 
-    async function runTesseractPath(qrBox, orderNumber, cb) {
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const controller = { stop };
 
-      const lineLabelRect = deriveLineLabelCrop(qrBox, canvas.width, canvas.height);
-      const dimensionRect = deriveDimensionCrop(qrBox, canvas.width, canvas.height);
-      const lineLabelCrop = cropToCanvas(canvas, lineLabelRect);
-      const dimensionCrop = cropToCanvas(canvas, dimensionRect);
+    // ------------------------------------------------------------------
+    // Everything below is fallible async setup, run in the background.
+    // `controller` above is already fully usable before any of it runs.
+    // ------------------------------------------------------------------
+    (async () => {
+      try {
+        state.stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "environment" },
+          audio: false,
+        });
+      } catch (err) {
+        logError("getUserMedia failed", err);
+        safeCall(
+          cb.onError,
+          "Could not access the camera (" + err.message + "). Enter the order number and line manually."
+        );
+        return;
+      }
+      if (state.stopped) {
+        // The operator closed the modal while the permission prompt was still
+        // pending - stop() ran before `state.stream` existed to stop it.
+        state.stream.getTracks().forEach((track) => track.stop());
+        state.stream = null;
+        return;
+      }
 
-      const [lineLabelData, dimensionData] = await Promise.all([
-        recognizeCrop(lineLabelCrop, "ABCDEFGHIJKLMNOPQRSTUVWXYZ").catch((err) => {
+      video.srcObject = state.stream;
+      try {
+        await video.play();
+      } catch (err) {
+        // A real, fairly common browser condition (e.g. an AbortError when
+        // play() is interrupted) - this must degrade to manual entry, not
+        // silently end the session with the modal stuck open (see hotfix note).
+        logError("video.play() failed", err);
+        safeCall(
+          cb.onError,
+          "Could not start the camera preview (" + err.message + "). Enter the details manually."
+        );
+        return;
+      }
+      if (state.stopped) return;
+
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+
+      async function handleQrFound(qr) {
+        if (state.ocrFired) return;
+        state.ocrFired = true;
+
+        const orderNumber = extractOrderNumberFromQrText(qr.text);
+        if (orderNumber) {
+          safeCall(cb.onOrderNumber, orderNumber);
+        } else {
+          safeCall(
+            cb.onError,
+            "QR code didn't look like a work order label. Enter the order number manually."
+          );
+        }
+
+        let scanConfig;
+        try {
+          scanConfig = await window.Api.getScanConfig();
+        } catch (err) {
+          logError("GET /api/v1/scan/config failed", err);
+          safeCall(
+            cb.onOcrUnavailable,
+            "Could not reach the server to check OCR settings. Enter the line manually."
+          );
+          return;
+        }
+        if (state.stopped) return;
+        if (!scanConfig.enabled) {
+          safeCall(cb.onOcrUnavailable, "OCR is turned off on this server. Enter the line manually.");
+          return;
+        }
+
+        const qrBox = qrBoundingBox(qr.corners);
+        try {
+          if (scanConfig.provider === "tesseract") {
+            await runTesseractPath(qrBox, orderNumber);
+          } else {
+            await runCloudProviderPath(qrBox, orderNumber);
+          }
+        } catch (err) {
+          logError("OCR path failed", err);
+          safeCall(
+            cb.onOcrUnavailable,
+            "Couldn't read the line label automatically (" + err.message + "). Enter it manually."
+          );
+        }
+      }
+
+      async function runTesseractPath(qrBox, orderNumber) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        const lineLabelRect = deriveLineLabelCrop(qrBox, canvas.width, canvas.height);
+        const dimensionRect = deriveDimensionCrop(qrBox, canvas.width, canvas.height);
+        const lineLabelCrop = cropToCanvas(canvas, lineLabelRect);
+        const dimensionCrop = cropToCanvas(canvas, dimensionRect);
+
+        const worker = await createTesseractWorker(cb.onPreparingScanner);
+        if (state.stopped) {
+          try {
+            worker.terminate();
+          } catch (err) {
+            logError("terminating a just-created worker after close failed", err);
+          }
+          return;
+        }
+        state.tesseractWorker = worker;
+
+        // Sequential, not concurrent - see recognizeCrop's docstring above.
+        const lineLabelData = await recognizeCrop(
+          worker,
+          lineLabelCrop,
+          "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        ).catch((err) => {
           log("line-label recognition failed", err);
           return null;
-        }),
-        recognizeCrop(dimensionCrop, "0123456789.x").catch((err) => {
-          log("dimension recognition failed", err);
-          return null;
-        }),
-      ]);
+        });
+        if (state.stopped) return;
+        const dimensionData = await recognizeCrop(worker, dimensionCrop, "0123456789.x").catch(
+          (err) => {
+            log("dimension recognition failed", err);
+            return null;
+          }
+        );
+        if (state.stopped) return;
 
-      const lines = [
-        ...(lineLabelData ? linesFromTesseractResult(lineLabelData, lineLabelRect) : []),
-        ...(dimensionData ? linesFromTesseractResult(dimensionData, dimensionRect) : []),
-      ];
+        const lines = [
+          ...(lineLabelData ? linesFromTesseractResult(lineLabelData, lineLabelRect) : []),
+          ...(dimensionData ? linesFromTesseractResult(dimensionData, dimensionRect) : []),
+        ];
 
-      const result = await window.Api.scanParseLabel({
-        lines,
-        qr_order_number: orderNumber,
-        qr_x: qrBox.centerX,
-        qr_y: qrBox.centerY,
-      });
-      (cb.onLineLabelResult || function () {})(result);
-    }
+        const result = await window.Api.scanParseLabel({
+          lines,
+          qr_order_number: orderNumber,
+          qr_x: qrBox.centerX,
+          qr_y: qrBox.centerY,
+        });
+        if (state.stopped) return;
+        safeCall(cb.onLineLabelResult, result);
+      }
 
-    async function runCloudProviderPath(qrBox, orderNumber, cb) {
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.9));
-      if (!blob) throw new Error("could not capture a photo from the camera");
+      async function runCloudProviderPath(qrBox, orderNumber) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.9));
+        if (!blob) throw new Error("could not capture a photo from the camera");
+        if (state.stopped) return;
 
-      const formData = new FormData();
-      formData.append("image", blob, "label.jpg");
-      formData.append("qr_order_number", orderNumber || "");
-      formData.append("qr_x", String(qrBox.centerX));
-      formData.append("qr_y", String(qrBox.centerY));
-      const result = await window.Api.scanDiagnose(formData);
-      (cb.onLineLabelResult || function () {})(result);
-    }
+        const formData = new FormData();
+        formData.append("image", blob, "label.jpg");
+        formData.append("qr_order_number", orderNumber || "");
+        formData.append("qr_x", String(qrBox.centerX));
+        formData.append("qr_y", String(qrBox.centerY));
+        const result = await window.Api.scanDiagnose(formData);
+        if (state.stopped) return;
+        safeCall(cb.onLineLabelResult, result);
+      }
 
-    (async function loop() {
-      while (!stopped && !ocrFired) {
+      // --- QR loop: scheduled first and runs independently of OCR - a
+      // broken/slow text reader degrades the feature, it never disables
+      // scanning altogether (PROJECT_SPEC_PHASE9.md hotfix, Step 2C). ---
+      function scheduleNextFrame() {
+        if (state.stopped || state.ocrFired) return;
+        state.rafHandle = requestAnimationFrame(onFrame);
+      }
+
+      async function onFrame() {
+        if (state.stopped || state.ocrFired) return;
         try {
-          const qr = await detectQrOnce(video, canvas, ctx);
+          const qr = await detectQrOnce(video, canvas, ctx, state);
           if (qr && qr.text) {
             await handleQrFound(qr);
-            break;
+            return; // ocrFired is now true - no more frames needed
           }
         } catch (err) {
           log("QR detect loop error (continuing)", err);
         }
-        await new Promise((r) => requestAnimationFrame(r));
+        scheduleNextFrame();
       }
-    })();
 
-    return { stop };
+      scheduleNextFrame();
+    })().catch((err) => {
+      // Belt-and-braces only: every stage above already has its own try/catch
+      // reporting through a callback, but an uncaught rejection here must
+      // still be visible rather than a silently-dead session (see hotfix note).
+      logError("unexpected error starting the scanner", err);
+      safeCall(cb.onError, "The scanner ran into an unexpected problem. Enter the details manually.");
+    });
+
+    return controller;
   }
 
-  window.LabelScan = {
-    startScan,
-    getTesseractWorker, // exposed so the New Defect form can pre-warm it on page load if it wants
-  };
+  window.LabelScan = { startScan };
 })();

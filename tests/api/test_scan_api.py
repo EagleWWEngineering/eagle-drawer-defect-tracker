@@ -6,6 +6,10 @@
 - POST /api/v1/scan/diagnose is the optional cloud-provider path
   (azure/google/anthropic) - provider calls are mocked at the httpx boundary
   (httpx.MockTransport), never a real network call.
+- The vendored-scan-asset-serving checks near the bottom of this file are part
+  of the 2026-09-01 "scan modal will not close, label is never read" hotfix's
+  prevent-recurrence coverage - see tests/unit/test_scan_vendor_assets.py for
+  the companion "these files exist on disk and aren't empty" checks.
 """
 
 from __future__ import annotations
@@ -13,6 +17,7 @@ from __future__ import annotations
 import io
 
 import httpx
+import pytest
 
 from app import config
 
@@ -223,3 +228,65 @@ def test_diagnose_with_anthropic_provider_mocked(client, monkeypatch):
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["line_label"] == "E"
+
+
+# ---------------------------------------------------------------------------
+# Vendored scan assets are actually SERVED correctly (hotfix 2026-09-01) - see
+# tests/unit/test_scan_vendor_assets.py for the "exists on disk" half of this.
+# ---------------------------------------------------------------------------
+
+VENDOR_STATIC_PATHS: tuple[str, ...] = (
+    "/static/js/vendor/jsqr.js",
+    "/static/js/vendor/tesseract.min.js",
+    "/static/js/vendor/tesseract-worker.min.js",
+    "/static/js/vendor/tesseract-core-lstm.wasm.js",
+    "/static/js/vendor/eng.traineddata.gz",
+)
+
+
+@pytest.mark.parametrize("path", VENDOR_STATIC_PATHS)
+def test_vendored_scan_asset_is_served_successfully(client, path):
+    resp = client.get(path)
+    assert resp.status_code == 200, f"{path} did not serve (HTTP {resp.status_code})"
+    # A sane content type: present, and never the generic
+    # "application/octet-stream" fallback Starlette uses when it can't guess
+    # anything at all for a path (which would suggest a wrong/missing
+    # extension rather than the real vendored file).
+    content_type = resp.headers.get("content-type", "")
+    assert content_type, f"{path} served with no Content-Type at all"
+    assert "application/octet-stream" not in content_type
+    assert len(resp.content) > 0
+
+
+def test_vendored_scan_assets_are_reachable_without_a_login_session():
+    """/static/* is exempt from LoginRequiredMiddleware (CLAUDE.md) - a phone
+    scanning a label must be able to fetch these before/without an
+    authenticated session cookie ever being an issue, same as any other static
+    asset in this app."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    anonymous_client = TestClient(app)
+    for path in VENDOR_STATIC_PATHS:
+        resp = anonymous_client.get(path)
+        assert (
+            resp.status_code == 200
+        ), f"{path} requires auth - it shouldn't (HTTP {resp.status_code})"
+
+
+def test_javascript_vendor_assets_are_not_double_gzip_encoded(client):
+    """The eng.traineddata.gz language file must reach the browser as raw gzip
+    bytes for Tesseract.js's own gunzip step to work - if Starlette ever
+    started setting Content-Encoding: gzip for it, the browser's fetch() would
+    transparently decompress it first and Tesseract's gunzip would then fail
+    on already-decompressed bytes (a real, silent failure mode considered
+    during this hotfix - see app/services/ocr_service.py's module docstring
+    history / the hotfix commit message for the investigation). Confirmed:
+    Starlette's FileResponse never sets Content-Encoding from mimetypes.guess_type's
+    encoding element, only its type element - this test pins that behavior."""
+    resp = client.get("/static/js/vendor/eng.traineddata.gz")
+    assert resp.status_code == 200
+    assert "content-encoding" not in {k.lower() for k in resp.headers.keys()}
+    # Raw gzip bytes start with the magic number 0x1f 0x8b.
+    assert resp.content[:2] == b"\x1f\x8b"
