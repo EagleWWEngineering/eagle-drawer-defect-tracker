@@ -91,6 +91,14 @@ class Settings:
         self.ocr_provider: str = os.getenv("OCR_PROVIDER", "tesseract")
         self.ocr_endpoint: str = os.getenv("OCR_ENDPOINT", "")
         self.ocr_api_key: str = os.getenv("OCR_API_KEY", "")
+        # Phase 3 (favorites quick-pick bars). Unlike OCR_ENABLED above, this
+        # defaults FALSE: favorites visibly changes the New Defect form's layout
+        # (a new bar above Found Station / Possible Source / the category grid),
+        # where OCR_ENABLED's default-on engine runs invisibly in the background
+        # with no UI of its own. Ships dormant so a deploy alone never changes
+        # what the shop floor sees - it's a deliberate opt-in via this env var
+        # once Admin has actually favorited something, not an instant-on feature.
+        self.favorites_enabled: bool = _env_bool("FAVORITES_ENABLED", False)
 
     @property
     def max_upload_bytes(self) -> int:

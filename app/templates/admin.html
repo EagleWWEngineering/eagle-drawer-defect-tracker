@@ -9,10 +9,10 @@
   historical data.</p>
 
 <section class="card">
-  <h2>Stations</h2>
+  <h2>Stations <span id="stations-favorite-count" class="hint favorites-only" style="display:none; font-weight:400;"></span></h2>
   <div class="table-scroll">
     <table id="stations-table">
-      <thead><tr><th>Order</th><th>Name</th><th>Active</th><th>Save</th></tr></thead>
+      <thead><tr><th>Order</th><th>Name</th><th>Active</th><th class="favorites-only" style="display:none;">Favorite</th><th>Save</th></tr></thead>
       <tbody></tbody>
     </table>
   </div>
@@ -24,10 +24,10 @@
 </section>
 
 <section class="card">
-  <h2>Defect categories</h2>
+  <h2>Defect categories <span id="categories-favorite-count" class="hint favorites-only" style="display:none; font-weight:400;"></span></h2>
   <div class="table-scroll">
     <table id="categories-table">
-      <thead><tr><th>Order</th><th>Name</th><th>Active</th><th>Save</th></tr></thead>
+      <thead><tr><th>Order</th><th>Name</th><th>Active</th><th class="favorites-only" style="display:none;">Favorite</th><th>Save</th></tr></thead>
       <tbody></tbody>
     </table>
   </div>
@@ -96,21 +96,54 @@
 
 {% block extra_scripts %}
 <script>
-function rowHtml(kind, item) {
+function rowHtml(kind, item, atCap) {
+  // Phase 3: disabled once the table's already at 5 ACTIVE favorites, UNLESS
+  // this row is one of them (must stay togglable so it can be unfavorited to
+  // free a slot) - see app/services/master_data_service.py for the same cap,
+  // enforced there regardless of what this checkbox allows clicking. Also
+  // disabled on an inactive, not-yet-favorited row: favoriting only makes
+  // sense for something the New Defect form can actually offer.
+  const favDisabled = (!item.active && !item.is_favorite) || (!item.is_favorite && atCap);
   return `<tr data-id="${item.id}">
     <td><input type="number" class="sort-order-input" value="${item.sort_order}" style="width:70px;"></td>
     <td><input type="text" class="name-input" value="${escapeHtml(item.name)}"></td>
     <td><label style="font-weight:400;"><input type="checkbox" class="active-input" ${item.active ? "checked" : ""}> Active</label></td>
+    <td class="favorites-only" style="display:none;">
+      <input type="checkbox" class="favorite-input" ${item.is_favorite ? "checked" : ""} ${favDisabled ? "disabled" : ""}>
+    </td>
     <td><button type="button" class="secondary save-row-btn" data-kind="${kind}">Save</button></td>
   </tr>`;
 }
 
 async function loadTables() {
   const md = await Api.getMasterData();
-  document.querySelector("#stations-table tbody").innerHTML =
-    md.stations.map((s) => rowHtml("station", s)).join("");
-  document.querySelector("#categories-table tbody").innerHTML =
-    md.defect_categories.map((c) => rowHtml("category", c)).join("");
+  const favoritesEnabled = md.favorites_enabled;
+
+  const stationFavCount = md.stations.filter((s) => s.active && s.is_favorite).length;
+  const categoryFavCount = md.defect_categories.filter((c) => c.active && c.is_favorite).length;
+  document.getElementById("stations-favorite-count").textContent =
+    `(${stationFavCount}/5 favorited)`;
+  document.getElementById("categories-favorite-count").textContent =
+    `(${categoryFavCount}/5 favorited)`;
+
+  document.querySelector("#stations-table tbody").innerHTML = md.stations
+    .map((s) => rowHtml("station", s, stationFavCount >= 5))
+    .join("");
+  document.querySelector("#categories-table tbody").innerHTML = md.defect_categories
+    .map((c) => rowHtml("category", c, categoryFavCount >= 5))
+    .join("");
+
+  // Kill switch (FAVORITES_ENABLED): the whole favorite column/count is just
+  // hidden, not removed - toggling the env var back on needs no other change
+  // here, and the underlying is_favorite data is untouched either way. Must
+  // run AFTER the tbody innerHTML assignments above, not before - the
+  // favorite <td> in each row is only created there (fresh every call), so
+  // toggling first would only ever touch the static header/count elements
+  // that already existed and leave every row's cell stuck at its hardcoded
+  // `style="display:none"` from rowHtml().
+  document.querySelectorAll(".favorites-only").forEach((el) => {
+    el.style.display = favoritesEnabled ? "" : "none";
+  });
 
   document.querySelectorAll(".save-row-btn").forEach((btn) => {
     btn.addEventListener("click", async () => {
@@ -121,6 +154,9 @@ async function loadTables() {
         sort_order: Number(row.querySelector(".sort-order-input").value),
         active: row.querySelector(".active-input").checked,
       };
+      if (favoritesEnabled) {
+        payload.is_favorite = row.querySelector(".favorite-input").checked;
+      }
       try {
         if (btn.dataset.kind === "station") await Api.updateStation(id, payload);
         else await Api.updateCategory(id, payload);
@@ -128,7 +164,7 @@ async function loadTables() {
         // Re-render from the server response so an Active toggle (or a name/sort
         // change) is reflected immediately, same as the add-station/add-category
         // forms below already do - previously this table just sat stale until a
-        // full page reload.
+        // full page reload. Also picks up the server-enforced favorite count/cap.
         await loadTables();
       } catch (err) {
         showToast(err.message, "error");

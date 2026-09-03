@@ -25,6 +25,11 @@ class StationOut(BaseModel):
     name: str
     active: bool
     sort_order: int
+    # Phase 3 - see app/models.py Station.is_favorite/favorite_rank. Included
+    # here (not a separate endpoint) so the New Defect form's favorites bars
+    # read off the exact same active-only master-data response Phase 1 fixed.
+    is_favorite: bool
+    favorite_rank: int | None
 
     model_config = {"from_attributes": True}
 
@@ -34,6 +39,8 @@ class DefectCategoryOut(BaseModel):
     name: str
     active: bool
     sort_order: int
+    is_favorite: bool
+    favorite_rank: int | None
 
     model_config = {"from_attributes": True}
 
@@ -52,6 +59,11 @@ class MasterDataOut(BaseModel):
     # status/disposition can still be filtered to. Never used for write validation.
     all_statuses: list[str]
     all_dispositions: list[str]
+    # Phase 3 kill switch (app/config.py FAVORITES_ENABLED) - the New Defect
+    # form checks this before rendering any favorites bar at all, so the whole
+    # feature can be turned off instantly (env var + restart, no code rollback)
+    # without touching what stations/defect_categories carry in is_favorite.
+    favorites_enabled: bool
 
 
 class StationCreate(BaseModel):
@@ -63,6 +75,12 @@ class StationUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     active: bool | None = None
     sort_order: int | None = None
+    # favorite_rank is deliberately NOT settable here - it's auto-assigned (the
+    # first free slot) by app/services/master_data_service.py whenever
+    # is_favorite flips false -> true. Manual drag/up-down reordering was scoped
+    # out of this phase as a fast-follow rather than risk two Admin tabs racing
+    # to set colliding rank values.
+    is_favorite: bool | None = None
 
 
 class DefectCategoryCreate(BaseModel):
@@ -74,6 +92,7 @@ class DefectCategoryUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     active: bool | None = None
     sort_order: int | None = None
+    is_favorite: bool | None = None
 
 
 # ---------------------------------------------------------------------------

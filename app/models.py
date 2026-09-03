@@ -40,6 +40,14 @@ class Station(Base):
     name: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Phase 3: up to 5 stations may be favorited (app/services/master_data_service.py
+    # enforces the max at the service layer, not just in the UI) for the New Defect
+    # form's quick-pick bar (behind the FAVORITES_ENABLED kill-switch - see
+    # app/config.py). favorite_rank only means anything while is_favorite is true;
+    # it's left set (but ignored) if a station is later unfavorited, so re-favoriting
+    # doesn't require re-choosing a position.
+    is_favorite: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    favorite_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
@@ -55,6 +63,11 @@ class DefectCategory(Base):
     name: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Phase 3: see Station.is_favorite / Station.favorite_rank above - identical
+    # favorites mechanism, enforced separately per table (5 favorite stations AND
+    # 5 favorite categories, independently of each other).
+    is_favorite: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    favorite_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow

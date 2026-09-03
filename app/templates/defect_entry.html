@@ -63,6 +63,7 @@
 
   <div class="field">
     <label>Defect categories <span class="hint">(tap all that apply — one drawer with 3 sanding scratches is still one "Sanding" tap)</span></label>
+    <div id="category-favorites" class="button-grid" role="group" aria-label="Favorite defect categories" style="display:none;"></div>
     <div id="category-grid" class="button-grid" role="group" aria-label="Defect categories"></div>
   </div>
 
@@ -249,6 +250,29 @@ function stationButtonHtml(station, isSelected) {
   return `<button type="button" class="tap-btn${isSelected ? " selected" : ""}" data-id="${station.id}" aria-pressed="${isSelected}">${escapeHtml(station.name)}</button>`;
 }
 
+/** Phase 3: favorited categories get their own quick-pick bar ABOVE the full
+ * grid below - NOT a collapsed/toggled "more" section like stations already
+ * have (deliberately - the category grid is flat today and stays fully
+ * visible; hiding it behind a toggle would add a tap for every category
+ * outside the top 5 and change a workflow the floor already knows). Hidden
+ * entirely when the FAVORITES_ENABLED kill switch is off or nothing's
+ * favorited yet - see app/config.py / app/services/master_data_service.py. */
+function renderCategoryFavorites() {
+  const container = document.getElementById("category-favorites");
+  const favorites = masterData.favorites_enabled
+    ? masterData.defect_categories
+        .filter((c) => c.is_favorite)
+        .sort((a, b) => (a.favorite_rank ?? 999) - (b.favorite_rank ?? 999))
+    : [];
+  container.style.display = favorites.length ? "" : "none";
+  container.innerHTML = favorites
+    .map((c) => {
+      const isSelected = selectedCategoryIds.has(c.id);
+      return `<button type="button" class="tap-btn${isSelected ? " selected" : ""}" data-id="${c.id}" aria-pressed="${isSelected}">${escapeHtml(c.name)}</button>`;
+    })
+    .join("");
+}
+
 function renderCategoryGrid() {
   const container = document.getElementById("category-grid");
   container.innerHTML = masterData.defect_categories
@@ -257,6 +281,10 @@ function renderCategoryGrid() {
       return `<button type="button" class="tap-btn${isSelected ? " selected" : ""}" data-id="${c.id}" aria-pressed="${isSelected}">${escapeHtml(c.name)}</button>`;
     })
     .join("");
+  // The favorites bar shows the same tap-selected state as the full grid below
+  // it (a category can be tapped from either one), so it re-renders alongside
+  // the full grid on every call rather than needing its own call-sites too.
+  renderCategoryFavorites();
 }
 
 function dispositionButtonHtml(value, extraClass) {
@@ -390,8 +418,28 @@ function renderSourceStations() {
   renderStationGroup("source-station-common", "source-station-all", selectedSourceStationId);
 }
 
+/** Phase 3: the "common" quick-pick tier both Found Station and Possible
+ * Source already had (vs. the "More stations..." full list below) is sourced
+ * from Admin's favorited stations, ordered by favorite_rank, whenever the
+ * FAVORITES_ENABLED kill switch is on AND at least one station is favorited -
+ * this REPLACES the hardcoded COMMON_STATION_NAMES list, it doesn't add a
+ * third tier. Falls back to today's exact hardcoded list otherwise (switch
+ * off, or nothing favorited yet), so there's no empty quick-pick bar and no
+ * behavior change until Admin has actually set favorites up. Both station
+ * pickers share the same favorited-stations set (see app/models.py Station -
+ * one favorite flag per station, not one per field). */
+function commonStationsList() {
+  if (masterData.favorites_enabled) {
+    const favorites = masterData.stations
+      .filter((s) => s.is_favorite)
+      .sort((a, b) => (a.favorite_rank ?? 999) - (b.favorite_rank ?? 999));
+    if (favorites.length > 0) return favorites;
+  }
+  return COMMON_STATION_NAMES.map(stationByName).filter(Boolean);
+}
+
 function renderStationGroup(commonId, allId, selectedId) {
-  const commons = COMMON_STATION_NAMES.map(stationByName).filter(Boolean);
+  const commons = commonStationsList();
   document.getElementById(commonId).innerHTML = commons
     .map((s) => stationButtonHtml(s, s.id === selectedId))
     .join("");
@@ -912,14 +960,18 @@ document.addEventListener("DOMContentLoaded", async () => {
     renderSourceStations();
   });
 
-  document.getElementById("category-grid").addEventListener("click", (e) => {
+  function handleCategoryTap(e) {
     const btn = e.target.closest(".tap-btn");
     if (!btn) return;
     const id = Number(btn.dataset.id);
     if (selectedCategoryIds.has(id)) selectedCategoryIds.delete(id);
     else selectedCategoryIds.add(id);
+    // Re-renders both the favorites bar and the full grid, whichever one was
+    // tapped - see renderCategoryGrid().
     renderCategoryGrid();
-  });
+  }
+  document.getElementById("category-favorites").addEventListener("click", handleCategoryTap);
+  document.getElementById("category-grid").addEventListener("click", handleCategoryTap);
 
   function handleDispositionClick(e) {
     const btn = e.target.closest(".tap-btn");

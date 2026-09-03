@@ -9,6 +9,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.dependencies import get_actor_role, get_db
 from app.models import DefectCategory, Station
 from app.schemas import (
@@ -20,7 +21,7 @@ from app.schemas import (
     StationOut,
     StationUpdate,
 )
-from app.services import audit_service
+from app.services import audit_service, master_data_service
 from app.services.defect_service import (
     ALL_KNOWN_DISPOSITIONS,
     ALL_KNOWN_STATUSES,
@@ -60,6 +61,7 @@ def get_master_data(
         dispositions=VALID_DISPOSITIONS,
         all_statuses=ALL_KNOWN_STATUSES,
         all_dispositions=ALL_KNOWN_DISPOSITIONS,
+        favorites_enabled=get_settings().favorites_enabled,
     )
 
 
@@ -91,21 +93,17 @@ def update_station(
     db: Session = Depends(get_db),
     actor_role: str = Depends(get_actor_role),
 ) -> StationOut:
-    from app.errors import NotFoundError
+    existing = db.get(Station, station_id)
+    before = StationOut.model_validate(existing).model_dump() if existing else None
 
-    station = db.get(Station, station_id)
-    if station is None:
-        raise NotFoundError(f"Station {station_id} not found.")
-
-    before = StationOut.model_validate(station).model_dump()
-    if payload.name is not None:
-        station.name = payload.name.strip()
-    if payload.active is not None:
-        station.active = payload.active
-    if payload.sort_order is not None:
-        station.sort_order = payload.sort_order
-    db.commit()
-    db.refresh(station)
+    station = master_data_service.update_station(
+        db,
+        station_id,
+        name=payload.name,
+        active=payload.active,
+        sort_order=payload.sort_order,
+        is_favorite=payload.is_favorite,
+    )
 
     audit_service.record(
         db,
@@ -148,21 +146,17 @@ def update_category(
     db: Session = Depends(get_db),
     actor_role: str = Depends(get_actor_role),
 ) -> DefectCategoryOut:
-    from app.errors import NotFoundError
+    existing = db.get(DefectCategory, category_id)
+    before = DefectCategoryOut.model_validate(existing).model_dump() if existing else None
 
-    category = db.get(DefectCategory, category_id)
-    if category is None:
-        raise NotFoundError(f"Defect category {category_id} not found.")
-
-    before = DefectCategoryOut.model_validate(category).model_dump()
-    if payload.name is not None:
-        category.name = payload.name.strip()
-    if payload.active is not None:
-        category.active = payload.active
-    if payload.sort_order is not None:
-        category.sort_order = payload.sort_order
-    db.commit()
-    db.refresh(category)
+    category = master_data_service.update_category(
+        db,
+        category_id,
+        name=payload.name,
+        active=payload.active,
+        sort_order=payload.sort_order,
+        is_favorite=payload.is_favorite,
+    )
 
     audit_service.record(
         db,
