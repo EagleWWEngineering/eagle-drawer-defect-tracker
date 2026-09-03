@@ -30,6 +30,17 @@ class StationOut(BaseModel):
     # read off the exact same active-only master-data response Phase 1 fixed.
     is_favorite: bool
     favorite_rank: int | None
+    # Read-only, Admin display only (seed-duplicate investigation step 2, per
+    # the Phase 3 follow-up prompt): a stray duplicate row created by the
+    # seed-on-every-startup bug will have a created_at from some later restart,
+    # not from initial go-live - this is how it's spotted, without any data
+    # change. No migration - the column already exists, just wasn't exposed.
+    created_at: dt.datetime
+
+    @computed_field
+    @property
+    def created_at_local(self) -> str | None:
+        return to_display_string(self.created_at)
 
     model_config = {"from_attributes": True}
 
@@ -41,6 +52,12 @@ class DefectCategoryOut(BaseModel):
     sort_order: int
     is_favorite: bool
     favorite_rank: int | None
+    created_at: dt.datetime
+
+    @computed_field
+    @property
+    def created_at_local(self) -> str | None:
+        return to_display_string(self.created_at)
 
     model_config = {"from_attributes": True}
 

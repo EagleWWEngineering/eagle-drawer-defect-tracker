@@ -12,7 +12,7 @@
   <h2>Stations <span id="stations-favorite-count" class="hint favorites-only" style="display:none; font-weight:400;"></span></h2>
   <div class="table-scroll">
     <table id="stations-table">
-      <thead><tr><th>Order</th><th>Name</th><th>Active</th><th class="favorites-only" style="display:none;">Favorite</th><th>Save</th></tr></thead>
+      <thead><tr><th>Order</th><th>Name</th><th>Active</th><th class="favorites-only" style="display:none;">Favorite</th><th>Created</th><th>Save</th></tr></thead>
       <tbody></tbody>
     </table>
   </div>
@@ -27,7 +27,7 @@
   <h2>Defect categories <span id="categories-favorite-count" class="hint favorites-only" style="display:none; font-weight:400;"></span></h2>
   <div class="table-scroll">
     <table id="categories-table">
-      <thead><tr><th>Order</th><th>Name</th><th>Active</th><th class="favorites-only" style="display:none;">Favorite</th><th>Save</th></tr></thead>
+      <thead><tr><th>Order</th><th>Name</th><th>Active</th><th class="favorites-only" style="display:none;">Favorite</th><th>Created</th><th>Save</th></tr></thead>
       <tbody></tbody>
     </table>
   </div>
@@ -111,6 +111,7 @@ function rowHtml(kind, item, atCap) {
     <td class="favorites-only" style="display:none;">
       <input type="checkbox" class="favorite-input" ${item.is_favorite ? "checked" : ""} ${favDisabled ? "disabled" : ""}>
     </td>
+    <td class="hint">${escapeHtml(item.created_at_local || "")}</td>
     <td><button type="button" class="secondary save-row-btn" data-kind="${kind}">Save</button></td>
   </tr>`;
 }
