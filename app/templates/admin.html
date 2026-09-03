@@ -125,6 +125,11 @@ async function loadTables() {
         if (btn.dataset.kind === "station") await Api.updateStation(id, payload);
         else await Api.updateCategory(id, payload);
         showToast("Saved.", "success");
+        // Re-render from the server response so an Active toggle (or a name/sort
+        // change) is reflected immediately, same as the add-station/add-category
+        // forms below already do - previously this table just sat stale until a
+        // full page reload.
+        await loadTables();
       } catch (err) {
         showToast(err.message, "error");
       }

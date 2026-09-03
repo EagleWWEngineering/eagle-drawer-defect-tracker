@@ -6,7 +6,7 @@ DELETE route here. Historical defect cases keep referencing them by id.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.dependencies import get_actor_role, get_db
@@ -33,11 +33,25 @@ router = APIRouter(prefix="/api/v1/master-data", tags=["master-data"])
 
 
 @router.get("", response_model=MasterDataOut)
-def get_master_data(db: Session = Depends(get_db)) -> MasterDataOut:
-    stations = db.query(Station).order_by(Station.sort_order, Station.name).all()
-    categories = (
-        db.query(DefectCategory).order_by(DefectCategory.sort_order, DefectCategory.name).all()
-    )
+def get_master_data(
+    db: Session = Depends(get_db),
+    active_only: bool = Query(
+        default=False,
+        description=(
+            "When true, excludes deactivated stations/categories - for entry forms "
+            "(e.g. New Defect) where a retired value must never be offered as a new "
+            "choice. Leave false for Reports/Dashboard/Admin, which still need "
+            "retired values reachable for historical filtering."
+        ),
+    ),
+) -> MasterDataOut:
+    station_query = db.query(Station)
+    category_query = db.query(DefectCategory)
+    if active_only:
+        station_query = station_query.filter(Station.active.is_(True))
+        category_query = category_query.filter(DefectCategory.active.is_(True))
+    stations = station_query.order_by(Station.sort_order, Station.name).all()
+    categories = category_query.order_by(DefectCategory.sort_order, DefectCategory.name).all()
     return MasterDataOut(
         stations=[StationOut.model_validate(s) for s in stations],
         defect_categories=[DefectCategoryOut.model_validate(c) for c in categories],

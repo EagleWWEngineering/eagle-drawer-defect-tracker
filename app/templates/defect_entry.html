@@ -889,7 +889,11 @@ function resetFormFully() {
 
 document.addEventListener("DOMContentLoaded", async () => {
   try {
-    masterData = await Api.getMasterData();
+    // active_only=true: an inactive station/category must never be offered as a
+    // new choice on the entry form (see Admin's Active toggle) - Reports/Dashboard/
+    // Admin/Rework Queue deliberately keep calling Api.getMasterData() unfiltered
+    // so retired values stay reachable for historical filtering.
+    masterData = await Api.getMasterData(true);
     recentWorkOrders = await Api.getRecentWorkOrders(20);
   } catch (err) {
     showToast(err.message, "error");

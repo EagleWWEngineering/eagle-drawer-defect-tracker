@@ -95,7 +95,12 @@ const Api = {
   },
 
   // Master data
-  getMasterData: () => request("GET", "/api/v1/master-data"),
+  // activeOnly: true excludes deactivated stations/categories (New Defect form -
+  // a retired value must never be offered as a new choice there). Leave false
+  // (default) for Reports/Dashboard/Admin/Rework Queue, which still need retired
+  // values reachable for historical filtering.
+  getMasterData: (activeOnly) =>
+    request("GET", "/api/v1/master-data", { params: { active_only: activeOnly || undefined } }),
   createStation: (payload) => request("POST", "/api/v1/master-data/stations", { body: payload }),
   updateStation: (id, payload) =>
     request("PATCH", `/api/v1/master-data/stations/${id}`, { body: payload }),
