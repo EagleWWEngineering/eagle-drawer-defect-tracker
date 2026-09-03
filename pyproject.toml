@@ -25,6 +25,14 @@ dev = [
     "pytest-asyncio==0.25.0",
     "ruff==0.8.4",
 ]
+# Optional: browser-driven smoke testing of the actual running app (not part of
+# the pytest suite - pytest's in-memory SQLite has been shown to hide at least
+# one real bug, see the Phase 2 photo-delete fix). Separate from `dev` since it
+# pulls a Chromium binary (`playwright install chromium`, run once after
+# `pip install -e ".[e2e]"`), not just Python packages.
+e2e = [
+    "playwright==1.62.0",
+]
 
 [tool.ruff]
 line-length = 100

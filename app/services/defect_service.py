@@ -506,11 +506,18 @@ def update_defect_item(
     return item
 
 
-def remove_defect_item(db: Session, case: DefectCase, item_id: int) -> DefectItem:
+def remove_defect_item(db: Session, case: DefectCase, item_id: int) -> dict:
     """Remove a line item. Blocked if it's the only item left - rule 3
     (PROJECT_SPEC.md section 2) treats a case as existing because of at least one
     defect event; leaving zero items would be the same invalid state
-    DefectCaseCreate already rejects (`items: list[DefectItemIn] = Field(min_length=1)`)."""
+    DefectCaseCreate already rejects (`items: list[DefectItemIn] = Field(min_length=1)`).
+
+    Returns a plain snapshot dict captured BEFORE the delete, not the DefectItem
+    instance itself - same fix as remove_photo below, applied here proactively
+    (no caller currently reads the returned value's attributes, so this specific
+    spot never actually raised ObjectDeletedError in practice, but the shape was
+    identical: a hard db.delete()+commit() returning the just-deleted ORM
+    instance - a landmine for whichever caller touches it next)."""
     _require_open_for_item_edit(case)
     item = next((i for i in case.items if i.id == item_id), None)
     if item is None:
@@ -523,9 +530,15 @@ def remove_defect_item(db: Session, case: DefectCase, item_id: int) -> DefectIte
             "one category. Delete the whole case instead if it was logged in error.",
             field="item_id",
         )
+    snapshot = {
+        "item_id": item.id,
+        "defect_category_id": item.defect_category_id,
+        "affected_drawer_quantity": item.affected_drawer_quantity,
+        "notes": item.notes,
+    }
     db.delete(item)
     db.commit()
-    return item
+    return snapshot
 
 
 def remove_photo(db: Session, case: DefectCase, photo_id: int) -> dict:
