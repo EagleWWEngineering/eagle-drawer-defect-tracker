@@ -104,6 +104,20 @@ offline after install.
   `docs/PROJECT_SPEC_PHASE7.md`) — do not bypass it in routers or the UI.
 - Soft delete only for `DefectCase`. Master data (`Station`, `DefectCategory`) can be
   deactivated but never hard-deleted if referenced by historical records.
+- **Never hard-delete an inactive `Station`/`DefectCategory`, even one with zero
+  historical references.** `app/seed_data.py seed_master_data()` (runs on every app
+  startup) skips re-inserting a default station/category if a row with that exact
+  name already exists, active or not — some currently-inactive rows are stray
+  duplicates created by a 2026-09-03 production incident (renaming a row away from
+  its default name made that name vanish from the check, so a later restart
+  silently recreated it) that were deactivated by hand rather than deleted. Their
+  continued existence, under their original default name, is what stops the seed
+  loop from recreating a THIRD row the next time anything touches that table — see
+  `Station`/`DefectCategory.seed_key` in `app/models.py` and `app/seed_data.py`'s
+  `_seed_missing()` for the durable half of this fix, and the `4e9b5dea94ec`
+  migration for the incident itself. A future cleanup that hard-deletes an
+  inactive row purely because it looks like unused clutter will reopen this exact
+  bug for whichever default name that row was holding.
 - Counting formulas (defects/100, rejection rate, FPY) must match
   `docs/PROJECT_SPEC.md` §2.1 exactly, everywhere. Rework Rate and Internal Quality
   Cost were redefined in Phase 7 (`docs/PROJECT_SPEC_PHASE7.md`) — case-derived, not
