@@ -48,6 +48,20 @@ class Station(Base):
     # doesn't require re-choosing a position.
     is_favorite: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     favorite_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Seed-duplicate fix: the ORIGINAL default name this row was created under,
+    # set once by app/seed_data.py at insert time and NEVER touched by an Admin
+    # edit (app/services/master_data_service.py never writes it) - a durable,
+    # rename-proof marker. seed_master_data() previously decided "this default
+    # already exists" purely by matching the CURRENT name, so renaming a station
+    # away from its default name made that name vanish from the "already
+    # exists" check and get silently re-inserted as a fresh duplicate on the
+    # next restart - confirmed fired in production (~12 stray duplicate defect
+    # categories, 2026-09-03). NULL for every row that isn't itself a live
+    # representative of one of the current default names (a rename, a manually
+    # added custom station, or an already-deactivated stray duplicate from
+    # before this fix - deliberately left NULL and untouched, never backfilled,
+    # by the migration that added this column).
+    seed_key: Mapped[str | None] = mapped_column(String(120), nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
@@ -68,6 +82,8 @@ class DefectCategory(Base):
     # 5 favorite categories, independently of each other).
     is_favorite: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     favorite_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # See Station.seed_key above - identical mechanism, same reasoning.
+    seed_key: Mapped[str | None] = mapped_column(String(120), nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow

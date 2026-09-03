@@ -109,20 +109,45 @@ def _apply_station_renames(db: Session) -> None:
         old.name = new_name
 
 
+def _seed_missing(
+    db: Session, model: type[Station] | type[DefectCategory], names: list[str]
+) -> None:
+    """Insert any name from `names` not already represented - by CURRENT name
+    (any active status) OR by seed_key (durable - survives a rename). Both
+    checks matter and neither replaces the other:
+
+    - The name check is what stops this from recreating a row that already
+      exists but is inactive - a stray duplicate deactivated by hand (see the
+      2026-09-03 incident) is NEVER touched or reinserted, because its exact
+      name is still sitting in the table regardless of active status.
+    - seed_key is what stops it recreating a row that's since been renamed
+      away from its default name - the actual bug. name-matching alone can't
+      see this, because the rename makes the default name vanish from the
+      table entirely.
+
+    Every newly-inserted row gets seed_key=name, so this invariant holds
+    without ever needing another backfill for names added to `names` later.
+    """
+    existing_names = {row.name for row in db.query(model).all()}
+    existing_seed_keys = {
+        row.seed_key for row in db.query(model).filter(model.seed_key.isnot(None)).all()
+    }
+    for order, name in enumerate(names, start=1):
+        if name not in existing_names and name not in existing_seed_keys:
+            db.add(model(name=name, active=True, sort_order=order, seed_key=name))
+
+
 def seed_master_data(db: Session) -> None:
     """Insert baseline stations/categories if they don't already exist (idempotent)."""
     _apply_station_renames(db)
 
-    existing_stations = {s.name for s in db.query(Station).all()}
-    for order, name in enumerate(STATIONS, start=1):
-        if name not in existing_stations:
-            db.add(Station(name=name, active=True, sort_order=order))
+    _seed_missing(db, Station, STATIONS)
+    _seed_missing(db, DefectCategory, DEFECT_CATEGORIES)
 
-    existing_categories = {c.name for c in db.query(DefectCategory).all()}
-    for order, name in enumerate(DEFECT_CATEGORIES, start=1):
-        if name not in existing_categories:
-            db.add(DefectCategory(name=name, active=True, sort_order=order))
-
+    # customer_issue_categories: NOT covered by seed_key - same rename-then-
+    # restart exposure exists here in principle, but it's a separate table
+    # from the reported incident and a separate, not-yet-decided follow-up,
+    # not silently folded into this fix.
     existing_customer_categories = {c.name for c in db.query(CustomerIssueCategory).all()}
     for order, name in enumerate(CUSTOMER_ISSUE_CATEGORIES, start=1):
         if name not in existing_customer_categories:
