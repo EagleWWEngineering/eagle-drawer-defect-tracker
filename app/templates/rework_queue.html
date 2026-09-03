@@ -58,11 +58,17 @@ function closeFormHtml(item) {
   </div>`;
 }
 
-// Secondary, collapsed by default: editing root cause/corrective action, or (for
-// a closed case shown via an explicit closed-status filter) reopening it back to
-// Open - the one status option besides item.status itself that
-// item.allowed_next_statuses can ever offer now (PROJECT_SPEC_PHASE7.md: there is
-// no more generic "move between open states" transition at all).
+// Secondary, collapsed by default: editing root cause/corrective action. This
+// does NOT reopen a closed case, despite what an earlier version of this
+// comment claimed - item.allowed_next_statuses is empty for every status,
+// closed ones included (PROJECT_SPEC_PHASE7.md: there is no more generic
+// "move between open states" transition at all), so this dropdown can only
+// ever offer the row's own current status. It's also moot in practice: this
+// page never lists a closed case to begin with (loadQueue() only ever
+// requests Open, or no status filter at all - see the #f-status options
+// below, which never include a closed value). Reopening a case lives on the
+// case-detail modal instead (app/static/js/app.js renderCaseDetail) - see the
+// Reopen button there, the one actual UI path for it.
 function moreOptionsFormHtml(item) {
   const statusOptions = [item.status, ...item.allowed_next_statuses]
     .filter((v, i, arr) => arr.indexOf(v) === i)

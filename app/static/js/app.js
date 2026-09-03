@@ -387,7 +387,19 @@ async function renderCaseDetail(caseId) {
     </div>
 
     <h3>Defect items</h3>
-    ${isClosed ? `<p class="hint">This case is closed - reopen it (Rework Queue &rarr; More options &rarr; Status) to add, edit, or remove defect items.</p>` : ""}
+    ${
+      isClosed
+        ? `<div id="case-detail-reopen-prompt">
+            <span class="hint">This case is closed - reopen it to add, edit, or remove defect items.</span>
+            <button type="button" id="case-detail-reopen-btn" class="secondary" style="margin-left:0.5rem;">Reopen case</button>
+          </div>
+          <form id="case-detail-reopen-form" class="inline-form" style="display:none;">
+            <input type="text" id="case-detail-reopen-note" placeholder="Why are you reopening this case?" required style="min-width:260px;">
+            <button type="submit" class="secondary">Confirm reopen</button>
+            <button type="button" id="case-detail-reopen-cancel-btn" class="secondary">Cancel</button>
+          </form>`
+        : ""
+    }
     <ul id="case-detail-items-list">${itemsHtml}</ul>
     ${
       isClosed
@@ -488,6 +500,49 @@ async function renderCaseDetail(caseId) {
       }
     })
   );
+
+  // Reopen a closed case - the only UI path anywhere in this app that can
+  // undo the defect-item lock above (reopening always requires a note - see
+  // defect_service.update_case_status's is_reopen branch). Rework Queue's
+  // status filter never lists closed cases and its "More options" status
+  // dropdown can never offer "Open" either (allowed_next_statuses is empty
+  // for every status by design - see app/services/defect_service.py
+  // STATUS_TRANSITIONS) - this button is the fix for that, not a shortcut to
+  // some path that already existed elsewhere.
+  const reopenBtn = document.getElementById("case-detail-reopen-btn");
+  if (reopenBtn) {
+    const reopenPrompt = document.getElementById("case-detail-reopen-prompt");
+    const reopenForm = document.getElementById("case-detail-reopen-form");
+    const reopenCancelBtn = document.getElementById("case-detail-reopen-cancel-btn");
+    reopenBtn.addEventListener("click", () => {
+      reopenPrompt.style.display = "none";
+      reopenForm.style.display = "flex";
+      document.getElementById("case-detail-reopen-note").focus();
+    });
+    reopenCancelBtn.addEventListener("click", () => {
+      reopenForm.style.display = "none";
+      reopenPrompt.style.display = "block";
+    });
+    const reopenSubmitBtn = reopenForm.querySelector('button[type="submit"]');
+    reopenForm.addEventListener(
+      "submit",
+      guardDoubleSubmit(reopenSubmitBtn, async (e) => {
+        e.preventDefault();
+        const note = document.getElementById("case-detail-reopen-note").value.trim();
+        if (!note) {
+          showToast("Explain why you're reopening this case first.", "error");
+          return;
+        }
+        try {
+          await Api.changeStatus(caseId, { new_status: "Open", note });
+          showToast("Case reopened.", "success");
+          await renderCaseDetail(caseId);
+        } catch (err) {
+          showToast(err.message, "error");
+        }
+      })
+    );
+  }
 
   // Defect items - add/edit/remove. Blocked server-side on a closed case (see
   // defect_service._require_open_for_item_edit), which is why the controls
