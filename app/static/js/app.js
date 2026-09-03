@@ -274,17 +274,53 @@ function closeCaseDetailModal() {
   document.body.style.overflow = "";
 }
 
+/** Builds <option> HTML for a Found Station / Possible Source select: the
+ * active-only station list (Phase 1), PLUS the case's current station added
+ * back in if it's since gone inactive and so isn't in that list - an edit must
+ * never be forced to change away from a station that's still factually correct
+ * just because Admin later deactivated it (Phase 2 guardrail). allowNone adds
+ * a blank "(none)" option for possible source, which is nullable. */
+function buildStationOptionsHtml(activeStations, currentId, currentName, { allowNone = false } = {}) {
+  const options = activeStations.map((s) => ({ id: s.id, label: s.name }));
+  if (currentId != null && !options.some((o) => o.id === currentId)) {
+    options.push({ id: currentId, label: `${currentName} (inactive)` });
+  }
+  const optionsHtml = options
+    .map((o) => `<option value="${o.id}" ${o.id === currentId ? "selected" : ""}>${escapeHtml(o.label)}</option>`)
+    .join("");
+  const noneHtml = allowNone
+    ? `<option value="" ${currentId == null ? "selected" : ""}>(none / unknown)</option>`
+    : "";
+  return noneHtml + optionsHtml;
+}
+
+function defectItemRowHtml(item, isClosed) {
+  const actions = isClosed
+    ? ""
+    : ` <button type="button" class="secondary item-edit-btn" data-item-id="${item.id}" style="padding:0.1rem 0.5rem;">Edit</button>
+        <button type="button" class="secondary item-remove-btn" data-item-id="${item.id}" style="padding:0.1rem 0.5rem;">Remove</button>`;
+  return `<li data-item-id="${item.id}">
+    <span class="item-display">
+      <strong>${escapeHtml(item.defect_category_name)}</strong>
+      — ${item.affected_drawer_quantity} drawer${item.affected_drawer_quantity === 1 ? "" : "s"}${item.notes ? ` — ${escapeHtml(item.notes)}` : ""}
+    </span>${actions}
+  </li>`;
+}
+
 async function renderCaseDetail(caseId) {
-  const c = await Api.getDefectCase(caseId);
+  // active_only=true (Phase 1): the found/possible-source edit selects below
+  // must never offer an inactive station as a NEW choice. Fetched fresh here
+  // (not the page's own `masterData`, if any - this modal is shared across
+  // several pages, some of which don't even declare one) rather than cached.
+  const [c, activeMasterData] = await Promise.all([
+    Api.getDefectCase(caseId),
+    Api.getMasterData(true),
+  ]);
+  const isClosed = c.closed_at !== null;
   document.getElementById("case-detail-title").textContent = `Case ${c.case_number}`;
 
   const itemsHtml =
-    c.items
-      .map(
-        (i) =>
-          `<li>${escapeHtml(i.defect_category_name)} — ${i.affected_drawer_quantity} drawer${i.affected_drawer_quantity === 1 ? "" : "s"}${i.notes ? ` — ${escapeHtml(i.notes)}` : ""}</li>`
-      )
-      .join("") || "<li>No defect items.</li>";
+    c.items.map((i) => defectItemRowHtml(i, isClosed)).join("") || "<li>No defect items.</li>";
 
   const historyHtml =
     c.status_history
@@ -297,11 +333,28 @@ async function renderCaseDetail(caseId) {
   const photosHtml = c.photos.length
     ? `<div class="photo-grid">${c.photos
         .map(
-          (p) =>
-            `<a href="${p.url}" target="_blank" rel="noopener" class="photo-thumb"><img src="${p.url}" alt="${escapeHtml(p.original_filename)}" loading="lazy"></a>`
+          (p) => `<div class="photo-thumb-wrap">
+            <a href="${p.url}" target="_blank" rel="noopener" class="photo-thumb"><img src="${p.url}" alt="${escapeHtml(p.original_filename)}" loading="lazy"></a>
+            <button type="button" class="secondary photo-remove-btn" data-photo-id="${p.id}">Remove</button>
+          </div>`
         )
         .join("")}</div>`
     : `<p class="hint">No photos uploaded yet.</p>`;
+
+  const foundStationOptionsHtml = buildStationOptionsHtml(
+    activeMasterData.stations,
+    c.found_station_id,
+    c.found_station_name
+  );
+  const sourceStationOptionsHtml = buildStationOptionsHtml(
+    activeMasterData.stations,
+    c.possible_source_station_id,
+    c.possible_source_station_name,
+    { allowNone: true }
+  );
+  const addItemCategoryOptionsHtml = activeMasterData.defect_categories
+    .map((cat) => `<option value="${cat.id}">${escapeHtml(cat.name)}</option>`)
+    .join("");
 
   document.getElementById("case-detail-body").innerHTML = `
     <div class="case-detail-meta">
@@ -319,12 +372,36 @@ async function renderCaseDetail(caseId) {
         ${c.entry_source ? `<span class="hint">(${escapeHtml(c.entry_source)})</span>` : ""}
       </p>
       <p><strong>Detected:</strong> ${escapeHtml(c.detected_at_local || "")} &nbsp; <strong>Production date:</strong> ${c.production_date}</p>
-      <p><strong>Found station:</strong> ${escapeHtml(c.found_station_name)} &nbsp; <strong>Possible source station:</strong> ${escapeHtml(c.possible_source_station_name || "unknown")}</p>
+      <p>
+        <strong>Found station:</strong>
+        <span id="case-detail-stations-display">${escapeHtml(c.found_station_name)} &nbsp; <strong>Possible source station:</strong> ${escapeHtml(c.possible_source_station_name || "unknown")}</span>
+        <button type="button" id="case-detail-stations-edit-btn" class="secondary" style="padding:0.1rem 0.5rem; margin-left:0.5rem;">Edit</button>
+        <span id="case-detail-stations-form" class="inline-form" style="display:none;">
+          <label>Found <select id="case-detail-found-station-select">${foundStationOptionsHtml}</select></label>
+          <label>Possible source <select id="case-detail-source-station-select">${sourceStationOptionsHtml}</select></label>
+          <button type="button" id="case-detail-stations-save-btn" class="secondary">Save</button>
+          <button type="button" id="case-detail-stations-cancel-btn" class="secondary">Cancel</button>
+        </span>
+      </p>
       ${c.disposition ? `<p><strong>Disposition:</strong> ${escapeHtml(c.disposition)}</p>` : ""}
     </div>
 
     <h3>Defect items</h3>
-    <ul>${itemsHtml}</ul>
+    ${isClosed ? `<p class="hint">This case is closed - reopen it (Rework Queue &rarr; More options &rarr; Status) to add, edit, or remove defect items.</p>` : ""}
+    <ul id="case-detail-items-list">${itemsHtml}</ul>
+    ${
+      isClosed
+        ? ""
+        : `<form id="case-detail-add-item-form" class="inline-form">
+            <select name="defect_category_id" required>
+              <option value="" disabled selected>Add a category…</option>
+              ${addItemCategoryOptionsHtml}
+            </select>
+            <input type="number" name="affected_drawer_quantity" min="1" value="1" style="width:4rem;" aria-label="Affected drawer quantity">
+            <input type="text" name="notes" placeholder="Notes (optional)">
+            <button type="submit" class="secondary">Add item</button>
+          </form>`
+    }
 
     ${c.root_cause ? `<p><strong>Root cause:</strong> ${escapeHtml(c.root_cause)}</p>` : ""}
     ${c.corrective_action ? `<p><strong>Corrective action:</strong> ${escapeHtml(c.corrective_action)}</p>` : ""}
@@ -345,9 +422,7 @@ async function renderCaseDetail(caseId) {
     </form>
   `;
 
-  // Line label is editable inline, right in the modal - the only case field
-  // with its own dedicated edit control here (everything else that's editable
-  // today is edited from Rework Queue's forms instead). See
+  // Line label is editable inline, right in the modal - see
   // PROJECT_SPEC_PHASE9.md Part 2: "Case detail and edit — displayed and editable."
   const editBtn = document.getElementById("case-detail-line-label-edit-btn");
   const displaySpan = document.getElementById("case-detail-line-label-display");
@@ -380,6 +455,128 @@ async function renderCaseDetail(caseId) {
     })
   );
 
+  // Found station / possible source - editable regardless of case status (Phase 2:
+  // neither field feeds a counting formula, unlike defect items below).
+  const stationsEditBtn = document.getElementById("case-detail-stations-edit-btn");
+  const stationsDisplay = document.getElementById("case-detail-stations-display");
+  const stationsForm = document.getElementById("case-detail-stations-form");
+  const stationsSaveBtn = document.getElementById("case-detail-stations-save-btn");
+  stationsEditBtn.addEventListener("click", () => {
+    stationsEditBtn.style.display = "none";
+    stationsDisplay.style.display = "none";
+    stationsForm.style.display = "flex";
+  });
+  document.getElementById("case-detail-stations-cancel-btn").addEventListener("click", () => {
+    stationsForm.style.display = "none";
+    stationsDisplay.style.display = "inline";
+    stationsEditBtn.style.display = "inline";
+  });
+  stationsSaveBtn.addEventListener(
+    "click",
+    guardDoubleSubmit(stationsSaveBtn, async () => {
+      const foundId = Number(document.getElementById("case-detail-found-station-select").value);
+      const sourceRaw = document.getElementById("case-detail-source-station-select").value;
+      try {
+        await Api.updateDefectCase(caseId, {
+          found_station_id: foundId,
+          possible_source_station_id: sourceRaw ? Number(sourceRaw) : null,
+        });
+        showToast("Stations updated.", "success");
+        await renderCaseDetail(caseId);
+      } catch (err) {
+        showToast(err.message, "error");
+      }
+    })
+  );
+
+  // Defect items - add/edit/remove. Blocked server-side on a closed case (see
+  // defect_service._require_open_for_item_edit), which is why the controls
+  // above are hidden entirely once isClosed - but a stale-modal double-click
+  // could still race a status change elsewhere, so errors here still surface
+  // via toast rather than assuming the hidden-controls guard is enough on its own.
+  const itemsList = document.getElementById("case-detail-items-list");
+  itemsList.addEventListener("click", async (e) => {
+    const editItemBtn = e.target.closest(".item-edit-btn");
+    const removeItemBtn = e.target.closest(".item-remove-btn");
+    const saveItemBtn = e.target.closest(".item-edit-save-btn");
+    const cancelItemBtn = e.target.closest(".item-edit-cancel-btn");
+
+    if (editItemBtn) {
+      const itemId = Number(editItemBtn.dataset.itemId);
+      const item = c.items.find((i) => i.id === itemId);
+      const li = editItemBtn.closest("li");
+      li.innerHTML = `
+        <span class="inline-form">
+          <strong>${escapeHtml(item.defect_category_name)}</strong>
+          <input type="number" min="1" class="item-edit-qty" value="${item.affected_drawer_quantity}" style="width:4rem;" aria-label="Affected drawer quantity">
+          <input type="text" class="item-edit-notes" value="${escapeHtml(item.notes || "")}" placeholder="Notes" aria-label="Notes">
+          <button type="button" class="secondary item-edit-save-btn" data-item-id="${itemId}">Save</button>
+          <button type="button" class="secondary item-edit-cancel-btn">Cancel</button>
+        </span>
+      `;
+      return;
+    }
+    if (cancelItemBtn) {
+      await renderCaseDetail(caseId);
+      return;
+    }
+    if (saveItemBtn) {
+      const itemId = Number(saveItemBtn.dataset.itemId);
+      const li = saveItemBtn.closest("li");
+      const qty = Number(li.querySelector(".item-edit-qty").value);
+      const notes = li.querySelector(".item-edit-notes").value;
+      try {
+        await Api.updateDefectItem(caseId, itemId, {
+          affected_drawer_quantity: qty,
+          notes: notes || null,
+        });
+        showToast("Defect item updated.", "success");
+        await renderCaseDetail(caseId);
+      } catch (err) {
+        showToast(err.message, "error");
+      }
+      return;
+    }
+    if (removeItemBtn) {
+      if (!confirm("Remove this defect item? This cannot be undone.")) return;
+      try {
+        await Api.removeDefectItem(caseId, Number(removeItemBtn.dataset.itemId));
+        showToast("Defect item removed.", "success");
+        await renderCaseDetail(caseId);
+      } catch (err) {
+        showToast(err.message, "error");
+      }
+    }
+  });
+
+  const addItemForm = document.getElementById("case-detail-add-item-form");
+  if (addItemForm) {
+    const addItemBtn = addItemForm.querySelector("button");
+    addItemForm.addEventListener(
+      "submit",
+      guardDoubleSubmit(addItemBtn, async (e) => {
+        e.preventDefault();
+        const fd = new FormData(addItemForm);
+        const categoryId = Number(fd.get("defect_category_id"));
+        if (!categoryId) {
+          showToast("Pick a category first.", "error");
+          return;
+        }
+        try {
+          await Api.addDefectItem(caseId, {
+            defect_category_id: categoryId,
+            affected_drawer_quantity: Number(fd.get("affected_drawer_quantity")) || 1,
+            notes: fd.get("notes") || null,
+          });
+          showToast("Defect item added.", "success");
+          await renderCaseDetail(caseId);
+        } catch (err) {
+          showToast(err.message, "error");
+        }
+      })
+    );
+  }
+
   const uploadForm = document.getElementById("case-photo-upload-form");
   const uploadBtn = uploadForm.querySelector("button");
   uploadForm.addEventListener(
@@ -397,6 +594,19 @@ async function renderCaseDetail(caseId) {
       }
     })
   );
+
+  document.querySelectorAll(".photo-remove-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("Remove this photo? This cannot be undone.")) return;
+      try {
+        await Api.deletePhoto(caseId, Number(btn.dataset.photoId));
+        showToast("Photo removed.", "success");
+        await renderCaseDetail(caseId);
+      } catch (err) {
+        showToast(err.message, "error");
+      }
+    });
+  });
 }
 
 /** Open the case detail modal for `caseId`. This is the one function every

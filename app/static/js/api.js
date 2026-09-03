@@ -93,6 +93,18 @@ const Api = {
       isForm: true,
     });
   },
+  deletePhoto: (caseId, photoId) =>
+    request("DELETE", `/api/v1/defect-cases/${caseId}/photos/${photoId}`),
+
+  // Defect items (Phase 2 - child-collection edit on an existing case). All three
+  // return the updated DefectCaseOut so the case detail modal can just re-render
+  // from the response, same as every other case edit here.
+  addDefectItem: (caseId, payload) =>
+    request("POST", `/api/v1/defect-cases/${caseId}/items`, { body: payload }),
+  updateDefectItem: (caseId, itemId, payload) =>
+    request("PATCH", `/api/v1/defect-cases/${caseId}/items/${itemId}`, { body: payload }),
+  removeDefectItem: (caseId, itemId) =>
+    request("DELETE", `/api/v1/defect-cases/${caseId}/items/${itemId}`),
 
   // Master data
   // activeOnly: true excludes deactivated stations/categories (New Defect form -

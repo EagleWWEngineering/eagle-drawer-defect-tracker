@@ -27,6 +27,8 @@ from app.schemas import (
     DefectCaseOut,
     DefectCaseStatusChange,
     DefectCaseUpdate,
+    DefectItemIn,
+    DefectItemUpdate,
     DefectPhotoOut,
     WorkOrderLastStationOut,
     defect_case_to_out,
@@ -213,13 +215,10 @@ def update_case(
     before = defect_case_to_out(case).model_dump(mode="json")
 
     updates = payload.model_dump(exclude_unset=True, exclude={"add_items"})
-    if "line_label" in updates:
-        # PROJECT_SPEC_PHASE9.md Part 1: same normalisation as creation - 'a'
-        # edited in here must land as 'A', same as it would on the New Defect form.
-        updates["line_label"] = defect_service.normalize_line_label(updates["line_label"])
-    for field, value in updates.items():
-        setattr(case, field, value)
-    db.commit()
+    # line_label normalisation (PROJECT_SPEC_PHASE9.md Part 1) and found/possible-
+    # source station existence validation both live in the service layer now -
+    # see apply_case_field_updates.
+    defect_service.apply_case_field_updates(db, case, updates)
 
     if payload.add_items:
         for item in payload.add_items:
@@ -378,3 +377,113 @@ async def upload_photo(
         inputs={"original_filename": safe_original, "content_type": file.content_type},
     )
     return DefectPhotoOut.model_validate(photo)
+
+
+@router.delete("/{case_id}/photos/{photo_id}", response_model=DefectCaseOut)
+def delete_photo(
+    case_id: int,
+    photo_id: int,
+    db: Session = Depends(get_db),
+    actor_role: str = Depends(get_actor_role),
+) -> DefectCaseOut:
+    case = defect_service.get_case_or_404(db, case_id)
+    photo_snapshot = defect_service.remove_photo(db, case, photo_id)
+    db.refresh(case)
+    audit_service.record(
+        db,
+        actor_role=actor_role,
+        action="photo_delete",
+        entity_type="DefectCase",
+        entity_id=case.case_number,
+        before=photo_snapshot,
+    )
+    return defect_case_to_out(case)
+
+
+@router.post("/{case_id}/items", response_model=DefectCaseOut)
+def add_item(
+    case_id: int,
+    payload: DefectItemIn,
+    db: Session = Depends(get_db),
+    actor_role: str = Depends(get_actor_role),
+) -> DefectCaseOut:
+    """Add a defect item/category to an existing case. Merges into an existing item
+    on the same category, same rule as at creation (see defect_service.add_or_merge_item)."""
+    case = defect_service.get_case_or_404(db, case_id)
+    before = defect_case_to_out(case).model_dump(mode="json")
+    defect_service.add_or_merge_item(
+        db,
+        case,
+        defect_category_id=payload.defect_category_id,
+        affected_drawer_quantity=payload.affected_drawer_quantity,
+        notes=payload.notes,
+    )
+    db.refresh(case)
+    audit_service.record(
+        db,
+        actor_role=actor_role,
+        action="item_add",
+        entity_type="DefectCase",
+        entity_id=case.case_number,
+        inputs=payload.model_dump(),
+        before=before,
+        after=defect_case_to_out(case).model_dump(mode="json"),
+    )
+    return defect_case_to_out(case)
+
+
+@router.patch("/{case_id}/items/{item_id}", response_model=DefectCaseOut)
+def update_item(
+    case_id: int,
+    item_id: int,
+    payload: DefectItemUpdate,
+    db: Session = Depends(get_db),
+    actor_role: str = Depends(get_actor_role),
+) -> DefectCaseOut:
+    case = defect_service.get_case_or_404(db, case_id)
+    before = defect_case_to_out(case).model_dump(mode="json")
+    updates = payload.model_dump(exclude_unset=True)
+    defect_service.update_defect_item(
+        db,
+        case,
+        item_id,
+        affected_drawer_quantity=updates.get("affected_drawer_quantity"),
+        notes=updates.get("notes"),
+        notes_set="notes" in updates,
+    )
+    db.refresh(case)
+    audit_service.record(
+        db,
+        actor_role=actor_role,
+        action="item_update",
+        entity_type="DefectCase",
+        entity_id=case.case_number,
+        inputs={"item_id": item_id, **updates},
+        before=before,
+        after=defect_case_to_out(case).model_dump(mode="json"),
+    )
+    return defect_case_to_out(case)
+
+
+@router.delete("/{case_id}/items/{item_id}", response_model=DefectCaseOut)
+def remove_item(
+    case_id: int,
+    item_id: int,
+    db: Session = Depends(get_db),
+    actor_role: str = Depends(get_actor_role),
+) -> DefectCaseOut:
+    case = defect_service.get_case_or_404(db, case_id)
+    before = defect_case_to_out(case).model_dump(mode="json")
+    defect_service.remove_defect_item(db, case, item_id)
+    db.refresh(case)
+    audit_service.record(
+        db,
+        actor_role=actor_role,
+        action="item_remove",
+        entity_type="DefectCase",
+        entity_id=case.case_number,
+        inputs={"item_id": item_id},
+        before=before,
+        after=defect_case_to_out(case).model_dump(mode="json"),
+    )
+    return defect_case_to_out(case)

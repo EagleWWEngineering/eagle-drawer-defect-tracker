@@ -87,6 +87,16 @@ class DefectItemIn(BaseModel):
     notes: str | None = None
 
 
+class DefectItemUpdate(BaseModel):
+    """Partial edit of one existing DefectItem (Phase 2 - child-collection edit,
+    not a scalar case field). Both fields optional/independent: quantity and
+    notes are edited separately from either one just as DefectCaseUpdate treats
+    each of its own fields."""
+
+    affected_drawer_quantity: int | None = Field(default=None, ge=1)
+    notes: str | None = None
+
+
 class DefectItemOut(BaseModel):
     id: int
     defect_category_id: int

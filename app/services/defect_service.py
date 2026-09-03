@@ -14,6 +14,7 @@ import datetime as dt
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.errors import InvalidTransitionError, NotFoundError, ValidationError
 from app.models import (
     DailyProductionSummary,
@@ -380,6 +381,59 @@ def get_case_by_number_or_404(db: Session, case_number: str) -> DefectCase:
     return case
 
 
+def apply_case_field_updates(db: Session, case: DefectCase, updates: dict) -> DefectCase:
+    """Apply a partial edit from DefectCaseUpdate (excluding add_items, handled
+    separately). `updates` is already exclude_unset - only fields the caller
+    actually sent are touched.
+
+    found_station_id/possible_source_station_id previously went straight through
+    setattr with no existence check at all (Phase 0 finding) - PRAGMA
+    foreign_keys=ON (app/database.py) meant a bad id would still fail, just as a
+    raw SQLite IntegrityError instead of a clean 4xx. Validated here the same way
+    create_defect_case already validates them: existence only, not active status -
+    an edit must still be able to keep/assign a station that's since gone
+    inactive (the New Defect form's active-only dropdown is what keeps a NEW,
+    unrelated inactive station from being offered - see Phase 1).
+    """
+    if case.is_deleted:
+        raise ValidationError("Cannot modify a deleted case.")
+    if "line_label" in updates:
+        updates["line_label"] = normalize_line_label(updates["line_label"])
+    if "found_station_id" in updates and updates["found_station_id"] is not None:
+        _get_active_or_any_station(db, updates["found_station_id"], field="found_station_id")
+    possible_source_id = updates.get("possible_source_station_id")
+    if "possible_source_station_id" in updates and possible_source_id is not None:
+        _get_active_or_any_station(db, possible_source_id, field="possible_source_station_id")
+    for field, value in updates.items():
+        setattr(case, field, value)
+    db.commit()
+    db.refresh(case)
+    return case
+
+
+def _require_open_for_item_edit(case: DefectCase) -> None:
+    """Guard for every defect-item write (add/edit/remove) - decided explicitly for
+    Phase 2 rather than left implicit: item counts feed Pareto/defect-event/
+    rejection-rate figures with no status filter (see
+    app/services/metrics_service.py filtered_defect_items_query), so silently
+    changing items on an already-closed case would shift historical numbers for a
+    day already reported as final with nothing forcing anyone to notice. Closed
+    statuses are otherwise terminal (STATUS_TRANSITIONS) except an explicit,
+    audited, note-required reopen - item edits follow the same discipline: reopen
+    first, edit, close again. Station/possible-source/root-cause/photo edits are
+    NOT gated this way - none of them feed the counting formulas, so they keep
+    working regardless of status, unchanged from before this phase.
+    """
+    if case.is_deleted:
+        raise ValidationError("Cannot modify a deleted case.")
+    if case.status in CLOSED_STATUSES:
+        raise InvalidTransitionError(
+            f"Case {case.case_number} is {case.status}. Reopen it before adding, "
+            "editing, or removing defect items, then close it again when you're done.",
+            field="status",
+        )
+
+
 def add_or_merge_item(
     db: Session,
     case: DefectCase,
@@ -394,8 +448,7 @@ def add_or_merge_item(
     case rather than creating a duplicate) is implemented for the "add a newly
     confirmed category to an existing case" scenario.
     """
-    if case.is_deleted:
-        raise ValidationError("Cannot modify a deleted case.")
+    _require_open_for_item_edit(case)
     if affected_drawer_quantity < 1:
         raise ValidationError("Affected drawer quantity must be at least 1.", field="items")
     _get_category(db, defect_category_id)
@@ -419,6 +472,99 @@ def add_or_merge_item(
     db.commit()
     db.refresh(item)
     return item
+
+
+def update_defect_item(
+    db: Session,
+    case: DefectCase,
+    item_id: int,
+    *,
+    affected_drawer_quantity: int | None = None,
+    notes: str | None = None,
+    notes_set: bool = False,
+) -> DefectItem:
+    """Edit an existing line item's quantity and/or notes. notes_set distinguishes
+    "clear the notes" (notes=None, notes_set=True) from "leave notes alone"
+    (notes_set=False) - the same exclude_unset discipline DefectCaseUpdate uses,
+    since notes itself is legitimately nullable."""
+    _require_open_for_item_edit(case)
+    item = next((i for i in case.items if i.id == item_id), None)
+    if item is None:
+        raise NotFoundError(
+            f"Defect item {item_id} not found on case {case.case_number}.", field="item_id"
+        )
+    if affected_drawer_quantity is not None:
+        if affected_drawer_quantity < 1:
+            raise ValidationError(
+                "Affected drawer quantity must be at least 1.", field="affected_drawer_quantity"
+            )
+        item.affected_drawer_quantity = affected_drawer_quantity
+    if notes_set:
+        item.notes = notes
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+def remove_defect_item(db: Session, case: DefectCase, item_id: int) -> DefectItem:
+    """Remove a line item. Blocked if it's the only item left - rule 3
+    (PROJECT_SPEC.md section 2) treats a case as existing because of at least one
+    defect event; leaving zero items would be the same invalid state
+    DefectCaseCreate already rejects (`items: list[DefectItemIn] = Field(min_length=1)`)."""
+    _require_open_for_item_edit(case)
+    item = next((i for i in case.items if i.id == item_id), None)
+    if item is None:
+        raise NotFoundError(
+            f"Defect item {item_id} not found on case {case.case_number}.", field="item_id"
+        )
+    if len(case.items) <= 1:
+        raise ValidationError(
+            "Cannot remove the last defect item on a case - every case needs at least "
+            "one category. Delete the whole case instead if it was logged in error.",
+            field="item_id",
+        )
+    db.delete(item)
+    db.commit()
+    return item
+
+
+def remove_photo(db: Session, case: DefectCase, photo_id: int) -> dict:
+    """Remove a photo's DB row and its file under UPLOADS_DIR. Not gated by case
+    status (unlike defect items) - a photo is supplementary evidence, not data any
+    counting formula reads, so there's nothing for a closed case's numbers to drift
+    on here.
+
+    Returns a plain snapshot dict (photo_id/original_filename/stored_filename)
+    captured BEFORE the delete, not the DefectPhoto instance itself - SQLAlchemy
+    expires a deleted object's attributes as part of commit regardless of
+    expire_on_commit, so touching photo.* after commit raises ObjectDeletedError.
+    Caught live against the real persistent-disk SQLite file while smoke-testing
+    this phase - the in-memory test DB's session config didn't happen to
+    reproduce it, which is exactly why this needed a real run, not just pytest.
+    """
+    if case.is_deleted:
+        raise ValidationError("Cannot modify a deleted case.")
+    photo = next((p for p in case.photos if p.id == photo_id), None)
+    if photo is None:
+        raise NotFoundError(
+            f"Photo {photo_id} not found on case {case.case_number}.", field="photo_id"
+        )
+    snapshot = {
+        "photo_id": photo.id,
+        "original_filename": photo.original_filename,
+        "stored_filename": photo.stored_filename,
+    }
+    file_path = get_settings().uploads_dir / photo.stored_filename
+    db.delete(photo)
+    db.commit()
+    # The DB row is the source of truth; a file that's already missing (or fails to
+    # delete for some OS-level reason) must never block the row removal that already
+    # succeeded above - it would just leave one more orphaned file, not corrupt data.
+    try:
+        file_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return snapshot
 
 
 def update_case_status(

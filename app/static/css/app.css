@@ -682,6 +682,17 @@ canvas.chart-canvas {
 .case-photo-upload { display: flex; align-items: end; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.5rem; }
 .case-photo-upload .field { margin-bottom: 0; flex: 1; min-width: 200px; }
 
+/* Phase 2: found/possible-source station edit and the defect-item add/edit
+   forms in the case detail modal - same "small inline form" shape as
+   .case-photo-upload above, under a name that isn't photo-specific. */
+.inline-form { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.4rem; }
+.inline-form select, .inline-form input[type="text"], .inline-form input[type="number"] {
+  padding: 0.25rem 0.4rem;
+}
+
+.photo-thumb-wrap { display: flex; flex-direction: column; gap: 0.3rem; }
+.photo-thumb-wrap .photo-remove-btn { padding: 0.15rem 0.4rem; font-size: 0.75rem; }
+
 @media (max-width: 480px) {
   .modal-panel { max-height: 100vh; border-radius: 0; }
 }
