@@ -62,6 +62,15 @@ services:
       - key: OCR_PROVIDER
         value: tesseract
 
+      # Favorites quick-pick bars on the New Defect form (Found Station/Possible
+      # Source/defect categories - app/services/master_data_service.py). Not
+      # secret, safe to default here. Set to "true" because it's already live in
+      # production, set directly in Render's dashboard - declaring it here too
+      # means a from-scratch Blueprint recreation of this service won't silently
+      # default it back to app/config.py's own "false" default.
+      - key: FAVORITES_ENABLED
+        value: "true"
+
       # Secrets / sensitive values — Rodolfo enters the real value in
       # Render's dashboard after the Blueprint creates the service.
       - key: APP_USERNAME
