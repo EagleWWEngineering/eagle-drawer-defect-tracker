@@ -78,26 +78,12 @@ class Settings:
         self.default_cost_per_drawer: decimal.Decimal = decimal.Decimal(
             os.getenv("DEFAULT_COST_PER_DRAWER", "35.00")
         )
-        # Label-scan OCR (PROJECT_SPEC_PHASE9.md Part 3). Deliberately ships LIVE
-        # by default, unlike every other optional feature in this app: the default
-        # engine (OCR_PROVIDER="tesseract") runs entirely in the browser, costs
-        # nothing, sends no data anywhere, and needs no credential - there is
-        # nothing to ship dormant, because there is nothing that can incur a bill
-        # or fail on a missing key. Only the cloud providers (azure/google/
-        # anthropic) need OCR_API_KEY - see app/routers/scan.py, which still 503s
-        # for those if a key isn't configured. OCR_ENABLED=false remains a full
-        # kill switch (QR decoding and manual entry keep working regardless).
-        self.ocr_enabled: bool = _env_bool("OCR_ENABLED", True)
-        self.ocr_provider: str = os.getenv("OCR_PROVIDER", "tesseract")
-        self.ocr_endpoint: str = os.getenv("OCR_ENDPOINT", "")
-        self.ocr_api_key: str = os.getenv("OCR_API_KEY", "")
-        # Phase 3 (favorites quick-pick bars). Unlike OCR_ENABLED above, this
-        # defaults FALSE: favorites visibly changes the New Defect form's layout
-        # (a new bar above Found Station / Possible Source / the category grid),
-        # where OCR_ENABLED's default-on engine runs invisibly in the background
-        # with no UI of its own. Ships dormant so a deploy alone never changes
-        # what the shop floor sees - it's a deliberate opt-in via this env var
-        # once Admin has actually favorited something, not an instant-on feature.
+        # Phase 3 (favorites quick-pick bars). Defaults FALSE: favorites visibly
+        # changes the New Defect form's layout (a new bar above Found Station /
+        # Possible Source / the category grid). Ships dormant so a deploy alone
+        # never changes what the shop floor sees - it's a deliberate opt-in via
+        # this env var once Admin has actually favorited something, not an
+        # instant-on feature.
         self.favorites_enabled: bool = _env_bool("FAVORITES_ENABLED", False)
 
     @property

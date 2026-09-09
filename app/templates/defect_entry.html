@@ -14,30 +14,20 @@
       <input type="text" id="work_order_number" name="work_order_number" required autocomplete="off" list="recent-work-orders" style="flex:1;">
       <button type="button" id="scan-label-btn" class="secondary">📷 Scan label</button>
     </div>
+    <p class="hint">Scans the QR code on the label to fill this field.</p>
     <datalist id="recent-work-orders"></datalist>
   </div>
 
   <div class="field">
     <label for="line_label">Line <span class="hint">(optional — work order line, e.g. E)</span></label>
     <input type="text" id="line_label" name="line_label" maxlength="2" style="text-transform:uppercase; max-width:6ch;">
-    <div id="line-label-alternates" style="display:none; margin-top:0.4rem;"></div>
-    <p id="scan-status-hint" class="hint" style="display:none;"></p>
-    <!-- Letter picker (PROJECT_SPEC_PHASE9.md hotfix 4, Fix 5) - shown
-         whenever OCR does not produce a confident result. Required, not a
-         nice-to-have: this is what keeps a failed scan from being a dead
-         end. See defect_entry.html's script block for the show/hide logic. -->
-    <div id="line-label-picker" style="display:none; margin-top:0.5rem;">
-      <div id="line-label-picker-singles" class="letter-picker-grid" role="group" aria-label="Line letter picker"></div>
-      <button type="button" id="line-label-picker-two-letter-toggle" class="secondary" style="margin-top:0.4rem;">Two-letter line (AA–ZZ)…</button>
-      <div id="line-label-picker-two-letter" style="display:none; margin-top:0.4rem;">
-        <p class="hint" style="margin-bottom:0.2rem;">First letter:</p>
-        <div id="line-label-picker-first" class="letter-picker-grid" role="group" aria-label="First letter"></div>
-        <div id="line-label-picker-second-wrap" style="display:none; margin-top:0.4rem;">
-          <p class="hint" style="margin-bottom:0.2rem;">Second letter:</p>
-          <div id="line-label-picker-second" class="letter-picker-grid" role="group" aria-label="Second letter"></div>
-        </div>
-      </div>
-    </div>
+    <p class="hint">Tap the work order line, or type it.</p>
+    <!-- Permanent letter picker (PROJECT_SPEC_PHASE9.md Part 2) - always
+         visible, independent of scanning. Tapping a letter fills the Line
+         input; tapping the selected letter again clears it. Typing stays in
+         sync (see syncLineLabelPickerHighlight below) - this is also how the
+         rare two-letter labels (AA-ZZ) are entered, by typing. -->
+    <div id="line-label-picker" class="letter-picker-grid" role="group" aria-label="Line letter picker"></div>
   </div>
 
   <div class="filters">
@@ -155,23 +145,15 @@
       <p id="label-scan-status" class="hint">Point the camera at the QR code on the label.</p>
       <video id="label-scan-video" playsinline muted style="width:100%; max-width:480px; background:#000;"></video>
       <canvas id="label-scan-canvas" style="display:none;"></canvas>
-      <!-- Debug mode (?scandebug=1) - PROJECT_SPEC_PHASE9.md hotfix 2. Off for
-           operators, no rebuild needed to turn on. Kept permanently: the crop
-           geometry will need retuning whenever the label changes. Populated by
-           renderDebugFrame() below. -->
-      <div id="label-scan-debug" style="display:none; margin-top:1rem; border-top:1px solid var(--color-border, #ccc); padding-top:0.75rem;"></div>
     </div>
   </div>
 </div>
 {% endblock %}
 
 {% block extra_scripts %}
-<!-- Vendored - never a CDN (app/static/js/vendor/README is implicit in the file
-     headers themselves). jsQR is the QR fallback for browsers with no native
-     BarcodeDetector (iOS Safari); Tesseract.js is the default OCR engine and
-     runs entirely in this tab - see app/static/js/label-scan.js. -->
+<!-- Vendored - never a CDN. jsQR is the QR fallback for browsers with no
+     native BarcodeDetector (iOS Safari) - see app/static/js/label-scan.js. -->
 <script src="/static/js/vendor/jsqr.js?v={{ static_version('js/vendor/jsqr.js') }}"></script>
-<script src="/static/js/vendor/tesseract.min.js?v={{ static_version('js/vendor/tesseract.min.js') }}"></script>
 <script src="/static/js/label-scan.js?v={{ static_version('js/label-scan.js') }}"></script>
 <script>
 // Real seeded station names (app/seed_data.py) that best match the common QC
@@ -221,17 +203,13 @@ let qty = 1;
 let leaveOpen = false;
 let selectedRepairPreset = null;
 let selectedInstantCloseOutcome = DEFAULT_INSTANT_CLOSE_OUTCOME;
-// PROJECT_SPEC_PHASE9.md hotfix 4, Fix 5: entry_source tracks the LINE field
-// SPECIFICALLY (not the whole case/order number) - "manual" when the letter
-// came from a tap (keyboard OR the letter picker), "scanned" when OCR
-// supplied it, "scanned_edited" when OCR supplied it and the operator then
-// changed it (typing, or tapping an alternate/picker letter afterward).
-// Starts "manual" and only ever moves to "scanned" from a successful OCR
-// read - so a case where the operator never used the scanner, or where OCR
-// found nothing and the operator typed/tapped the letter themselves, is
-// correctly "manual" either way. See collectPayload() and
-// resetFormForNextEntry() below.
-let lineEntrySource = "manual";
+// entry_source tracks the Line field's own provenance. Now that OCR has been
+// removed (PROJECT_SPEC_PHASE9.md Part 9), the line is always typed or tapped
+// from the letter picker - there is no other way to fill it - so this is
+// always "manual". The column stays (existing rows may still carry the
+// retired "scanned"/"scanned_edited" values from when OCR existed) - see
+// collectPayload() below.
+const LINE_ENTRY_SOURCE = "manual";
 let scanController = null;
 
 function dispositionSupportsInstantClose(disposition) {
@@ -466,94 +444,50 @@ function wireStationGroup(commonId, allId, moreBtnId, onSelect) {
 }
 
 // ---------------------------------------------------------------------------
-// "Scan label" (PROJECT_SPEC_PHASE9.md Part 3) - see app/static/js/label-scan.js.
-// Scanning only ever fills fields; it never submits the form, and every field
-// it touches stays fully editable afterward (this whole app's manual-entry
-// path keeps working unchanged if the camera fails or OCR is disabled).
-// ---------------------------------------------------------------------------
-
-/** A scanned/tapped value can still be corrected by hand afterward - this is
- * what turns that correction into "scanned_edited" rather than leaving it
- * looking like a clean OCR read (PROJECT_SPEC_PHASE9.md hotfix 4, Fix 5). A
- * no-op unless the line is currently marked "scanned". */
-function markLineEdited() {
-  if (lineEntrySource === "scanned") lineEntrySource = "scanned_edited";
-}
-
-function applyLineLabelResult(result) {
-  const input = document.getElementById("line_label");
-  const altContainer = document.getElementById("line-label-alternates");
-  const hint = document.getElementById("scan-status-hint");
-
-  if (result.line_label) {
-    input.value = result.line_label;
-    lineEntrySource = "scanned";
-    hint.style.display = "none";
-  } else if (result.line_label_discarded) {
-    hint.textContent =
-      "The scanned order number didn't match this label's QR code, so the line read was " +
-      "discarded. Enter the line manually, or tap a letter below.";
-    hint.style.display = "block";
-  } else {
-    hint.textContent = "Couldn't read the line label automatically. Enter it manually, or tap a letter below.";
-    hint.style.display = "block";
-  }
-
-  const alternates = result.line_label_alternates || [];
-  if (alternates.length) {
-    altContainer.style.display = "block";
-    altContainer.innerHTML =
-      `<span class="hint">Not quite right?</span> ` +
-      alternates
-        .map(
-          (alt) =>
-            `<button type="button" class="secondary line-label-alt-btn" data-value="${escapeHtml(alt)}" style="padding:0.1rem 0.5rem; margin-left:0.3rem;">${escapeHtml(alt)}</button>`
-        )
-        .join("");
-  } else {
-    altContainer.style.display = "none";
-    altContainer.innerHTML = "";
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Letter picker (PROJECT_SPEC_PHASE9.md hotfix 4, Fix 5 - required, not
-// optional): whenever OCR does not produce a confident result, the operator
-// has the label in hand and can read one character - a tap is always
-// correct. Shown once the scan session concludes (see onScanComplete below)
-// if the Line field is STILL empty at that point, whatever the reason
-// (nothing confident found, OCR disabled, camera/QR failure, ...) - one
-// check, every failure mode covered, never a dead end.
+// Line letter picker (PROJECT_SPEC_PHASE9.md Part 2) - a permanent part of
+// the New Defect form, independent of scanning: A-Z buttons directly under
+// the Line input. Tapping a letter fills the input; tapping the currently
+// selected letter again clears it. Typing and tapping stay in sync -
+// syncLineLabelPickerHighlight() highlights whichever button matches the
+// input's current value (none, for a two-letter value like "AB" - those are
+// only ever typed).
 // ---------------------------------------------------------------------------
 
 const LINE_LABEL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
-let pickedFirstLetter = null;
 
-function renderLetterButtons(containerId) {
-  document.getElementById(containerId).innerHTML = LINE_LABEL_ALPHABET.map(
+function renderLineLabelPicker() {
+  document.getElementById("line-label-picker").innerHTML = LINE_LABEL_ALPHABET.map(
     (letter) => `<button type="button" class="letter-picker-btn" data-letter="${letter}">${letter}</button>`
   ).join("");
 }
 
-function applyPickedLetter(letter) {
-  document.getElementById("line_label").value = letter;
-  // A tap is always manual entry - never "scanned", even though OCR may
-  // have already run (and failed) in this same session (PROJECT_SPEC_PHASE9.md
-  // hotfix 4, Fix 5).
-  lineEntrySource = "manual";
-  hideLineLabelPicker();
+function syncLineLabelPickerHighlight() {
+  const value = document.getElementById("line_label").value.trim().toUpperCase();
+  document.querySelectorAll("#line-label-picker .letter-picker-btn").forEach((btn) => {
+    const isSelected = btn.dataset.letter === value;
+    btn.classList.toggle("selected", isSelected);
+    btn.setAttribute("aria-pressed", String(isSelected));
+  });
 }
 
-function showLineLabelPicker() {
-  document.getElementById("line-label-picker").style.display = "block";
-  document.getElementById("line-label-picker-two-letter").style.display = "none";
-  document.getElementById("line-label-picker-second-wrap").style.display = "none";
-  pickedFirstLetter = null;
+function handleLineLabelPickerClick(e) {
+  const btn = e.target.closest(".letter-picker-btn");
+  if (!btn) return;
+  const input = document.getElementById("line_label");
+  const letter = btn.dataset.letter;
+  // Tapping the already-selected letter clears it - a mistaken tap is one
+  // tap to undo.
+  input.value = input.value.trim().toUpperCase() === letter ? "" : letter;
+  syncLineLabelPickerHighlight();
 }
 
-function hideLineLabelPicker() {
-  document.getElementById("line-label-picker").style.display = "none";
-}
+// ---------------------------------------------------------------------------
+// "Scan label" (PROJECT_SPEC_PHASE9.md Part 3) - see app/static/js/label-scan.js.
+// Fills the work order number from the label's QR code only - nothing else.
+// Scanning only ever fills that field; it never submits the form, and it
+// stays fully editable afterward (manual entry keeps working unchanged if
+// the camera fails).
+// ---------------------------------------------------------------------------
 
 /** Plain-language messages inside the modal - error/unavailable states get the
  * same red ".field-error" styling used for form validation errors elsewhere in
@@ -566,179 +500,15 @@ function setScanStatus(text, isError) {
   statusEl.classList.toggle("field-error", Boolean(isError));
 }
 
-// PROJECT_SPEC_PHASE9.md hotfix 2, Step 5: close the scanner automatically
-// once the scan is complete (QR decoded + the OCR attempt has resolved,
-// success or failure), after a short pause so the operator can actually read
-// what was captured. Never fires in debug mode - that would hide the debug
-// output the fix depends on.
+// Close the scanner automatically once the QR resolves, after a short pause
+// so the operator can actually read what was captured.
 const SCAN_AUTO_CLOSE_DELAY_MS = 1200;
 
 function scheduleAutoClose() {
   setTimeout(() => {
     if (!scanController) return; // operator already closed it manually in the meantime
     closeScanModal();
-    focusFirstEmptyScannedField();
   }, SCAN_AUTO_CLOSE_DELAY_MS);
-}
-
-/** After auto-close, put the cursor where typing is actually needed - the
- * Line field when the scanner could not read it. Work order number is
- * QR-filled or nothing to add here either way. */
-function focusFirstEmptyScannedField() {
-  const line = document.getElementById("line_label");
-  if (!line.value) line.focus();
-}
-
-function describeCaptureMessage(result) {
-  const orderNumber = document.getElementById("work_order_number").value;
-  const parts = [];
-  if (orderNumber) parts.push(`Order ${orderNumber}`);
-  if (result.line_label) parts.push(`line ${result.line_label}`);
-  if (result.dimensions) {
-    const d = result.dimensions;
-    parts.push(`${d.height} x ${d.width} x ${d.depth}`);
-  }
-  const summary = parts.length ? parts.join(", ") + "." : "Scan complete.";
-  return result.line_label ? summary : summary + " Line couldn't be read — type it in.";
-}
-
-/** ?scandebug=1 (PROJECT_SPEC_PHASE9.md hotfix 2, extended by hotfix 3) - shows
- * exactly what the recogniser was handed for this scan attempt: the
- * whole-label region actually recognised (no longer a tight corner crop -
- * see label-scan.js HOTFIX 3) with every word it found and their positions,
- * the dimension crop (unchanged), the detected label boundary (or that the
- * QR-extrapolated fallback ran instead), the normalised flat label image when
- * boundary detection succeeded, the ranked line-label candidate list the
- * server computed (app/services/ocr_service.py parse_line_label - never
- * recomputed here), and the server's full parsed/validated result. Kept in
- * the codebase permanently - the crop geometry will need retuning whenever
- * the label changes. */
-function renderDebugFrame(info) {
-  const panel = document.getElementById("label-scan-debug");
-  panel.style.display = "block";
-  panel.innerHTML = "";
-
-  function row(labelText, valueHtml) {
-    const p = document.createElement("p");
-    p.innerHTML = `<strong>${escapeHtml(labelText)}:</strong> ${valueHtml}`;
-    panel.appendChild(p);
-  }
-
-  row("Detection method", escapeHtml(info.method));
-  row(
-    "QR corners (px)",
-    escapeHtml(JSON.stringify(info.qrCorners.map((c) => [Math.round(c.x), Math.round(c.y)])))
-  );
-  row(
-    "Label boundary",
-    info.boundary
-      ? escapeHtml(
-          JSON.stringify({
-            left: Math.round(info.boundary.distNegU),
-            right: Math.round(info.boundary.distPosU),
-            top: Math.round(info.boundary.distNegV),
-            bottom: Math.round(info.boundary.distPosV),
-          })
-        ) + " (px from QR center)"
-      : "not found — used the QR-extrapolated fallback"
-  );
-
-  if (info.normalizedCanvas) {
-    const label = document.createElement("p");
-    label.innerHTML = "<strong>Normalised flat label:</strong>";
-    panel.appendChild(label);
-    info.normalizedCanvas.style.maxWidth = "100%";
-    info.normalizedCanvas.style.border = "1px solid var(--color-border, #ccc)";
-    panel.appendChild(info.normalizedCanvas);
-  }
-
-  function cropBlock(title, cropCanvas, rect, text, confidence, widthPx) {
-    const wrap = document.createElement("div");
-    wrap.style.minWidth = `${widthPx}px`;
-    const h = document.createElement("p");
-    h.innerHTML = `<strong>${escapeHtml(title)}</strong>`;
-    wrap.appendChild(h);
-    cropCanvas.style.imageRendering = "pixelated";
-    cropCanvas.style.width = `${widthPx}px`;
-    cropCanvas.style.height = "auto";
-    cropCanvas.style.border = "1px solid var(--color-border, #ccc)";
-    wrap.appendChild(cropCanvas);
-    const rectP = document.createElement("p");
-    rectP.className = "hint";
-    rectP.textContent = `rect: x=${Math.round(rect.x)}, y=${Math.round(rect.y)}, w=${Math.round(rect.width)}, h=${Math.round(rect.height)}`;
-    wrap.appendChild(rectP);
-    const textP = document.createElement("p");
-    textP.textContent = `raw text: ${text ? JSON.stringify(text) : "(empty)"}`;
-    wrap.appendChild(textP);
-    const confP = document.createElement("p");
-    confP.className = "hint";
-    confP.textContent = `confidence: ${confidence === null || confidence === undefined ? "n/a" : confidence}`;
-    wrap.appendChild(confP);
-    return wrap;
-  }
-
-  const cropsWrap = document.createElement("div");
-  cropsWrap.style.display = "flex";
-  cropsWrap.style.gap = "1rem";
-  cropsWrap.style.flexWrap = "wrap";
-  cropsWrap.style.marginTop = "0.5rem";
-  cropsWrap.appendChild(
-    cropBlock(
-      "Whole-label region (line label read from here - no more corner crop)",
-      info.fullLabelCropCanvas,
-      info.fullLabelRect,
-      info.fullLabelText,
-      info.fullLabelConfidence,
-      400
-    )
-  );
-  cropsWrap.appendChild(
-    cropBlock("Dimension crop", info.dimensionCropCanvas, info.dimensionRect, info.dimensionText, info.dimensionConfidence, 200)
-  );
-  panel.appendChild(cropsWrap);
-
-  // Every word Tesseract found in the whole-label pass, with its position -
-  // "a picture of exactly what the recogniser was handed" extends to the raw
-  // word list too, not just the crop image.
-  const wordsHeading = document.createElement("p");
-  wordsHeading.innerHTML = "<strong>Recognised words (whole-label pass):</strong>";
-  panel.appendChild(wordsHeading);
-  const wordsList = document.createElement("ul");
-  wordsList.innerHTML =
-    (info.words || [])
-      .map((w) => `<li>${escapeHtml(JSON.stringify(w.text))} — x=${Math.round(w.x)}, y=${Math.round(w.y)}</li>`)
-      .join("") || "<li>(none)</li>";
-  panel.appendChild(wordsList);
-
-  // The candidate ranking is computed entirely server-side
-  // (app/services/ocr_service.py parse_line_label) - shown here, not
-  // recomputed, so the debug view can never drift from the real decision.
-  const candidates = (info.parseResult && info.parseResult.line_label_candidates) || [];
-  const candidatesHeading = document.createElement("p");
-  candidatesHeading.innerHTML =
-    "<strong>Line-label candidates, ranked furthest-from-QR first (server-computed):</strong>";
-  panel.appendChild(candidatesHeading);
-  const candidatesList = document.createElement("ol");
-  candidatesList.innerHTML =
-    candidates
-      .map(
-        (c, i) =>
-          `<li>${escapeHtml(c.text)} — distance=${Math.round(c.distance)}px${i === 0 ? " ← winner" : ""}</li>`
-      )
-      .join("") || "<li>(none found)</li>";
-  panel.appendChild(candidatesList);
-
-  row(
-    "Winner / alternates",
-    escapeHtml(
-      JSON.stringify({
-        line_label: info.parseResult.line_label,
-        alternates: info.parseResult.line_label_alternates,
-        discarded: info.parseResult.line_label_discarded,
-      })
-    )
-  );
-  row("Parsed result (full)", escapeHtml(JSON.stringify(info.parseResult)));
 }
 
 function openScanModal() {
@@ -747,9 +517,6 @@ function openScanModal() {
   const video = document.getElementById("label-scan-video");
   const canvas = document.getElementById("label-scan-canvas");
   setScanStatus("Point the camera at the QR code on the label.", false);
-  const debugPanel = document.getElementById("label-scan-debug");
-  debugPanel.style.display = "none";
-  debugPanel.innerHTML = "";
 
   // startScan() returns its {stop} controller SYNCHRONOUSLY (see
   // app/static/js/label-scan.js) - it is fully usable the instant this line
@@ -759,44 +526,21 @@ function openScanModal() {
   scanController = window.LabelScan.startScan(video, canvas, {
     onOrderNumber: (orderNumber) => {
       document.getElementById("work_order_number").value = orderNumber;
-      setScanStatus("Order number found — reading the line label...", false);
-    },
-    onPreparingScanner: () => {
-      setScanStatus("Preparing the scanner (this can take a moment)...", false);
-    },
-    onLineLabelResult: (result) => {
-      applyLineLabelResult(result);
-      setScanStatus(describeCaptureMessage(result), !result.line_label);
-    },
-    onOcrUnavailable: (message) => {
-      setScanStatus(message, true);
+      setScanStatus(`Order ${orderNumber} found.`, false);
     },
     onError: (message) => {
       setScanStatus(message, true);
     },
     onScanComplete: () => {
-      // Whatever the reason - nothing confident found, OCR disabled, a
-      // camera/QR failure - if the Line field is still empty once the scan
-      // session concludes, hand the operator a picker instead of a dead end
-      // (PROJECT_SPEC_PHASE9.md hotfix 4, Fix 5 - required, not optional).
-      if (!document.getElementById("line_label").value) {
-        showLineLabelPicker();
-      }
-      // Debug mode never auto-closes - that would hide the very output it
-      // exists to show (PROJECT_SPEC_PHASE9.md hotfix 2, Step 5).
-      if (window.LabelScan.isDebugEnabled()) return;
       scheduleAutoClose();
-    },
-    onDebugFrame: (info) => {
-      renderDebugFrame(info);
     },
   });
 }
 
-/** Closing must never depend on anything else succeeding
- * (PROJECT_SPEC_PHASE9.md hotfix) - every step below is independent and
- * individually guarded so one failing step can never block the others. Safe
- * to call more than once (e.g. Escape after the X was already clicked). */
+/** Closing must never depend on anything else succeeding - every step below
+ * is independent and individually guarded so one failing step can never
+ * block the others. Safe to call more than once (e.g. Escape after the X was
+ * already clicked). */
 function closeScanModal() {
   try {
     if (scanController) scanController.stop();
@@ -826,7 +570,7 @@ function collectPayload() {
     detected_at: buildDetectedAtIso(),
     work_order_number: document.getElementById("work_order_number").value,
     line_label: document.getElementById("line_label").value || null,
-    entry_source: lineEntrySource,
+    entry_source: LINE_ENTRY_SOURCE,
     drawer_part_reference: document.getElementById("drawer_part_reference").value || null,
     found_station_id: selectedFoundStationId,
     possible_source_station_id: selectedSourceStationId,
@@ -909,12 +653,8 @@ function resetFormForNextEntry() {
   selectedRepairPreset = null;
   selectedInstantCloseOutcome = DEFAULT_INSTANT_CLOSE_OUTCOME;
   qty = 1;
-  lineEntrySource = "manual";
   document.getElementById("line_label").value = "";
-  document.getElementById("line-label-alternates").style.display = "none";
-  document.getElementById("line-label-alternates").innerHTML = "";
-  document.getElementById("scan-status-hint").style.display = "none";
-  hideLineLabelPicker();
+  syncLineLabelPickerHighlight();
   document.getElementById("drawer_part_reference").value = "";
   document.getElementById("notes").value = "";
   document.getElementById("repair-preset-other-text").value = "";
@@ -1038,40 +778,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   document.getElementById("work_order_number").addEventListener("blur", maybePrefillStationFromWorkOrder);
-  document.getElementById("line_label").addEventListener("input", markLineEdited);
 
-  document.getElementById("line-label-alternates").addEventListener("click", (e) => {
-    const btn = e.target.closest(".line-label-alt-btn");
-    if (!btn) return;
-    document.getElementById("line_label").value = btn.dataset.value;
-    markLineEdited(); // tapping an alternate is a correction, same as typing one
-  });
-
-  // Letter picker (PROJECT_SPEC_PHASE9.md hotfix 4, Fix 5).
-  renderLetterButtons("line-label-picker-singles");
-  document.getElementById("line-label-picker-singles").addEventListener("click", (e) => {
-    const btn = e.target.closest(".letter-picker-btn");
-    if (!btn) return;
-    applyPickedLetter(btn.dataset.letter);
-  });
-  document.getElementById("line-label-picker-two-letter-toggle").addEventListener("click", () => {
-    const panel = document.getElementById("line-label-picker-two-letter");
-    const showing = panel.style.display !== "none";
-    panel.style.display = showing ? "none" : "block";
-    if (!showing) renderLetterButtons("line-label-picker-first");
-  });
-  document.getElementById("line-label-picker-first").addEventListener("click", (e) => {
-    const btn = e.target.closest(".letter-picker-btn");
-    if (!btn) return;
-    pickedFirstLetter = btn.dataset.letter;
-    document.getElementById("line-label-picker-second-wrap").style.display = "block";
-    renderLetterButtons("line-label-picker-second");
-  });
-  document.getElementById("line-label-picker-second").addEventListener("click", (e) => {
-    const btn = e.target.closest(".letter-picker-btn");
-    if (!btn || !pickedFirstLetter) return;
-    applyPickedLetter(pickedFirstLetter + btn.dataset.letter);
-  });
+  // Permanent line letter picker (PROJECT_SPEC_PHASE9.md Part 2) - typing and
+  // tapping stay in sync.
+  renderLineLabelPicker();
+  document.getElementById("line-label-picker").addEventListener("click", handleLineLabelPickerClick);
+  document.getElementById("line_label").addEventListener("input", syncLineLabelPickerHighlight);
 
   // "Scan label" (PROJECT_SPEC_PHASE9.md Part 3): hidden outright on a browser
   // with no camera API at all, rather than opening a modal that can only fail -
