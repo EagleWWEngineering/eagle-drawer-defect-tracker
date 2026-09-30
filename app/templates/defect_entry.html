@@ -77,8 +77,9 @@
 
   <div class="field">
     <label>Disposition <span class="hint">(most defects get reworked — that's why Rework is picked for you)</span></label>
-    <div id="disposition-primary"></div>
-    <div id="disposition-secondary" class="button-grid button-grid-2" role="group" aria-label="Other disposition" style="margin-top:0.4rem;"></div>
+    <!-- Rework and Set Aside side by side, same size - Rework is still
+         pre-selected, so the default is still zero taps. -->
+    <div id="disposition-buttons" class="disposition-grid" role="group" aria-label="Disposition"></div>
   </div>
 
   <div class="field" id="repair-preset-field" style="display:none;">
@@ -119,14 +120,20 @@
     <textarea id="notes" name="notes"></textarea>
   </div>
 
-  <div class="btn-row">
-    <button type="submit" id="save-btn">Save defect</button>
+  <!-- "Save with photo" opens the camera straight from the tap (a phone only
+       allows the camera to open during the tap itself), then saves the case
+       and uploads the photo in one go once the picture is taken. Cancelling
+       the camera saves nothing. "Save without photo" is the old Save. -->
+  <div class="save-actions">
+    <button type="button" id="save-with-photo-btn" class="save-with-photo-btn">📷 Save with photo</button>
+    <button type="submit" id="save-btn" class="secondary">Save without photo</button>
   </div>
+  <input type="file" id="save-photo-input" accept="image/jpeg,image/png,image/webp" capture="environment" style="display:none;" aria-hidden="true" tabindex="-1">
 </form>
 
 <section id="session-log-section" class="card" style="display:none;">
   <h2>Logged this session</h2>
-  <p class="hint">Attach an optional photo to any entry below without leaving this screen.</p>
+  <p class="hint">Attach another photo to any entry below without leaving this screen.</p>
   <div class="table-scroll">
     <table id="session-log-table">
       <thead><tr><th>Case</th><th>Time</th><th>Categories</th><th>Photo</th></tr></thead>
@@ -278,19 +285,11 @@ function dispositionButtonHtml(value, extraClass) {
 }
 
 function renderDispositionButtons() {
-  // Primary: Rework, big and pre-selected.
-  document.getElementById("disposition-primary").innerHTML = dispositionButtonHtml(
-    DISPOSITION_PRIMARY,
-    "tap-btn-primary"
-  );
-
-  // Secondary: Set Aside - same size as every other tap button, just not
-  // competing visually with the primary Rework button above. Only two
-  // dispositions exist now (PROJECT_SPEC_PHASE7.md), so no "more options"
-  // disclosure is needed at all anymore.
-  document.getElementById("disposition-secondary").innerHTML = dispositionButtonHtml(
-    DISPOSITION_SECONDARY
-  );
+  // Rework (pre-selected default) and Set Aside, equal size side by side -
+  // only two dispositions exist (PROJECT_SPEC_PHASE7.md).
+  document.getElementById("disposition-buttons").innerHTML =
+    dispositionButtonHtml(DISPOSITION_PRIMARY, "tap-btn-disposition") +
+    dispositionButtonHtml(DISPOSITION_SECONDARY, "tap-btn-disposition");
 }
 
 function renderResolutionFields() {
@@ -718,7 +717,7 @@ function showSaveFlash(text) {
   }, 2000);
 }
 
-function addSessionLogRow(created) {
+function addSessionLogRow(created, hasPhoto) {
   document.getElementById("session-log-section").style.display = "block";
   const tbody = document.querySelector("#session-log-table tbody");
   const rowId = `log-${created.id}`;
@@ -729,6 +728,7 @@ function addSessionLogRow(created) {
       <td>${escapeHtml(created.detected_at_local || "")}</td>
       <td>${created.items.map((i) => escapeHtml(i.defect_category_name)).join(", ")}</td>
       <td>
+        ${hasPhoto ? `<span class="hint">📷 attached</span><br>` : ""}
         <input type="file" class="session-photo-input" id="${rowId}-file" accept="image/jpeg,image/png,image/webp">
         <button type="button" class="secondary session-photo-btn" data-case-id="${created.id}" data-file-id="${rowId}-file">Attach</button>
       </td>
@@ -822,8 +822,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     renderDispositionButtons();
     renderResolutionFields();
   }
-  document.getElementById("disposition-primary").addEventListener("click", handleDispositionClick);
-  document.getElementById("disposition-secondary").addEventListener("click", handleDispositionClick);
+  document.getElementById("disposition-buttons").addEventListener("click", handleDispositionClick);
 
   document.getElementById("leave-open-checkbox").addEventListener("change", (e) => {
     leaveOpen = e.target.checked;
@@ -929,35 +928,81 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   const form = document.getElementById("defect-form");
   const saveBtn = document.getElementById("save-btn");
-  form.addEventListener(
-    "submit",
-    guardDoubleSubmit(saveBtn, async (e) => {
-      e.preventDefault();
-      clearFormErrors(form);
-      if (!validateBeforeSubmit(form)) return;
-      try {
-        const payload = collectPayload();
-        const created = await Api.createDefectCase(payload);
-        showSaveFlash(
-          created.resolved_on_the_spot
-            ? `Resolved on the spot — ${created.case_number} closed.`
-            : `Saved: ${created.case_number}`
-        );
-        addSessionLogRow(created);
-        if (!recentWorkOrders.includes(created.work_order_number)) {
-          recentWorkOrders.unshift(created.work_order_number);
-          loadRecentWorkOrdersIntoDatalist();
-        }
-        resetFormForNextEntry();
-      } catch (err) {
-        if (err instanceof ApiError && err.field) {
-          showFieldError(form, err.field, err.message);
-        } else {
-          showToast(err.message, "error");
+  const saveWithPhotoBtn = document.getElementById("save-with-photo-btn");
+  const savePhotoInput = document.getElementById("save-photo-input");
+  let saving = false;
+
+  /** Create the case, then (optionally) upload its photo. The case is saved
+   * first so a failed photo upload never loses the defect itself - the
+   * operator can retry the photo from the session log's Attach button. */
+  async function saveCase(photoFile) {
+    if (saving) return;
+    saving = true;
+    saveBtn.disabled = true;
+    saveWithPhotoBtn.disabled = true;
+    try {
+      const created = await Api.createDefectCase(collectPayload());
+      let photoNote = "";
+      if (photoFile) {
+        try {
+          await Api.uploadPhoto(created.id, photoFile);
+          photoNote = " (with photo)";
+        } catch (err) {
+          showToast(
+            `${created.case_number} saved, but the photo didn't upload (${err.message}). Use Attach below to try again.`,
+            "error"
+          );
         }
       }
-    })
-  );
+      showSaveFlash(
+        (created.resolved_on_the_spot
+          ? `Resolved on the spot — ${created.case_number} closed.`
+          : `Saved: ${created.case_number}`) + photoNote
+      );
+      addSessionLogRow(created, Boolean(photoNote));
+      if (!recentWorkOrders.includes(created.work_order_number)) {
+        recentWorkOrders.unshift(created.work_order_number);
+        loadRecentWorkOrdersIntoDatalist();
+      }
+      resetFormForNextEntry();
+    } catch (err) {
+      if (err instanceof ApiError && err.field) {
+        showFieldError(form, err.field, err.message);
+      } else {
+        showToast(err.message, "error");
+      }
+    } finally {
+      saving = false;
+      saveBtn.disabled = false;
+      saveWithPhotoBtn.disabled = false;
+    }
+  }
+
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    clearFormErrors(form);
+    if (!validateBeforeSubmit(form)) return;
+    saveCase(null);
+  });
+
+  // Validate BEFORE opening the camera - nobody should take a photo only to
+  // be told a category is missing. input.click() must run synchronously in
+  // this tap handler or phones refuse to open the camera.
+  saveWithPhotoBtn.addEventListener("click", () => {
+    if (saving) return;
+    clearFormErrors(form);
+    if (!validateBeforeSubmit(form)) return;
+    savePhotoInput.value = "";
+    savePhotoInput.click();
+  });
+
+  // Fires only when a photo was actually taken/chosen - cancelling the camera
+  // fires nothing, so nothing is saved and the form stays as it was.
+  savePhotoInput.addEventListener("change", () => {
+    const file = savePhotoInput.files[0];
+    if (!file) return;
+    saveCase(file);
+  });
 });
 </script>
 {% endblock %}

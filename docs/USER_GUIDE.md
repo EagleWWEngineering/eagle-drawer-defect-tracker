@@ -48,8 +48,14 @@ shared login can reach any screen.
    - Root cause, corrective action, and repair action are **not** on this form —
      fill those in later from the **Rework Queue**, once there's actually
      something to say about them.
-   - A photo is optional; attach it from the "Logged this session" list below the
-     form after saving, without leaving this screen.
+   - To save with a photo, tap **📷 Save with photo**: the camera opens right
+     away, and as soon as you take the picture the defect and photo are saved
+     together (cancel the camera and nothing is saved). Photos are shrunk on the
+     phone before uploading, so it's quick. **Save without photo** saves as
+     before. To add another photo later, use **Attach** in the "Logged this
+     session" list below the form.
+   - Disposition: **Rework** (pre-selected) and **Set Aside** are the two
+     same-size buttons.
 3. After saving you'll see a brief green "Saved: DF-20260724-0001" confirmation.
    The form stays put with the work order number and production date kept (so the
    next entry on the same order/day is a single tap away) and everything else

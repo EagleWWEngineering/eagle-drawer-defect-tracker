@@ -37,6 +37,45 @@ function buildQueryString(params) {
   return qs ? `?${qs}` : "";
 }
 
+// Phone photos are 3-12 MB; a defect only needs to be clearly visible. Every
+// upload is re-encoded to a JPEG no larger than this on its longest side
+// (~200-400 KB) before it leaves the phone - faster on shop Wi-Fi and far
+// lighter on the Render disk.
+const PHOTO_MAX_DIMENSION = 1600;
+const PHOTO_JPEG_QUALITY = 0.82;
+
+/** Returns a shrunk JPEG File, or the original file unchanged if the browser
+ * can't decode/re-encode it (the server's own type/size checks still apply).
+ * Drawing through an <img> applies the photo's EXIF orientation in every
+ * modern browser, so portrait shots stay upright. */
+async function shrinkPhotoForUpload(file) {
+  if (!file || !file.type || !file.type.startsWith("image/")) return file;
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error("could not decode image"));
+      el.src = url;
+    });
+    const scale = Math.min(1, PHOTO_MAX_DIMENSION / Math.max(img.naturalWidth, img.naturalHeight));
+    if (scale === 1 && file.type === "image/jpeg" && file.size <= 600 * 1024) return file;
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(img.naturalWidth * scale);
+    canvas.height = Math.round(img.naturalHeight * scale);
+    canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", PHOTO_JPEG_QUALITY));
+    if (!blob) return file;
+    const baseName = (file.name || "photo").replace(/\.[^.]+$/, "");
+    return new File([blob], `${baseName}.jpg`, { type: "image/jpeg" });
+  } catch (err) {
+    console.error("[api] photo shrink failed - uploading the original", err);
+    return file;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 async function request(method, path, { params, body, isForm } = {}) {
   const url = path + buildQueryString(params);
   const headers = { "X-Actor-Role": getActorRole() };
@@ -87,7 +126,7 @@ const Api = {
 
   uploadPhoto: async (caseId, file) => {
     const formData = new FormData();
-    formData.append("file", file);
+    formData.append("file", await shrinkPhotoForUpload(file));
     return request("POST", `/api/v1/defect-cases/${caseId}/photos`, {
       body: formData,
       isForm: true,

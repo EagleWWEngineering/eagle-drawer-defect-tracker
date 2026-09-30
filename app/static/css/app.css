@@ -306,6 +306,39 @@ button.danger, .btn.danger {
 .tap-btn.priority-urgent.selected { background: var(--priority-urgent); border-color: var(--priority-urgent); }
 .tap-btn.priority-high.selected { background: var(--priority-high); border-color: var(--priority-high); }
 
+/* Disposition: Rework and Set Aside as two equal columns, same height. */
+.disposition-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  max-width: 520px;
+}
+
+.tap-btn-disposition {
+  min-height: 72px;
+  font-size: 1.15rem;
+}
+
+/* Save row: "Save with photo" is the big main action, "Save without photo"
+   sits beside it (stacks under it on a phone). */
+.save-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 1rem;
+}
+
+.save-with-photo-btn {
+  flex: 2 1 220px;
+  min-height: 64px;
+  font-size: 1.15rem;
+}
+
+.save-actions #save-btn {
+  flex: 1 1 160px;
+  min-height: 64px;
+}
+
 /* The primary/default disposition (Rework - PROJECT_SPEC.md section 3.2): bigger
    and full-width so it visually dominates the secondary Use As Is/Hold buttons and
    the collapsed "More options..." (Scrap) below it. */
