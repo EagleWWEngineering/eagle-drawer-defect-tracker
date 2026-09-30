@@ -91,7 +91,15 @@ class DefectCategory(Base):
 
 
 class DailyProductionSummary(Base):
-    """One row per production date + shift: the denominators for every rate."""
+    """One row per production date + shift: the denominators for every rate.
+
+    PROJECT_SPEC_PHASE10.md Part 1: drawers_inspected is written ONLY by the
+    eagle-drawers-production-count feed (app/services/daily_completed_service.py)
+    - unique valid QC scans that day. Every other count stays hand-entered on the
+    Daily Summary form. The two are independent KPIs from independent sources, so
+    there is deliberately no "rejected <= inspected" constraint any more
+    (dropped by migration a7d2e9c4b1f0).
+    """
 
     __tablename__ = "daily_production_summaries"
     __table_args__ = (
@@ -100,9 +108,6 @@ class DailyProductionSummary(Base):
         CheckConstraint("drawers_rejected_unique >= 0", name="ck_rejected_nonneg"),
         CheckConstraint("drawers_reworked >= 0", name="ck_reworked_nonneg"),
         CheckConstraint("drawers_scrapped >= 0", name="ck_scrapped_nonneg"),
-        CheckConstraint(
-            "drawers_rejected_unique <= drawers_inspected", name="ck_rejected_le_inspected"
-        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -191,6 +196,13 @@ class DefectCase(Base):
     # that's frequently "scanned_edited" in practice tells us its parsing needs
     # work. Nullable - historical rows predate this feature entirely.
     entry_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # PROJECT_SPEC_PHASE10.md Part 2: which physical drawer this case is about,
+    # from a unique-ID label's "#drawer=<order_detail_id>-<unit>" fragment.
+    # Together with work_order_number this points at one drawer. Both null for
+    # manual entry and old order-only labels. No FK to order_lines: a label can
+    # be scanned before production count has pushed that line.
+    order_detail_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    drawer_unit: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     found_station_id: Mapped[int] = mapped_column(ForeignKey("stations.id"), nullable=False)
     possible_source_station_id: Mapped[int | None] = mapped_column(
@@ -250,6 +262,29 @@ class DefectCase(Base):
         cascade="all, delete-orphan",
         order_by="StatusHistory.changed_at",
     )
+
+
+class OrderLine(Base):
+    """One work order line, keyed by its Access order-line record id
+    (order_detail_id) - the order_detail_id -> line letter mapping a unique-ID
+    drawer label needs (PROJECT_SPEC_PHASE10.md Part 2). This app can't reach
+    Access/eagle-vm, so eagle-drawers-production-count pushes a snapshot of
+    every open order hourly (app/services/order_line_service.py).
+
+    Replaced per order on each push; an order missing from a later snapshot is
+    never deleted (it closed/shipped, but a defect can still be logged on it).
+    """
+
+    __tablename__ = "order_lines"
+
+    order_detail_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    order_no: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    line: Mapped[str] = mapped_column(String(10), nullable=False)
+    qty: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The pushed "detail" object as-is (Size, Wood, Bottom, Options, Notes...),
+    # JSON-encoded - display only, never parsed for business rules.
+    detail_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    received_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class DefectItem(Base):

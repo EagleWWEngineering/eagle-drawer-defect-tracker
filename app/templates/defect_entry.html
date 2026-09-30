@@ -28,6 +28,10 @@
          sync (see syncLineLabelPickerHighlight below) - this is also how the
          rare two-letter labels (AA-ZZ) are entered, by typing. -->
     <div id="line-label-picker" class="letter-picker-grid" role="group" aria-label="Line letter picker"></div>
+    <!-- PROJECT_SPEC_PHASE10.md Part 2: after scanning a unique-ID drawer
+         label, the drawer's details (size, wood...) show here so the
+         operator can confirm it's the right drawer. Hidden otherwise. -->
+    <div id="scanned-drawer" class="card" style="display:none; margin-top:0.5rem; padding:0.6rem 0.8rem; background:#f8f9fb;" role="status" aria-live="polite"></div>
   </div>
 
   <div class="filters">
@@ -203,13 +207,16 @@ let qty = 1;
 let leaveOpen = false;
 let selectedRepairPreset = null;
 let selectedInstantCloseOutcome = DEFAULT_INSTANT_CLOSE_OUTCOME;
-// entry_source tracks the Line field's own provenance. Now that OCR has been
-// removed (PROJECT_SPEC_PHASE9.md Part 9), the line is always typed or tapped
-// from the letter picker - there is no other way to fill it - so this is
-// always "manual". The column stays (existing rows may still carry the
-// retired "scanned"/"scanned_edited" values from when OCR existed) - see
-// collectPayload() below.
-const LINE_ENTRY_SOURCE = "manual";
+// entry_source tracks the Line field's own provenance: "manual" (typed or
+// tapped from the picker), "scanned" (filled from a unique-ID drawer label -
+// PROJECT_SPEC_PHASE10.md Part 2), or "scanned_edited" (filled by a scan, then
+// changed by hand). Reset to "manual" for every new entry.
+let lineEntrySource = "manual";
+// The drawer identified by the last scanned label, as returned by
+// POST /api/v1/labels/resolve ({order_no, order_detail_id, unit, line_known,
+// line_label, qty, detail}), or null. Sent with the case only while the work
+// order number still matches it - see currentDrawerIdentity().
+let scannedDrawer = null;
 let scanController = null;
 
 function dispositionSupportsInstantClose(disposition) {
@@ -478,7 +485,92 @@ function handleLineLabelPickerClick(e) {
   // Tapping the already-selected letter clears it - a mistaken tap is one
   // tap to undo.
   input.value = input.value.trim().toUpperCase() === letter ? "" : letter;
+  markLineEditedByHand();
   syncLineLabelPickerHighlight();
+}
+
+/** A hand change to a scan-filled Line field is recorded as "scanned_edited". */
+function markLineEditedByHand() {
+  if (lineEntrySource === "scanned") lineEntrySource = "scanned_edited";
+}
+
+// ---------------------------------------------------------------------------
+// Scanned drawer identity (PROJECT_SPEC_PHASE10.md Part 2)
+// ---------------------------------------------------------------------------
+
+function renderScannedDrawer() {
+  const el = document.getElementById("scanned-drawer");
+  if (!scannedDrawer || scannedDrawer.order_detail_id === null) {
+    el.style.display = "none";
+    el.innerHTML = "";
+    return;
+  }
+  const d = scannedDrawer;
+  const unitText = d.qty ? `drawer ${d.unit} of ${d.qty}` : `drawer ${d.unit}`;
+  let html = `<strong>Order ${escapeHtml(d.order_no)}`;
+  if (d.line_known) {
+    html += ` · Line ${escapeHtml(d.line_label)} · ${unitText}</strong>`;
+    const parts = Object.entries(d.detail || {})
+      .filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== "")
+      .map(([key, value]) => `${escapeHtml(key)}: ${escapeHtml(String(value))}`);
+    if (parts.length) html += `<div>${parts.join(" · ")}</div>`;
+    html += `<div class="hint">Check this matches the drawer in front of you.</div>`;
+  } else {
+    html += ` · ${unitText}</strong>`;
+    html += `<div class="hint">Line details for this drawer haven't arrived yet - tap its line above.</div>`;
+  }
+  el.innerHTML = html;
+  el.style.display = "block";
+}
+
+function clearScannedDrawer() {
+  scannedDrawer = null;
+  renderScannedDrawer();
+}
+
+/** {order_detail_id, drawer_unit} for the payload - only while the order
+ * number on the form is still the scanned label's (typing a different order
+ * means a different drawer). */
+function currentDrawerIdentity() {
+  const wo = document.getElementById("work_order_number").value.trim();
+  if (!scannedDrawer || scannedDrawer.order_detail_id === null || wo !== scannedDrawer.order_no) {
+    return { order_detail_id: null, drawer_unit: null };
+  }
+  return { order_detail_id: scannedDrawer.order_detail_id, drawer_unit: scannedDrawer.unit };
+}
+
+/** Send the raw QR text to the server (the one place labels are parsed) and
+ * fill the form from the answer: always the order number; the line too when
+ * production count has already pushed this drawer's line. */
+async function resolveScannedLabel(text) {
+  let result;
+  try {
+    result = await Api.post("/api/v1/labels/resolve", { text });
+  } catch (err) {
+    setScanStatus(`Couldn't read the label (${err.message}). Enter the order number manually.`, true);
+    showToast(`Couldn't read the label: ${err.message}`, "error");
+    return;
+  }
+  if (!result.order_no) {
+    setScanStatus("QR code didn't look like a work order label. Enter the order number manually.", true);
+    return;
+  }
+  document.getElementById("work_order_number").value = result.order_no;
+  scannedDrawer = result;
+  const lineInput = document.getElementById("line_label");
+  if (result.line_known) {
+    lineInput.value = result.line_label;
+    lineEntrySource = "scanned";
+    setScanStatus(`Order ${result.order_no}, line ${result.line_label} found.`, false);
+  } else {
+    // Unknown order_detail_id or an old order-only label: order number only,
+    // the line stays the operator's to pick - exactly as before.
+    lineInput.value = "";
+    lineEntrySource = "manual";
+    setScanStatus(`Order ${result.order_no} found. Tap the line.`, false);
+  }
+  syncLineLabelPickerHighlight();
+  renderScannedDrawer();
 }
 
 // ---------------------------------------------------------------------------
@@ -524,9 +616,9 @@ function openScanModal() {
   // alone resolved. Do NOT await/`.then()` this - closing must never depend
   // on the scan itself succeeding.
   scanController = window.LabelScan.startScan(video, canvas, {
-    onOrderNumber: (orderNumber) => {
-      document.getElementById("work_order_number").value = orderNumber;
-      setScanStatus(`Order ${orderNumber} found.`, false);
+    onQrText: (text) => {
+      setScanStatus("Reading label...", false);
+      resolveScannedLabel(text);
     },
     onError: (message) => {
       setScanStatus(message, true);
@@ -570,7 +662,8 @@ function collectPayload() {
     detected_at: buildDetectedAtIso(),
     work_order_number: document.getElementById("work_order_number").value,
     line_label: document.getElementById("line_label").value || null,
-    entry_source: LINE_ENTRY_SOURCE,
+    entry_source: lineEntrySource,
+    ...currentDrawerIdentity(),
     drawer_part_reference: document.getElementById("drawer_part_reference").value || null,
     found_station_id: selectedFoundStationId,
     possible_source_station_id: selectedSourceStationId,
@@ -654,6 +747,8 @@ function resetFormForNextEntry() {
   selectedInstantCloseOutcome = DEFAULT_INSTANT_CLOSE_OUTCOME;
   qty = 1;
   document.getElementById("line_label").value = "";
+  lineEntrySource = "manual";
+  clearScannedDrawer();
   syncLineLabelPickerHighlight();
   document.getElementById("drawer_part_reference").value = "";
   document.getElementById("notes").value = "";
@@ -783,7 +878,16 @@ document.addEventListener("DOMContentLoaded", async () => {
   // tapping stay in sync.
   renderLineLabelPicker();
   document.getElementById("line-label-picker").addEventListener("click", handleLineLabelPickerClick);
-  document.getElementById("line_label").addEventListener("input", syncLineLabelPickerHighlight);
+  document.getElementById("line_label").addEventListener("input", () => {
+    markLineEditedByHand();
+    syncLineLabelPickerHighlight();
+  });
+  // A different order typed over a scanned one is a different drawer - drop
+  // the scanned identity and its details panel.
+  document.getElementById("work_order_number").addEventListener("input", () => {
+    const wo = document.getElementById("work_order_number").value.trim();
+    if (scannedDrawer && wo !== scannedDrawer.order_no) clearScannedDrawer();
+  });
 
   // "Scan label" (PROJECT_SPEC_PHASE9.md Part 3): hidden outright on a browser
   // with no camera API at all, rather than opening a modal that can only fail -

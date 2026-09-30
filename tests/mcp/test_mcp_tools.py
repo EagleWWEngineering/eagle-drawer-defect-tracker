@@ -96,10 +96,10 @@ async def test_record_defect_case_creates_exactly_one_audited_case(mcp_env):
 async def test_record_daily_production_upserts_one_row(mcp_env):
     mcp_module, TestingSession = mcp_env
     await mcp_module.record_daily_production(
-        production_date="2026-07-24", drawers_inspected=100, drawers_rejected_unique=5
+        production_date="2026-07-24", drawers_rejected_unique=5
     )
     await mcp_module.record_daily_production(
-        production_date="2026-07-24", drawers_inspected=120, drawers_rejected_unique=6
+        production_date="2026-07-24", drawers_rejected_unique=6
     )
 
     from app.models import DailyProductionSummary
@@ -107,7 +107,8 @@ async def test_record_daily_production_upserts_one_row(mcp_env):
     session = TestingSession()
     rows = session.query(DailyProductionSummary).all()
     assert len(rows) == 1
-    assert rows[0].drawers_inspected == 120
+    assert rows[0].drawers_rejected_unique == 6
+    assert rows[0].drawers_inspected == 0  # only the production-count feed sets it
     session.close()
 
 
@@ -184,7 +185,7 @@ async def test_tool_call_writes_nothing_to_stdout(mcp_env, capsys):
     mcp_module, _Session = mcp_env
     await mcp_module.get_rework_queue()
     await mcp_module.record_daily_production(
-        production_date="2026-07-24", drawers_inspected=10, drawers_rejected_unique=1
+        production_date="2026-07-24", drawers_rejected_unique=1
     )
     captured = capsys.readouterr()
     assert captured.out == ""

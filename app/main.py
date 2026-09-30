@@ -20,7 +20,13 @@ from app.auth_middleware import LoginRequiredMiddleware
 from app.config import get_settings
 from app.database import SessionLocal
 from app.dependencies import get_db
-from app.errors import InvalidTransitionError, NotFoundError, ServiceError, ValidationError
+from app.errors import (
+    InvalidTransitionError,
+    NotFoundError,
+    ServiceError,
+    UnprocessableError,
+    ValidationError,
+)
 from app.routers import (
     auth,
     brief,
@@ -28,6 +34,7 @@ from app.routers import (
     daily_production,
     defect_cases,
     exports,
+    labels,
     master_data,
     reports,
     sync,
@@ -124,6 +131,7 @@ app.include_router(customer_issues.export_router)
 app.include_router(sync.router)
 app.include_router(settings_router.router)
 app.include_router(brief.router)
+app.include_router(labels.router)
 
 app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
 settings.uploads_dir.mkdir(parents=True, exist_ok=True)
@@ -192,6 +200,8 @@ def page_login(request: Request):
 def _error_status_code(exc: ServiceError) -> int:
     if isinstance(exc, NotFoundError):
         return 404
+    if isinstance(exc, UnprocessableError):
+        return 422
     if isinstance(exc, (ValidationError, InvalidTransitionError)):
         return 400
     return 400

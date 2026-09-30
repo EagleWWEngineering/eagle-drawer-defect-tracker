@@ -74,6 +74,9 @@ services:
       # POST /api/v1/sync/customer-issues/ingest-raw (app/routers/sync.py). Must
       # match the value scripts/relay_customer_issues.py sends from Rodolfo's
       # local machine. Separate secret from APP_USERNAME/APP_PASSWORD_HASH above.
+      # Phase 10: the same key also guards /daily-completed/ingest-raw and
+      # /order-lines/ingest-raw, pushed by eagle-drawers-production-count on
+      # eagle-vm (which also takes over the laptop relay's feeds) - no new secret.
       - key: RELAY_API_KEY
         sync: false
       # Brief Export (Part A): checked against the X-Brief-Key header on

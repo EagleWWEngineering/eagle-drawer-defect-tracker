@@ -30,12 +30,19 @@ from app.dependencies import get_db
 from app.errors import ValidationError
 from app.models import SyncLog
 from app.schemas import (
+    DailyCompletedIngestOut,
     ManualSyncRequestOut,
+    OrderLinesIngestOut,
     RelayConnectionStatusOut,
     RelayHeartbeatOut,
     SyncLogOut,
 )
-from app.services import schedule_service, sync_service
+from app.services import (
+    daily_completed_service,
+    order_line_service,
+    schedule_service,
+    sync_service,
+)
 
 router = APIRouter(prefix="/api/v1/sync", tags=["sync"])
 
@@ -140,6 +147,45 @@ async def ingest_raw_daily_schedule(
     source_url = f"relay:{settings.production_brief_url}/drawers.html"
     log = schedule_service.process_schedule_payload(db, payload, source_url=source_url)
     return SyncLogOut.model_validate(log)
+
+
+@router.post("/daily-completed/ingest-raw", response_model=DailyCompletedIngestOut)
+def ingest_daily_completed(
+    # default=None (not required) so a missing body still reaches the relay-key
+    # check first - an unauthenticated caller always gets 401, never a 422 hint.
+    payload: Any = Body(default=None),
+    x_relay_key: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> DailyCompletedIngestOut:
+    """PROJECT_SPEC_PHASE10.md Part 1: eagle-drawers-production-count's daily
+    "drawers completed" figures (unique valid QC/Sorting scans per shop-local
+    date) - the ONLY writer of DailyProductionSummary.drawers_inspected.
+
+    Body: {"source": ..., "station": "QC_SORTING", "generated_at": ...,
+    "counts": {"YYYY-MM-DD": <int >= 0>, ...}}. Same X-Relay-Key check as the
+    other ingest endpoints (no new secret), checked before the body is looked
+    at. Any bad date/count -> 422 for the whole request, nothing written. See
+    app/services/daily_completed_service.py for the per-date upsert rules."""
+    _verify_relay_key(x_relay_key)
+    summary = daily_completed_service.process_payload(db, payload)
+    return DailyCompletedIngestOut(**summary)
+
+
+@router.post("/order-lines/ingest-raw", response_model=OrderLinesIngestOut)
+def ingest_order_lines(
+    payload: Any = Body(default=None),
+    x_relay_key: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> OrderLinesIngestOut:
+    """PROJECT_SPEC_PHASE10.md Part 2: production count's hourly snapshot of
+    every open order's lines (order_detail_id -> line letter, qty, detail), so
+    a unique-ID drawer label can fill the line automatically. Replaces each
+    listed order's lines; never deletes an order missing from the snapshot.
+    Same X-Relay-Key check; any invalid entry -> 422, nothing written. See
+    app/services/order_line_service.py."""
+    _verify_relay_key(x_relay_key)
+    summary = order_line_service.process_payload(db, payload)
+    return OrderLinesIngestOut(**summary)
 
 
 @router.get("/customer-issues/relay-status", response_model=RelayHeartbeatOut)

@@ -24,8 +24,8 @@ Same shape as Station: id, name (unique), active, sort_order.
 | id | int | primary key |
 | production_date | date | |
 | shift | string | default "Day" |
-| drawers_inspected | int >= 0 | |
-| drawers_rejected_unique | int >= 0 | hard rule: <= drawers_inspected |
+| drawers_inspected | int >= 0 | Phase 10: written ONLY by the production-count feed (unique QC/Sorting scans); read-only on the form, rejected on manual PUT |
+| drawers_rejected_unique | int >= 0 | independent of drawers_inspected since Phase 10 (the old <= hard rule/constraint was dropped) |
 | drawers_reworked | int >= 0 | soft rule (see PROJECT_SPEC.md 2.3); auto-suggested from DefectCase data, editable (see Phase 4 addendum) |
 | drawers_scrapped | int >= 0 | soft rule (see PROJECT_SPEC.md 2.3); no longer a field on the Daily Summary form (Phase 4 "Scrap removal") - kept for backward compatibility, defaults to 0 for a new row or preserves the existing value when omitted from a PUT |
 | notes | string, optional | required if a soft-rule warning is triggered |
@@ -41,6 +41,8 @@ Unique constraint: (production_date, shift).
 | production_date | date | |
 | detected_at | datetime (UTC) | |
 | work_order_number | string | required, indexed |
+| order_detail_id | int, optional | Phase 10 — Access order-line record id from a unique-ID label's `#drawer=` fragment; indexed; null for manual/order-only entries |
+| drawer_unit | int, optional | Phase 10 — unit within that line (the `-1` in `#drawer=285016-1`); requires order_detail_id |
 | drawer_part_reference | string, optional | never required |
 | found_station_id | FK -> stations.id | required — where the defect was found |
 | possible_source_station_id | FK -> stations.id, optional | a HYPOTHESIS, never a confirmed root cause |
@@ -433,3 +435,22 @@ qualifier). Added to the Daily Summary page's Recent Entries table as "Reworked
 (from cases)" after Rodolfo asked for a reference figure once the editable
 `drawers_reworked` input left the form - not part of the save payload, purely
 informational.
+
+## Phase 10: Production Count feeds (see `PROJECT_SPEC_PHASE10.md`)
+
+### OrderLine (`order_lines`)
+| Field | Type | Notes |
+|---|---|---|
+| order_detail_id | int | primary key — Access order-line record id |
+| order_no | string | indexed |
+| line | string | line letter, upper-case |
+| qty | int, optional | drawers on the line |
+| detail_json | text, optional | pushed detail object (Size, Wood, Bottom, Options, Notes), display only |
+| received_at | datetime (UTC) | last push that included this line |
+
+Replaced per order on each push; never deleted when an order is absent from a snapshot.
+
+### API
+- `POST /api/v1/sync/daily-completed/ingest-raw` — `X-Relay-Key`; `{counts: {date: int}}` → `{received, updated, created, skipped_zero}`
+- `POST /api/v1/sync/order-lines/ingest-raw` — `X-Relay-Key`; `{orders: {order_no: {lines: [...]}}}` → `{orders, lines}`
+- `POST /api/v1/labels/resolve` — login; `{text}` → `{order_no, order_detail_id, unit, line_known, line_label, qty, detail}`

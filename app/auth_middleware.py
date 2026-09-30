@@ -45,6 +45,12 @@ PUBLIC_EXACT_PATHS: set[str] = {
     # protected by the same RELAY_API_KEY header check (_verify_relay_key).
     # Exempting this ONE exact path only - nothing broader.
     "/api/v1/sync/daily-schedule/ingest-raw",
+    # PROJECT_SPEC_PHASE10.md: eagle-drawers-production-count (on eagle-vm) pushes
+    # daily completed counts and the order-line snapshot - unattended callers,
+    # protected by the same RELAY_API_KEY header check (_verify_relay_key).
+    # Exempting these exact paths only - nothing broader.
+    "/api/v1/sync/daily-completed/ingest-raw",
+    "/api/v1/sync/order-lines/ingest-raw",
     # Brief Export (Part A): the Eagle production brief's VM fetches this daily
     # (~06:15 ET) to build its drawers TV board - also an unattended,
     # machine-to-machine caller with no browser session, protected instead by its

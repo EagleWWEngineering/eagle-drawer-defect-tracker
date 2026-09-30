@@ -57,3 +57,21 @@ def customer_categories(db_session):
 @pytest.fixture()
 def today() -> dt.date:
     return dt.date(2026, 7, 24)
+
+
+@pytest.fixture()
+def feed_completed(db_session):
+    """Set drawers_inspected the only way it can be set now - via the
+    production-count feed's service (PROJECT_SPEC_PHASE10.md Part 1).
+    Usage: feed_completed({date: count, ...})."""
+    from app.services import daily_completed_service
+
+    def _feed(counts: dict) -> dict:
+        parsed = {
+            (dt.date.fromisoformat(k) if isinstance(k, str) else k): v for k, v in counts.items()
+        }
+        summary = daily_completed_service.apply_counts(db_session, parsed)
+        db_session.commit()
+        return summary
+
+    return _feed

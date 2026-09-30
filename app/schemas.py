@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from pydantic import BaseModel, Field, computed_field, field_validator
+from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
 from app.services.defect_service import (
     CLOSED_STATUSES,
@@ -186,6 +186,11 @@ class DefectCaseCreate(BaseModel):
     # PROJECT_SPEC_PHASE9.md Part 3: "manual" (default)/"scanned"/"scanned_edited" -
     # set by the New Defect form's scan flow, not user-visible as its own control.
     entry_source: str | None = None
+    # PROJECT_SPEC_PHASE10.md Part 2: the physical drawer, from a unique-ID
+    # label's "#drawer=<order_detail_id>-<unit>" fragment (set by the scan
+    # flow via /api/v1/labels/resolve). Null for manual/order-only entries.
+    order_detail_id: int | None = Field(default=None, ge=1)
+    drawer_unit: int | None = Field(default=None, ge=1)
     found_station_id: int
     possible_source_station_id: int | None = None
     priority: str = "Normal"
@@ -245,6 +250,8 @@ class DefectCaseOut(BaseModel):
     drawer_part_reference: str | None
     line_label: str | None
     entry_source: str | None
+    order_detail_id: int | None = None
+    drawer_unit: int | None = None
     found_station_id: int
     found_station_name: str
     possible_source_station_id: int | None
@@ -322,6 +329,8 @@ def defect_case_to_out(case) -> DefectCaseOut:
         drawer_part_reference=case.drawer_part_reference,
         line_label=case.line_label,
         entry_source=case.entry_source,
+        order_detail_id=case.order_detail_id,
+        drawer_unit=case.drawer_unit,
         found_station_id=case.found_station_id,
         found_station_name=case.found_station.name,
         possible_source_station_id=case.possible_source_station_id,
@@ -384,7 +393,11 @@ class WorkOrderLastStationOut(BaseModel):
 
 class DailyProductionSummaryIn(BaseModel):
     shift: str = "Day"
-    drawers_inspected: int = Field(ge=0)
+    # No drawers_inspected field (PROJECT_SPEC_PHASE10.md Part 1): it is written
+    # only by the production-count feed (POST /api/v1/sync/daily-completed/
+    # ingest-raw). A manual save that still sends it is rejected outright (422,
+    # see _reject_drawers_inspected) rather than silently ignored, so an old
+    # client/script can't believe it set the number.
     drawers_rejected_unique: int = Field(ge=0)
     # No longer a field on the Daily Summary form (PROJECT_SPEC_PHASE7.md: Rework
     # Rate is now derived from defect cases, not a hand-entered count - a second
@@ -402,6 +415,56 @@ class DailyProductionSummaryIn(BaseModel):
     # API caller can still pass an explicit value exactly as before.
     drawers_scrapped: int | None = Field(default=None, ge=0)
     notes: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_drawers_inspected(cls, data):
+        if isinstance(data, dict) and "drawers_inspected" in data:
+            raise ValueError(
+                "drawers_inspected can't be entered manually - it comes from "
+                "Production Count (unique QC/Sorting scans) automatically."
+            )
+        return data
+
+
+class DailyCompletedIngestOut(BaseModel):
+    """POST /api/v1/sync/daily-completed/ingest-raw response
+    (PROJECT_SPEC_PHASE10.md Part 1) - the exact contract production count is
+    built against; don't add/rename keys without changing it there too."""
+
+    received: int
+    updated: int
+    created: int
+    skipped_zero: int
+
+
+class OrderLinesIngestOut(BaseModel):
+    """POST /api/v1/sync/order-lines/ingest-raw response (PROJECT_SPEC_PHASE10.md
+    Part 2) - counts in the snapshot just received. Contract with production
+    count; don't rename keys."""
+
+    orders: int
+    lines: int
+
+
+class LabelResolveIn(BaseModel):
+    """The raw decoded QR text from a drawer label."""
+
+    text: str = Field(max_length=2000)
+
+
+class LabelResolveOut(BaseModel):
+    """What app/services/label_service.py resolve_label() found. order_no None
+    = not a work order label. order_detail_id/unit None = old order-only
+    label. line_known False = fill the order only; the operator picks the line."""
+
+    order_no: str | None
+    order_detail_id: int | None
+    unit: int | None
+    line_known: bool
+    line_label: str | None
+    qty: int | None
+    detail: dict | None
 
 
 class DailySummarySuggestionOut(BaseModel):

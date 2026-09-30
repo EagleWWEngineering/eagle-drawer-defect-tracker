@@ -78,29 +78,37 @@ def test_put_schedule_negative_count_returns_400(client):
 # ---------------------------------------------------------------------------
 
 
-def test_schedule_attainment_two_shift_day_sums_before_comparing_to_schedule(client):
+def test_schedule_attainment_two_shift_day_sums_before_comparing_to_schedule(
+    client, feed_completed
+):
     client.put(
         "/api/v1/daily-production/schedule",
         json={"production_date": "2026-08-20", "drawers_scheduled": 400},
     )
+    feed_completed({"2026-08-20": 150})
     client.put(
         "/api/v1/daily-production/2026-08-20",
         json={
             "shift": "Day",
-            "drawers_inspected": 150,
             "drawers_rejected_unique": 0,
             "drawers_reworked": 0,
         },
     )
-    client.put(
-        "/api/v1/daily-production/2026-08-20",
-        json={
-            "shift": "Night",
-            "drawers_inspected": 100,
-            "drawers_rejected_unique": 0,
-            "drawers_reworked": 0,
-        },
+    # The feed only ever writes shift "Day"; a second-shift row can only be a
+    # legacy hand-typed one, inserted directly here to keep the sum-across-
+    # shifts rule covered.
+    import datetime as dt
+
+    from app.models import DailyProductionSummary
+
+    db = client.testing_sessionmaker()
+    db.add(
+        DailyProductionSummary(
+            production_date=dt.date(2026, 8, 20), shift="Night", drawers_inspected=100
+        )
     )
+    db.commit()
+    db.close()
 
     resp = client.get(
         "/api/v1/daily-production/schedule-attainment",
@@ -136,18 +144,18 @@ def test_schedule_attainment_zero_scheduled_with_nothing_inspected_is_a_holiday(
     assert body["days"][0]["is_working_day"] is False
 
 
-def test_schedule_attainment_zero_scheduled_with_inspections_is_a_real_zero(client):
+def test_schedule_attainment_zero_scheduled_with_inspections_is_a_real_zero(client, feed_completed):
     """Same scheduled-0 entry, but drawers WERE inspected that day - a working
     day after all (not a holiday), so the real 0 counts in total_scheduled."""
     client.put(
         "/api/v1/daily-production/schedule",
         json={"production_date": "2026-08-20", "drawers_scheduled": 0},
     )
+    feed_completed({"2026-08-20": 12})
     client.put(
         "/api/v1/daily-production/2026-08-20",
         json={
             "shift": "Day",
-            "drawers_inspected": 12,
             "drawers_rejected_unique": 0,
             "drawers_reworked": 0,
         },
@@ -173,18 +181,18 @@ def test_schedule_attainment_unknown_schedule_is_na(client):
     assert body["days"][0]["drawers_scheduled"] is None
 
 
-def test_schedule_attainment_gap_dates(client):
+def test_schedule_attainment_gap_dates(client, feed_completed):
     """A scheduled date with no summary row shows a zero-completed day; a summary
     row with no schedule shows an unknown (None), not zero, scheduled day."""
     client.put(
         "/api/v1/daily-production/schedule",
         json={"production_date": "2026-08-19", "drawers_scheduled": 100},
     )
+    feed_completed({"2026-08-20": 90})
     client.put(
         "/api/v1/daily-production/2026-08-20",
         json={
             "shift": "Day",
-            "drawers_inspected": 90,
             "drawers_rejected_unique": 0,
             "drawers_reworked": 0,
         },

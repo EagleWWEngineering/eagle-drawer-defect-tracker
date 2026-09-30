@@ -419,7 +419,6 @@ async def record_defect_case(
 @mcp.tool(annotations=UPSERT_WRITE)
 async def record_daily_production(
     production_date: str,
-    drawers_inspected: int,
     drawers_rejected_unique: int,
     drawers_reworked: int | None = None,
     drawers_scrapped: int = 0,
@@ -429,6 +428,10 @@ async def record_daily_production(
     """Record (or update, if one already exists for this date+shift) the Daily
     Production Summary - the denominator for every rate on the dashboard. Only call
     this when the user has explicitly asked you to record production counts.
+
+    Drawers inspected/completed can NOT be set here: it arrives automatically
+    from Production Count (unique QC/Sorting scans per day) and the API rejects
+    any manual value. A brand-new date starts at 0 until the next feed run.
 
     drawers_reworked is no longer used by the Rework Rate KPI (PROJECT_SPEC_PHASE7.md:
     that's now computed from defect cases with disposition "Rework", not this
@@ -443,7 +446,6 @@ async def record_daily_production(
     """
     payload = {
         "shift": shift,
-        "drawers_inspected": drawers_inspected,
         "drawers_rejected_unique": drawers_rejected_unique,
         "drawers_reworked": drawers_reworked,
         "drawers_scrapped": drawers_scrapped,

@@ -130,7 +130,6 @@ def upsert_summary(
         db,
         production_date=production_date,
         shift=payload.shift,
-        drawers_inspected=payload.drawers_inspected,
         drawers_rejected_unique=payload.drawers_rejected_unique,
         drawers_reworked=payload.drawers_reworked,
         drawers_scrapped=payload.drawers_scrapped,

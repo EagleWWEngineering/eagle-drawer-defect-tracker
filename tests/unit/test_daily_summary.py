@@ -18,18 +18,45 @@ from app.services.defect_service import (
 )
 
 
-def test_rejected_exceeding_inspected_is_a_hard_block(db_session, today):
-    with pytest.raises(ValidationError):
+def test_rejected_exceeding_inspected_is_allowed(db_session, today, feed_completed):
+    """PROJECT_SPEC_PHASE10.md Part 1: no longer a hard block - completed (fed
+    from production count) and rejected (from cases) are independent KPIs."""
+    feed_completed({today: 10})
+    row, _ = upsert_daily_summary(
+        db_session,
+        production_date=today,
+        shift="Day",
+        drawers_rejected_unique=11,
+        drawers_reworked=0,
+        drawers_scrapped=0,
+        notes=None,
+    )
+    assert row.drawers_inspected == 10
+    assert row.drawers_rejected_unique == 11
+
+
+def test_manual_upsert_has_no_drawers_inspected_parameter(db_session, today):
+    with pytest.raises(TypeError):
         upsert_daily_summary(
             db_session,
             production_date=today,
             shift="Day",
             drawers_inspected=10,
-            drawers_rejected_unique=11,
-            drawers_reworked=0,
-            drawers_scrapped=0,
+            drawers_rejected_unique=0,
             notes=None,
         )
+
+
+def test_manual_upsert_keeps_the_fed_inspected_value(db_session, today, feed_completed):
+    feed_completed({today: 140})
+    row, _ = upsert_daily_summary(
+        db_session,
+        production_date=today,
+        shift="Day",
+        drawers_rejected_unique=3,
+        notes=None,
+    )
+    assert row.drawers_inspected == 140
 
 
 def test_rework_exceeding_rejected_is_a_soft_warning_requiring_note(db_session, today):
@@ -39,7 +66,6 @@ def test_rework_exceeding_rejected_is_a_soft_warning_requiring_note(db_session, 
             db_session,
             production_date=today,
             shift="Day",
-            drawers_inspected=50,
             drawers_rejected_unique=0,
             drawers_reworked=5,
             drawers_scrapped=0,
@@ -51,7 +77,6 @@ def test_rework_exceeding_rejected_is_a_soft_warning_requiring_note(db_session, 
         db_session,
         production_date=today,
         shift="Day",
-        drawers_inspected=50,
         drawers_rejected_unique=0,
         drawers_reworked=5,
         drawers_scrapped=0,
@@ -66,14 +91,13 @@ def test_normal_entry_has_no_warnings(db_session, today):
         db_session,
         production_date=today,
         shift="Day",
-        drawers_inspected=100,
         drawers_rejected_unique=10,
         drawers_reworked=7,
         drawers_scrapped=2,
         notes=None,
     )
     assert warnings == []
-    assert row.drawers_inspected == 100
+    assert row.drawers_inspected == 0  # new row - waits for the production-count feed
 
 
 def test_upsert_updates_existing_row_for_same_date_and_shift(db_session, today):
@@ -81,7 +105,6 @@ def test_upsert_updates_existing_row_for_same_date_and_shift(db_session, today):
         db_session,
         production_date=today,
         shift="Day",
-        drawers_inspected=100,
         drawers_rejected_unique=10,
         drawers_reworked=5,
         drawers_scrapped=2,
@@ -91,7 +114,6 @@ def test_upsert_updates_existing_row_for_same_date_and_shift(db_session, today):
         db_session,
         production_date=today,
         shift="Day",
-        drawers_inspected=120,
         drawers_rejected_unique=12,
         drawers_reworked=6,
         drawers_scrapped=3,
@@ -101,7 +123,7 @@ def test_upsert_updates_existing_row_for_same_date_and_shift(db_session, today):
 
     all_rows = db_session.query(DailyProductionSummary).all()
     assert len(all_rows) == 1, "same production_date+shift must update, not duplicate"
-    assert row.drawers_inspected == 120
+    assert row.drawers_rejected_unique == 12
 
 
 def test_upsert_stamps_current_rate_at_save_time(db_session, today):
@@ -109,7 +131,6 @@ def test_upsert_stamps_current_rate_at_save_time(db_session, today):
         db_session,
         production_date=today,
         shift="Day",
-        drawers_inspected=100,
         drawers_rejected_unique=10,
         drawers_reworked=5,
         drawers_scrapped=2,
@@ -126,7 +147,6 @@ def test_changing_rate_does_not_alter_already_saved_historical_summary(db_sessio
         db_session,
         production_date=yesterday,
         shift="Day",
-        drawers_inspected=100,
         drawers_rejected_unique=10,
         drawers_reworked=5,
         drawers_scrapped=2,
@@ -140,7 +160,6 @@ def test_changing_rate_does_not_alter_already_saved_historical_summary(db_sessio
         db_session,
         production_date=today,
         shift="Day",
-        drawers_inspected=80,
         drawers_rejected_unique=8,
         drawers_reworked=4,
         drawers_scrapped=1,
@@ -166,7 +185,6 @@ def test_omitting_scrapped_defaults_a_new_row_to_zero(db_session, today):
         db_session,
         production_date=today,
         shift="Day",
-        drawers_inspected=100,
         drawers_rejected_unique=10,
         drawers_reworked=5,
         drawers_scrapped=None,
@@ -180,7 +198,6 @@ def test_omitting_scrapped_on_resave_preserves_existing_value(db_session, today)
         db_session,
         production_date=today,
         shift="Day",
-        drawers_inspected=100,
         drawers_rejected_unique=10,
         drawers_reworked=5,
         drawers_scrapped=3,
@@ -192,7 +209,6 @@ def test_omitting_scrapped_on_resave_preserves_existing_value(db_session, today)
         db_session,
         production_date=today,
         shift="Day",
-        drawers_inspected=120,
         drawers_rejected_unique=12,
         drawers_reworked=6,
         drawers_scrapped=None,
@@ -213,7 +229,6 @@ def test_omitting_reworked_defaults_a_new_row_to_zero(db_session, today):
         db_session,
         production_date=today,
         shift="Day",
-        drawers_inspected=100,
         drawers_rejected_unique=10,
         drawers_reworked=None,
         drawers_scrapped=None,
@@ -227,7 +242,6 @@ def test_omitting_reworked_on_resave_preserves_existing_value(db_session, today)
         db_session,
         production_date=today,
         shift="Day",
-        drawers_inspected=100,
         drawers_rejected_unique=10,
         drawers_reworked=5,
         drawers_scrapped=None,
@@ -239,7 +253,6 @@ def test_omitting_reworked_on_resave_preserves_existing_value(db_session, today)
         db_session,
         production_date=today,
         shift="Day",
-        drawers_inspected=120,
         drawers_rejected_unique=12,
         drawers_reworked=None,
         drawers_scrapped=None,
@@ -267,7 +280,6 @@ def test_get_daily_summary_returns_the_saved_row(db_session, today):
         db_session,
         production_date=today,
         shift="Day",
-        drawers_inspected=10,
         drawers_rejected_unique=1,
         drawers_reworked=0,
         drawers_scrapped=None,
@@ -275,7 +287,7 @@ def test_get_daily_summary_returns_the_saved_row(db_session, today):
     )
     row = get_daily_summary(db_session, today, "Day")
     assert row is not None
-    assert row.drawers_inspected == 10
+    assert row.drawers_rejected_unique == 1
 
 
 def test_suggested_counts_are_zero_with_no_defect_cases(db_session, today):

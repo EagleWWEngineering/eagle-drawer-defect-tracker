@@ -65,6 +65,17 @@ calendar days (`working_days_service.resolve_working_day_preset` —
 `timezone_utils.resolve_date_preset` stays pure/DB-free and only handles
 Today/Month to date).
 
+Production Count feeds (`docs/PROJECT_SPEC_PHASE10.md`):
+`DailyProductionSummary.drawers_inspected` is written ONLY by
+`app/services/daily_completed_service.py` (POST
+`/api/v1/sync/daily-completed/ingest-raw`, pushed by eagle-drawers-production-count)
+— never add a manual write path for it; the form shows it read-only and
+`DailyProductionSummaryIn` rejects it. Completed and rejected are independent
+(no rejected <= inspected rule; First Pass Yield floors at 0). Drawer labels are
+parsed only in `app/services/label_service.py` (`/api/v1/labels/resolve`), never
+in JS; `order_lines` (pushed hourly to `/api/v1/sync/order-lines/ingest-raw`) is
+replaced per order and never deleted for an order missing from a snapshot.
+
 Dispositions (`Rework`, `Set Aside`) and statuses (`Open`, `Closed - Repaired`,
 `Closed - Use As Is`) are a small, fixed vocabulary as of Phase 7 — see
 `docs/PROJECT_SPEC_PHASE7.md` before changing either list.

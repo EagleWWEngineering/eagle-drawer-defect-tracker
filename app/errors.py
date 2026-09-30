@@ -27,3 +27,9 @@ class ValidationError(ServiceError):
 
 class InvalidTransitionError(ServiceError):
     """Raised when a requested status change is not allowed from the current status."""
+
+
+class UnprocessableError(ServiceError):
+    """Raised when a machine-to-machine request body is well-formed JSON but its
+    contents are invalid (bad date, negative count...) - 422, and the whole
+    request is rejected with nothing written (PROJECT_SPEC_PHASE10.md ingests)."""

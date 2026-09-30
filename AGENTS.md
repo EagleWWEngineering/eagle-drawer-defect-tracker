@@ -36,6 +36,17 @@ before changing dedup/mapping logic. `source_thread_id` null = manual entry, nev
 touched by sync. A synced issue's `linked_defect_case_id` and any status past `Open`
 are local staff decisions and must never be overwritten by a later sync.
 
+Production Count feeds (`docs/PROJECT_SPEC_PHASE10.md`):
+`DailyProductionSummary.drawers_inspected` is written ONLY by
+`app/services/daily_completed_service.py` (POST
+`/api/v1/sync/daily-completed/ingest-raw`, pushed by eagle-drawers-production-count)
+— never add a manual write path for it; the form shows it read-only and
+`DailyProductionSummaryIn` rejects it. Completed and rejected are independent
+(no rejected <= inspected rule; First Pass Yield floors at 0). Drawer labels are
+parsed only in `app/services/label_service.py` (`/api/v1/labels/resolve`), never
+in JS; `order_lines` (pushed hourly to `/api/v1/sync/order-lines/ingest-raw`) is
+replaced per order and never deleted for an order missing from a snapshot.
+
 ## What this is
 
 A local FastAPI + SQLite app for tracking drawer defects at Eagle Woodworking's

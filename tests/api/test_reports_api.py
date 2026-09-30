@@ -30,12 +30,12 @@ def _create_case(
     return client.post("/api/v1/defect-cases", json=payload).json()
 
 
-def test_summary_kpis_match_spec_formulas(client, master_data):
+def test_summary_kpis_match_spec_formulas(client, master_data, feed_completed):
+    feed_completed({"2026-07-24": 100})
     client.put(
         "/api/v1/daily-production/2026-07-24",
         json={
             "shift": "Day",
-            "drawers_inspected": 100,
             "drawers_rejected_unique": 10,
             "drawers_reworked": 7,
             "drawers_scrapped": 2,

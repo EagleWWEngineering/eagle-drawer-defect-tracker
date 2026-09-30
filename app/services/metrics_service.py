@@ -150,13 +150,22 @@ def compute_kpis(
     redefinition of Rework Rate: `drawers_reworked` here is the count of distinct
     cases with disposition "Rework" in the filtered range (see
     app/routers/reports.py get_summary), not a Daily Production Summary sum.
-    Never divides by zero."""
+    Never divides by zero.
+
+    PROJECT_SPEC_PHASE10.md Part 1: drawers_inspected (fed from production
+    count) and unique_drawers_rejected (from defect cases) are independent, so
+    rejected > inspected is now possible (e.g. a day's cases logged before its
+    completed count arrives). The ratio rates are left as-is (a rejection rate
+    over 100% honestly shows the two sources disagree), but First Pass Yield is
+    floored at 0% - a negative yield has no meaning."""
     if drawers_inspected == 0:
         defects_per_100 = rejection_rate = first_pass_yield = rework_rate = None
     else:
         defects_per_100 = (defect_events / drawers_inspected) * 100
         rejection_rate = (unique_drawers_rejected / drawers_inspected) * 100
-        first_pass_yield = ((drawers_inspected - unique_drawers_rejected) / drawers_inspected) * 100
+        first_pass_yield = max(
+            0.0, ((drawers_inspected - unique_drawers_rejected) / drawers_inspected) * 100
+        )
         rework_rate = (drawers_reworked / drawers_inspected) * 100
 
     total_internal_quality_cost = internal_rework_cost

@@ -82,3 +82,26 @@ def customer_categories(client):
     resp = client.get("/api/v1/customer-issues/categories")
     assert resp.status_code == 200
     return {c["name"]: c["id"] for c in resp.json()}
+
+
+@pytest.fixture()
+def feed_completed(client):
+    """API-test twin of tests/conftest.py feed_completed - writes through the
+    feed's service into the client's isolated DB (no relay key needed)."""
+    import datetime as dt
+
+    from app.services import daily_completed_service
+
+    def _feed(counts: dict) -> dict:
+        parsed = {
+            (dt.date.fromisoformat(k) if isinstance(k, str) else k): v for k, v in counts.items()
+        }
+        db = client.testing_sessionmaker()
+        try:
+            summary = daily_completed_service.apply_counts(db, parsed)
+            db.commit()
+        finally:
+            db.close()
+        return summary
+
+    return _feed

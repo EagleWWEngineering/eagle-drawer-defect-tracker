@@ -241,13 +241,13 @@ def test_summary_totals_and_zero_denominator_rates(client, customer_categories):
 
 
 def test_escape_rate_and_catch_rate_with_real_denominators(
-    client, master_data, customer_categories
+    client, master_data, customer_categories, feed_completed
 ):
+    feed_completed({"2026-07-24": 100})
     client.put(
         "/api/v1/daily-production/2026-07-24",
         json={
             "shift": "Day",
-            "drawers_inspected": 100,
             "drawers_rejected_unique": 5,
             "drawers_reworked": 3,
             "drawers_scrapped": 1,

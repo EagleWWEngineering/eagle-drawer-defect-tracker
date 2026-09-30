@@ -5,7 +5,9 @@
 {% block content %}
 <h1 class="page-title">Daily Production Summary</h1>
 <p class="hint">One row per production date and shift. These counts are the denominator
-  for every rate on the Dashboard and Reports pages. Unique drawers rejected is
+  for every rate on the Dashboard and Reports pages. Drawers completed comes
+  automatically from Production Count (unique QC/Sorting scans, sent at 6:00 and
+  3:30) and can't be typed here. Unique drawers rejected is
   pre-filled from real defect cases logged that date — check the suggestion and
   adjust it if it's not quite right. Rework Rate and Internal Quality Cost are no
   longer entered here — they're computed straight from defect cases (disposition
@@ -23,8 +25,11 @@
       <input type="text" id="shift" name="shift" value="Day" required>
     </div>
     <div class="field">
-      <label for="drawers_inspected">Drawers inspected</label>
-      <input type="number" id="drawers_inspected" name="drawers_inspected" min="0" value="0" required>
+      <label for="drawers_inspected">Drawers completed <span class="hint">(from Production Count)</span></label>
+      <!-- Read-only (PROJECT_SPEC_PHASE10.md Part 1): written only by the
+           production-count feed, never by this form - it isn't sent on save. -->
+      <input type="text" id="drawers_inspected" readonly tabindex="-1" aria-readonly="true" value="—" placeholder="—" style="background:#eef0f3;">
+      <p id="inspected-source-indicator" class="hint"></p>
     </div>
     <div class="field">
       <label for="drawers_scheduled">Drawers scheduled <span class="hint">(from the production brief; edit to override)</span></label>
@@ -59,7 +64,7 @@
   <h2>Recent entries</h2>
   <div class="table-scroll">
     <table id="summary-table">
-      <thead><tr><th>Date</th><th>Shift</th><th>Inspected</th><th>Rejected (unique)</th><th>Reworked (from cases)</th><th>Notes</th></tr></thead>
+      <thead><tr><th>Date</th><th>Shift</th><th>Completed</th><th>Rejected (unique)</th><th>Reworked (from cases)</th><th>Notes</th></tr></thead>
       <tbody></tbody>
     </table>
   </div>
@@ -131,15 +136,18 @@ async function saveScheduleIfChanged(date, rawValue) {
  * disposition "Rework" over drawers inspected, not a hand-entered count), so it
  * isn't previewed here - see the Dashboard/Reports pages for that KPI. */
 function computeRatesLocally(form) {
-  const val = (name) => Number(form.querySelector(`[name="${name}"]`).value || 0);
-  const inspected = val("drawers_inspected");
-  const rejected = val("drawers_rejected_unique");
+  // drawers_inspected is a read-only display field ("—" until the feed has
+  // sent this date), so it's read by id rather than as a named form value.
+  const inspected = Number(document.getElementById("drawers_inspected").value) || 0;
+  const rejected = Number(form.querySelector('[name="drawers_rejected_unique"]').value || 0);
   if (inspected === 0) {
     return { rejection_rate: null, first_pass_yield: null };
   }
+  // Rejected can exceed completed now (independent sources) - yield floors at
+  // 0%, same as app/services/metrics_service.py compute_kpis.
   return {
     rejection_rate: (rejected / inspected) * 100,
-    first_pass_yield: ((inspected - rejected) / inspected) * 100,
+    first_pass_yield: Math.max(0, ((inspected - rejected) / inspected) * 100),
   };
 }
 
@@ -196,6 +204,19 @@ async function loadSuggestionForCurrentDate() {
   }
 }
 
+/** Show the fed "drawers completed" figure (null = no row yet for this date). */
+function showFedInspected(value) {
+  const input = document.getElementById("drawers_inspected");
+  const indicator = document.getElementById("inspected-source-indicator");
+  if (value === null || value === undefined) {
+    input.value = "—";
+    indicator.textContent = "Not received from Production Count yet.";
+  } else {
+    input.value = value;
+    indicator.textContent = "Updated automatically at 6:00 and 3:30.";
+  }
+}
+
 /** Load whatever's already true for the selected production date/shift: if a
  * summary is already saved, show it as-is (auto-fill must NEVER silently
  * overwrite a saved entry); otherwise pre-fill from the suggestion for a brand
@@ -208,14 +229,14 @@ async function loadForCurrentDateAndShift() {
   const existing = rows.find((r) => r.shift === shift);
   if (existing) {
     currentRowIsSaved = true;
-    document.getElementById("drawers_inspected").value = existing.drawers_inspected;
+    showFedInspected(existing.drawers_inspected);
     document.getElementById("drawers_rejected_unique").value = existing.drawers_rejected_unique;
     document.getElementById("notes").value = existing.notes || "";
     document.getElementById("rejected-suggestion").textContent = "Already saved for this date/shift - use \"Recalculate\" to refresh the suggestion.";
     renderRatePreview();
   } else {
     currentRowIsSaved = false;
-    document.getElementById("drawers_inspected").value = 0;
+    showFedInspected(null);
     document.getElementById("notes").value = "";
     await loadSuggestionForCurrentDate();
   }
@@ -254,7 +275,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       const date = fd.get("production_date");
       const payload = {
         shift: fd.get("shift"),
-        drawers_inspected: Number(fd.get("drawers_inspected")),
         drawers_rejected_unique: Number(fd.get("drawers_rejected_unique")),
         notes: fd.get("notes") || null,
       };

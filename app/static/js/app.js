@@ -371,6 +371,7 @@ async function renderCaseDetail(caseId) {
         </span>
         ${c.entry_source ? `<span class="hint">(${escapeHtml(c.entry_source)})</span>` : ""}
       </p>
+      ${c.order_detail_id ? `<p><strong>Drawer:</strong> ${escapeHtml(String(c.order_detail_id))}${c.drawer_unit ? `-${escapeHtml(String(c.drawer_unit))}` : ""} <span class="hint">(from label)</span></p>` : ""}
       <p><strong>Detected:</strong> ${escapeHtml(c.detected_at_local || "")} &nbsp; <strong>Production date:</strong> ${c.production_date}</p>
       <p>
         <strong>Found station:</strong>

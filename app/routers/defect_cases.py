@@ -76,6 +76,8 @@ def create_case(
         notes=payload.notes,
         line_label=payload.line_label,
         entry_source=payload.entry_source,
+        order_detail_id=payload.order_detail_id,
+        drawer_unit=payload.drawer_unit,
     )
     audit_service.record(
         db,

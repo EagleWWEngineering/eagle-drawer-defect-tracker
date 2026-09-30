@@ -29,7 +29,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from app.database import SessionLocal  # noqa: E402
 from app.models import DefectCategory, Station  # noqa: E402
 from app.seed_data import seed_master_data  # noqa: E402
-from app.services import defect_service  # noqa: E402
+from app.services import daily_completed_service, defect_service  # noqa: E402
 
 WORK_ORDER_PREFIXES = ["WO-DEMO"]
 
@@ -64,11 +64,14 @@ def seed_demo_data(days: int, seed: int) -> None:
             reworked = random.randint(0, rejected)
             scrapped = max(0, min(rejected - reworked, random.randint(0, 2)))
 
+            # drawers_inspected only ever arrives via the production-count feed
+            # (PROJECT_SPEC_PHASE10.md), so demo data goes in the same way.
+            daily_completed_service.apply_counts(db, {production_date: inspected})
+            db.commit()
             defect_service.upsert_daily_summary(
                 db,
                 production_date=production_date,
                 shift="Day",
-                drawers_inspected=inspected,
                 drawers_rejected_unique=rejected,
                 drawers_reworked=reworked,
                 drawers_scrapped=scrapped,

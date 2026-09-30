@@ -30,13 +30,14 @@ def test_created_case_snapshots_the_current_rate(client, master_data):
     assert case["cost_per_drawer_at_time"] == 35.0  # seeded default
 
 
-def test_daily_production_summary_no_longer_reports_cost_fields(client):
+def test_daily_production_summary_no_longer_reports_cost_fields(client, feed_completed):
     """PROJECT_SPEC_PHASE7.md: DailyProductionSummaryOut's internal_rework_cost/
     internal_scrap_cost were removed - cost is entirely case-derived now, not
     computed from this row's drawers_reworked/drawers_scrapped * rate anymore."""
+    feed_completed({"2026-07-24": 100})
     resp = client.put(
         "/api/v1/daily-production/2026-07-24",
-        json={"shift": "Day", "drawers_inspected": 100, "drawers_rejected_unique": 10},
+        json={"shift": "Day", "drawers_rejected_unique": 10},
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -192,13 +193,16 @@ def test_reports_trend_includes_cost_avoided_per_bucket(client, master_data):
     assert point["cost_avoided"] == 35.0
 
 
-def test_reports_summary_rework_rate_counts_rework_disposition_cases(client, master_data):
+def test_reports_summary_rework_rate_counts_rework_disposition_cases(
+    client, master_data, feed_completed
+):
     """PROJECT_SPEC_PHASE7.md: Rework Rate = cases with disposition Rework /
     drawers_inspected * 100 - no status qualifier, and no more reading
     DailyProductionSummary.drawers_reworked."""
+    feed_completed({"2026-07-24": 100})
     client.put(
         "/api/v1/daily-production/2026-07-24",
-        json={"shift": "Day", "drawers_inspected": 100, "drawers_rejected_unique": 10},
+        json={"shift": "Day", "drawers_rejected_unique": 10},
     )
     _create_case(client, master_data, work_order_number="WO-RR-1", disposition="Rework")
     _create_case(

@@ -257,6 +257,8 @@ def create_defect_case(
     notes: str | None = None,
     line_label: str | None = None,
     entry_source: str | None = None,
+    order_detail_id: int | None = None,
+    drawer_unit: int | None = None,
 ) -> DefectCase:
     """instant_close_outcome: only meaningful when resolved_on_the_spot=True and
     disposition="Rework" - "Repaired" (default) or "Use As Is", see
@@ -273,6 +275,13 @@ def create_defect_case(
         )
     if not items:
         raise ValidationError("At least one defect category is required.", field="items")
+    # PROJECT_SPEC_PHASE10.md Part 2: a unit only means something within a
+    # known order line - "unit 2 of nothing" is not a drawer identity.
+    if drawer_unit is not None and order_detail_id is None:
+        raise ValidationError(
+            "drawer_unit needs an order_detail_id (both come from the label).",
+            field="drawer_unit",
+        )
 
     # "Fixed immediately?" fast path (PROJECT_SPEC_PHASE7.md) - only Rework has an
     # instant-close path now (Set Aside means "waiting to be worked", the opposite
@@ -332,6 +341,8 @@ def create_defect_case(
         drawer_part_reference=(drawer_part_reference or None),
         line_label=normalize_line_label(line_label),
         entry_source=entry_source,
+        order_detail_id=order_detail_id,
+        drawer_unit=drawer_unit,
         found_station_id=found_station_id,
         possible_source_station_id=possible_source_station_id,
         priority=priority,
@@ -683,7 +694,6 @@ def bulk_restore_cases(db: Session, ids: list[int]) -> list[DefectCase]:
 
 def check_daily_summary_warnings(
     *,
-    drawers_inspected: int,
     drawers_rejected_unique: int,
     drawers_reworked: int,
     drawers_scrapped: int,
@@ -712,19 +722,23 @@ def check_daily_summary_warnings(
 
 def validate_daily_summary_input(
     *,
-    drawers_inspected: int,
     drawers_rejected_unique: int,
     drawers_reworked: int,
     drawers_scrapped: int,
     notes: str | None,
 ) -> list[str]:
-    """Hard rule + soft-warning-with-required-note check. Returns warnings for display.
+    """Non-negative check + soft-warning-with-required-note check. Returns warnings
+    for display.
 
-    Raises ValidationError if the hard rule is broken, or if soft warnings exist but
-    no note was provided to explain the override.
+    There is no "rejected <= inspected" hard rule any more
+    (PROJECT_SPEC_PHASE10.md Part 1): drawers_inspected comes only from the
+    production-count feed, on its own schedule, and is an independent KPI - a
+    day's rejections can be saved before (or exceed) the fed completed count.
+
+    Raises ValidationError for a negative count, or if soft warnings exist but no
+    note was provided to explain the override.
     """
     for label, value in (
-        ("drawers_inspected", drawers_inspected),
         ("drawers_rejected_unique", drawers_rejected_unique),
         ("drawers_reworked", drawers_reworked),
         ("drawers_scrapped", drawers_scrapped),
@@ -732,14 +746,7 @@ def validate_daily_summary_input(
         if value < 0:
             raise ValidationError(f"{label} cannot be negative.", field=label)
 
-    if drawers_rejected_unique > drawers_inspected:
-        raise ValidationError(
-            "Unique drawers rejected cannot exceed drawers inspected.",
-            field="drawers_rejected_unique",
-        )
-
     warnings = check_daily_summary_warnings(
-        drawers_inspected=drawers_inspected,
         drawers_rejected_unique=drawers_rejected_unique,
         drawers_reworked=drawers_reworked,
         drawers_scrapped=drawers_scrapped,
@@ -758,13 +765,18 @@ def upsert_daily_summary(
     *,
     production_date: dt.date,
     shift: str,
-    drawers_inspected: int,
     drawers_rejected_unique: int,
     drawers_reworked: int | None = None,
     drawers_scrapped: int | None = None,
     notes: str | None,
 ) -> tuple[DailyProductionSummary, list[str]]:
-    """drawers_reworked and drawers_scrapped are both Optional because neither is a
+    """The manual (Daily Summary form / MCP) write path. Deliberately has no
+    drawers_inspected parameter (PROJECT_SPEC_PHASE10.md Part 1): that column is
+    written only by the production-count feed
+    (app/services/daily_completed_service.py). An existing row keeps its fed
+    value untouched; a brand-new row starts at 0 until the next feed run fills it.
+
+    drawers_reworked and drawers_scrapped are both Optional because neither is a
     field on the Daily Summary form anymore (drawers_reworked: PROJECT_SPEC_PHASE7.md
     - Rework Rate is now computed from defect cases, not a hand-entered count;
     drawers_scrapped: docs/PROJECT_SPEC_PHASE4.md "Scrap removal"). Passing None for
@@ -794,7 +806,6 @@ def upsert_daily_summary(
     )
 
     warnings = validate_daily_summary_input(
-        drawers_inspected=drawers_inspected,
         drawers_rejected_unique=drawers_rejected_unique,
         drawers_reworked=effective_reworked,
         drawers_scrapped=effective_scrapped,
@@ -805,7 +816,8 @@ def upsert_daily_summary(
         row = DailyProductionSummary(production_date=production_date, shift=shift)
         db.add(row)
 
-    row.drawers_inspected = drawers_inspected
+    if row.drawers_inspected is None:
+        row.drawers_inspected = 0
     row.drawers_rejected_unique = drawers_rejected_unique
     row.drawers_reworked = effective_reworked
     row.drawers_scrapped = effective_scrapped

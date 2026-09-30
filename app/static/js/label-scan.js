@@ -1,9 +1,16 @@
 /* label-scan.js - "Scan label" on the New Defect form.
  *
- * Decodes the QR code printed on a drawer production work order label to fill
- * the work order number field - nothing else. Decoded via the native
- * BarcodeDetector where available, vendored jsQR otherwise (iOS Safari has no
- * native BarcodeDetector).
+ * Decodes the QR code printed on a drawer production work order label and
+ * hands the RAW decoded text to the caller - nothing else. Decoded via the
+ * native BarcodeDetector where available, vendored jsQR otherwise (iOS Safari
+ * has no native BarcodeDetector).
+ *
+ * PHASE 10 (PROJECT_SPEC_PHASE10.md Part 2): this module no longer extracts
+ * the order number itself. Labels now come in two generations - old
+ * order-only, and unique-ID ones carrying "#drawer=<order_detail_id>-<unit>" -
+ * and the payload is parsed in exactly one place, server-side
+ * (app/services/label_service.py, via POST /api/v1/labels/resolve, which the
+ * caller in app/templates/defect_entry.html posts the text to).
  *
  * PHASE 9 REMOVAL (2026-09-09): this file used to also read the work order
  * line and dimensions off the label's printed text via Tesseract.js (vendored,
@@ -18,9 +25,9 @@
  * app/templates/defect_entry.html. QR decoding here is unchanged; it worked
  * perfectly the whole time.
  *
- * Manual entry always works, at every step - this module only ever fills the
- * work order number field via the callback the caller supplies; it never
- * submits anything.
+ * Manual entry always works, at every step - this module only ever reports
+ * what it decoded via the callbacks the caller supplies; it never fills or
+ * submits anything itself.
  */
 
 (function () {
@@ -46,16 +53,6 @@
   // -------------------------------------------------------------------------
   // QR decoding
   // -------------------------------------------------------------------------
-
-  //: The literal double backslash in `.../WorkOrderPDFs/\\178414.pdf` is
-  //: malformed at source - tolerate one or more slashes/backslashes before the
-  //: six-digit order number.
-  const QR_ORDER_NUMBER_RE = /[\\/]+(\d{6})\.pdf/i;
-
-  function extractOrderNumberFromQrText(text) {
-    const match = QR_ORDER_NUMBER_RE.exec(text || "");
-    return match ? match[1] : null;
-  }
 
   /** Returns the QR's raw decoded text, or null - via the native
    * BarcodeDetector where available, vendored jsQR otherwise. */
@@ -96,12 +93,11 @@
   /** Opens the camera against the given <video>/<canvas> elements and scans
    * until a QR code is found (or the caller calls the returned controller's
    * stop()). Callbacks:
-   *   onOrderNumber(orderNumber) - QR decoded and looked like a work order
-   *     label; fired once per startScan() call.
-   *   onError(message) - camera/QR-level failure, or a QR that decoded but
-   *     didn't look like a work order label; manual entry is the only path.
-   *   onScanComplete() - the QR has been found (and onOrderNumber or onError
-   *     already called for it) - the signal the caller uses to auto-close the
+   *   onQrText(text) - a QR was decoded; `text` is its raw content, unparsed
+   *     (the caller resolves it server-side). Fired once per startScan() call.
+   *   onError(message) - camera-level failure; manual entry is the only path.
+   *   onScanComplete() - the QR has been found (and onQrText already called
+   *     for it) - the signal the caller uses to auto-close the
    *     scanner. Never fired if the operator closes the modal before a QR is
    *     ever found.
    *
@@ -201,15 +197,7 @@
         if (state.qrFired) return;
         state.qrFired = true;
 
-        const orderNumber = extractOrderNumberFromQrText(text);
-        if (orderNumber) {
-          safeCall(cb.onOrderNumber, orderNumber);
-        } else {
-          safeCall(
-            cb.onError,
-            "QR code didn't look like a work order label. Enter the order number manually."
-          );
-        }
+        safeCall(cb.onQrText, text);
         safeCall(cb.onScanComplete);
       }
 

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 
-def test_upsert_and_read_back(client):
+def test_upsert_and_read_back(client, feed_completed):
+    feed_completed({"2026-07-24": 100})
     resp = client.put(
         "/api/v1/daily-production/2026-07-24",
         json={
             "shift": "Day",
-            "drawers_inspected": 100,
             "drawers_rejected_unique": 10,
             "drawers_reworked": 7,
             "drawers_scrapped": 2,
@@ -23,19 +23,50 @@ def test_upsert_and_read_back(client):
     assert len(list_resp.json()) == 1
 
 
-def test_hard_rule_rejected_gt_inspected_returns_400(client):
+def test_manual_save_rejects_drawers_inspected(client):
+    """PROJECT_SPEC_PHASE10.md Part 1: drawers_inspected comes only from the
+    production-count feed - a manual save that sends it is rejected outright,
+    and nothing is written."""
     resp = client.put(
         "/api/v1/daily-production/2026-07-24",
-        json={
-            "shift": "Day",
-            "drawers_inspected": 5,
-            "drawers_rejected_unique": 6,
-            "drawers_reworked": 0,
-            "drawers_scrapped": 0,
-        },
+        json={"shift": "Day", "drawers_inspected": 100, "drawers_rejected_unique": 1},
     )
-    assert resp.status_code == 400
-    assert resp.json()["error"]["field"] == "drawers_rejected_unique"
+    assert resp.status_code == 422
+    assert "Production Count" in resp.text
+    assert client.get("/api/v1/daily-production").json() == []
+
+
+def test_manual_save_never_changes_the_fed_value(client, feed_completed):
+    feed_completed({"2026-07-24": 80})
+    resp = client.put(
+        "/api/v1/daily-production/2026-07-24",
+        json={"shift": "Day", "drawers_rejected_unique": 4, "notes": "n"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["drawers_inspected"] == 80
+    assert resp.json()["drawers_rejected_unique"] == 4
+
+
+def test_manual_save_on_a_new_date_starts_inspected_at_zero(client):
+    resp = client.put(
+        "/api/v1/daily-production/2026-07-24",
+        json={"shift": "Day", "drawers_rejected_unique": 0},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["drawers_inspected"] == 0
+
+
+def test_rejected_greater_than_inspected_is_now_allowed(client, feed_completed):
+    """Decision 3: completed and rejected are independent KPIs - the old
+    rejected <= inspected hard rule (and ck_rejected_le_inspected) is gone."""
+    feed_completed({"2026-07-24": 5})
+    resp = client.put(
+        "/api/v1/daily-production/2026-07-24",
+        json={"shift": "Day", "drawers_rejected_unique": 6, "drawers_reworked": 0},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["drawers_rejected_unique"] == 6
+    assert resp.json()["drawers_inspected"] == 5
 
 
 def test_soft_warning_without_note_is_rejected_with_note_is_allowed(client):
@@ -43,7 +74,6 @@ def test_soft_warning_without_note_is_rejected_with_note_is_allowed(client):
         "/api/v1/daily-production/2026-07-24",
         json={
             "shift": "Day",
-            "drawers_inspected": 50,
             "drawers_rejected_unique": 0,
             "drawers_reworked": 3,
             "drawers_scrapped": 0,
@@ -55,7 +85,6 @@ def test_soft_warning_without_note_is_rejected_with_note_is_allowed(client):
         "/api/v1/daily-production/2026-07-24",
         json={
             "shift": "Day",
-            "drawers_inspected": 50,
             "drawers_rejected_unique": 0,
             "drawers_reworked": 3,
             "drawers_scrapped": 0,
@@ -127,7 +156,6 @@ def test_manual_override_of_a_saved_field_persists_and_is_not_overwritten(client
         "/api/v1/daily-production/2026-07-24",
         json={
             "shift": "Day",
-            "drawers_inspected": 10,
             "drawers_rejected_unique": 1,
             "drawers_reworked": 0,
         },
@@ -156,7 +184,6 @@ def test_upsert_without_scrapped_field_defaults_new_row_to_zero(client):
         "/api/v1/daily-production/2026-07-24",
         json={
             "shift": "Day",
-            "drawers_inspected": 10,
             "drawers_rejected_unique": 1,
             "drawers_reworked": 0,
         },
@@ -171,7 +198,6 @@ def test_upsert_without_scrapped_field_preserves_existing_value(client):
         "/api/v1/daily-production/2026-07-24",
         json={
             "shift": "Day",
-            "drawers_inspected": 100,
             "drawers_rejected_unique": 10,
             "drawers_reworked": 5,
             "drawers_scrapped": 3,
@@ -181,7 +207,6 @@ def test_upsert_without_scrapped_field_preserves_existing_value(client):
         "/api/v1/daily-production/2026-07-24",
         json={
             "shift": "Day",
-            "drawers_inspected": 120,
             "drawers_rejected_unique": 12,
             "drawers_reworked": 6,
         },
@@ -190,12 +215,12 @@ def test_upsert_without_scrapped_field_preserves_existing_value(client):
     assert resp.json()["drawers_scrapped"] == 3
 
 
-def test_same_date_and_shift_upserts_not_duplicates(client):
+def test_same_date_and_shift_upserts_not_duplicates(client, feed_completed):
+    feed_completed({"2026-07-24": 120})
     client.put(
         "/api/v1/daily-production/2026-07-24",
         json={
             "shift": "Day",
-            "drawers_inspected": 100,
             "drawers_rejected_unique": 10,
             "drawers_reworked": 5,
             "drawers_scrapped": 2,
@@ -205,7 +230,6 @@ def test_same_date_and_shift_upserts_not_duplicates(client):
         "/api/v1/daily-production/2026-07-24",
         json={
             "shift": "Day",
-            "drawers_inspected": 120,
             "drawers_rejected_unique": 12,
             "drawers_reworked": 6,
             "drawers_scrapped": 3,
@@ -221,7 +245,7 @@ def test_reworked_case_count_appears_on_upsert_and_list(client, master_data):
     drawers_reworked field on the payload."""
     resp = client.put(
         "/api/v1/daily-production/2026-07-24",
-        json={"shift": "Day", "drawers_inspected": 10, "drawers_rejected_unique": 1},
+        json={"shift": "Day", "drawers_rejected_unique": 1},
     )
     assert resp.json()["reworked_case_count"] == 0
 
@@ -240,7 +264,7 @@ def test_reworked_case_count_appears_on_upsert_and_list(client, master_data):
 
     resp = client.put(
         "/api/v1/daily-production/2026-07-24",
-        json={"shift": "Day", "drawers_inspected": 10, "drawers_rejected_unique": 1},
+        json={"shift": "Day", "drawers_rejected_unique": 1},
     )
     assert resp.json()["reworked_case_count"] == 1
 
