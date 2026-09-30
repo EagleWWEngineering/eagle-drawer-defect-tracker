@@ -52,8 +52,9 @@ shared login can reach any screen.
      away, and as soon as you take the picture the defect and photo are saved
      together (cancel the camera and nothing is saved). Photos are shrunk on the
      phone before uploading, so it's quick. **Save without photo** saves as
-     before. To add another photo later, use **Attach** in the "Logged this
-     session" list below the form.
+     before. To add a photo later (or another one), tap **📷 Add photo** /
+     **+ Add another** in the "Logged this session" list below the form - the
+     camera opens and the photo uploads as soon as it's taken.
    - Disposition: **Rework** (pre-selected) and **Set Aside** are the two
      same-size buttons.
 3. After saving you'll see a brief green "Saved: DF-20260724-0001" confirmation.

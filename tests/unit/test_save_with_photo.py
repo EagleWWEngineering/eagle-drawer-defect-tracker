@@ -58,3 +58,19 @@ def test_disposition_buttons_are_equal_size():
     assert 'dispositionButtonHtml(DISPOSITION_PRIMARY, "tap-btn-disposition")' in HTML
     assert 'dispositionButtonHtml(DISPOSITION_SECONDARY, "tap-btn-disposition")' in HTML
     assert "grid-template-columns: 1fr 1fr" in CSS[CSS.index(".disposition-grid") :][:200]
+
+
+def test_session_log_photo_is_one_tap_camera_upload():
+    cell = HTML[HTML.index("function sessionPhotoCellHtml") :]
+    cell = cell[: cell.index("function addSessionLogRow")]
+    assert 'capture="environment"' in cell
+    assert "📷 Add photo" in cell
+    assert "+ Add another" in cell
+    assert "📷 attached" in cell
+    # The old two-step "choose file, then Attach" button is gone.
+    assert ">Attach<" not in HTML
+    click = HTML[HTML.index('sessionLogTable.addEventListener("click"') :]
+    click = click[: click.index("});")]
+    assert "input.click()" in click
+    assert "await" not in click
+    assert 'sessionLogTable.addEventListener("change"' in HTML

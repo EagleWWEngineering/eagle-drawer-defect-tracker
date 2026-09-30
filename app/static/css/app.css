@@ -339,6 +339,19 @@ button.danger, .btn.danger {
   min-height: 64px;
 }
 
+/* Session log Photo cell: status text + a small text-style "+ Add another". */
+.session-photo-status { font-weight: 600; white-space: nowrap; }
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--color-primary);
+  padding: 0.2rem 0;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+  display: block;
+}
+
 /* The primary/default disposition (Rework - PROJECT_SPEC.md section 3.2): bigger
    and full-width so it visually dominates the secondary Use As Is/Hold buttons and
    the collapsed "More options..." (Scrap) below it. */

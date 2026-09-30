@@ -133,7 +133,7 @@
 
 <section id="session-log-section" class="card" style="display:none;">
   <h2>Logged this session</h2>
-  <p class="hint">Attach another photo to any entry below without leaving this screen.</p>
+  <p class="hint">Add a photo (or another one) to any entry below without leaving this screen.</p>
   <div class="table-scroll">
     <table id="session-log-table">
       <thead><tr><th>Case</th><th>Time</th><th>Categories</th><th>Photo</th></tr></thead>
@@ -717,21 +717,30 @@ function showSaveFlash(text) {
   }, 2000);
 }
 
+/** The session log's Photo cell: one button that opens the camera and
+ * uploads as soon as the picture is taken - no separate "choose file" +
+ * "Attach" step. With no photo yet it's "📷 Add photo"; once the case has one
+ * it shows "📷 attached" (or "📷 2 photos") plus a small "+ Add another". */
+function sessionPhotoCellHtml(caseId, photoCount) {
+  const input = `<input type="file" class="session-photo-input" data-case-id="${caseId}" accept="image/jpeg,image/png,image/webp" capture="environment" style="display:none;" aria-hidden="true" tabindex="-1">`;
+  if (!photoCount) {
+    return `${input}<button type="button" class="secondary session-photo-btn" data-case-id="${caseId}">📷 Add photo</button>`;
+  }
+  const label = photoCount === 1 ? "📷 attached" : `📷 ${photoCount} photos`;
+  return `${input}<span class="session-photo-status">${label}</span>
+    <button type="button" class="link-btn session-photo-btn" data-case-id="${caseId}">+ Add another</button>`;
+}
+
 function addSessionLogRow(created, hasPhoto) {
   document.getElementById("session-log-section").style.display = "block";
   const tbody = document.querySelector("#session-log-table tbody");
-  const rowId = `log-${created.id}`;
   tbody.insertAdjacentHTML(
     "afterbegin",
-    `<tr data-case-id="${created.id}">
+    `<tr data-case-id="${created.id}" data-photo-count="${hasPhoto ? 1 : 0}">
       <td>${escapeHtml(created.case_number)}</td>
       <td>${escapeHtml(created.detected_at_local || "")}</td>
       <td>${created.items.map((i) => escapeHtml(i.defect_category_name)).join(", ")}</td>
-      <td>
-        ${hasPhoto ? `<span class="hint">📷 attached</span><br>` : ""}
-        <input type="file" class="session-photo-input" id="${rowId}-file" accept="image/jpeg,image/png,image/webp">
-        <button type="button" class="secondary session-photo-btn" data-case-id="${created.id}" data-file-id="${rowId}-file">Attach</button>
-      </td>
+      <td class="session-photo-cell">${sessionPhotoCellHtml(created.id, hasPhoto ? 1 : 0)}</td>
     </tr>`
   );
 }
@@ -908,21 +917,35 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (e.key === "Escape" && modal.style.display !== "none") closeScanModal();
   });
 
-  document.getElementById("session-log-table").addEventListener("click", async (e) => {
+  // Session log photos: the button opens the camera from the tap itself
+  // (synchronously - phones block it otherwise); the upload starts the moment
+  // a picture is taken. Cancelling the camera does nothing.
+  const sessionLogTable = document.getElementById("session-log-table");
+  sessionLogTable.addEventListener("click", (e) => {
     const btn = e.target.closest(".session-photo-btn");
-    if (!btn) return;
-    const caseId = Number(btn.dataset.caseId);
-    const fileInput = document.getElementById(btn.dataset.fileId);
-    if (!fileInput.files.length) {
-      showToast("Choose a photo file first.", "error");
-      return;
-    }
+    if (!btn || btn.disabled) return;
+    const input = btn.closest("td").querySelector(".session-photo-input");
+    input.value = "";
+    input.click();
+  });
+  sessionLogTable.addEventListener("change", async (e) => {
+    const input = e.target.closest(".session-photo-input");
+    if (!input || !input.files.length) return;
+    const row = input.closest("tr");
+    const cell = row.querySelector(".session-photo-cell");
+    const caseId = Number(input.dataset.caseId);
+    const btn = cell.querySelector(".session-photo-btn");
+    btn.disabled = true;
+    btn.textContent = "Uploading...";
     try {
-      await Api.uploadPhoto(caseId, fileInput.files[0]);
+      await Api.uploadPhoto(caseId, input.files[0]);
+      const count = Number(row.dataset.photoCount || 0) + 1;
+      row.dataset.photoCount = String(count);
+      cell.innerHTML = sessionPhotoCellHtml(caseId, count);
       showToast("Photo attached.", "success");
-      fileInput.value = "";
     } catch (err) {
-      showToast(err.message, "error");
+      cell.innerHTML = sessionPhotoCellHtml(caseId, Number(row.dataset.photoCount || 0));
+      showToast(`Photo didn't upload: ${err.message}`, "error");
     }
   });
 
@@ -934,7 +957,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   /** Create the case, then (optionally) upload its photo. The case is saved
    * first so a failed photo upload never loses the defect itself - the
-   * operator can retry the photo from the session log's Attach button. */
+   * operator can retry from the session log's "Add photo" button. */
   async function saveCase(photoFile) {
     if (saving) return;
     saving = true;
@@ -949,7 +972,7 @@ document.addEventListener("DOMContentLoaded", async () => {
           photoNote = " (with photo)";
         } catch (err) {
           showToast(
-            `${created.case_number} saved, but the photo didn't upload (${err.message}). Use Attach below to try again.`,
+            `${created.case_number} saved, but the photo didn't upload (${err.message}). Tap "Add photo" below to try again.`,
             "error"
           );
         }
