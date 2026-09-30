@@ -133,13 +133,13 @@ def _login(client) -> None:
 
 
 def test_creates_rows_for_nonzero_counts_and_skips_zero_with_no_row(unauth_client):
-    resp = _post(unauth_client, {"2026-09-26": 0, "2026-09-28": 171, "2026-09-29": 57})
+    resp = _post(unauth_client, {"2026-10-03": 0, "2026-10-05": 171, "2026-10-06": 57})
     assert resp.status_code == 200
     assert resp.json() == {"received": 3, "updated": 0, "created": 2, "skipped_zero": 1}
 
     rows = _rows(unauth_client)
-    assert set(rows) == {(dt.date(2026, 9, 28), "Day"), (dt.date(2026, 9, 29), "Day")}
-    row = rows[(dt.date(2026, 9, 28), "Day")]
+    assert set(rows) == {(dt.date(2026, 10, 5), "Day"), (dt.date(2026, 10, 6), "Day")}
+    row = rows[(dt.date(2026, 10, 5), "Day")]
     assert row.drawers_inspected == 171
     assert row.drawers_rejected_unique == 0
     assert row.drawers_reworked == 0
@@ -153,7 +153,7 @@ def test_update_sets_only_drawers_inspected_and_leaves_every_other_column(unauth
     db = unauth_client.testing_sessionmaker()
     db.add(
         DailyProductionSummary(
-            production_date=dt.date(2026, 9, 29),
+            production_date=dt.date(2026, 10, 6),
             shift="Day",
             drawers_inspected=90,  # an old hand-typed value
             drawers_rejected_unique=7,
@@ -166,10 +166,10 @@ def test_update_sets_only_drawers_inspected_and_leaves_every_other_column(unauth
     db.commit()
     db.close()
 
-    resp = _post(unauth_client, {"2026-09-29": 0})
+    resp = _post(unauth_client, {"2026-10-06": 0})
     assert resp.json() == {"received": 1, "updated": 1, "created": 0, "skipped_zero": 0}
 
-    row = _rows(unauth_client)[(dt.date(2026, 9, 29), "Day")]
+    row = _rows(unauth_client)[(dt.date(2026, 10, 6), "Day")]
     # A zero on an EXISTING row is a real value (e.g. every scan undone) - applied.
     assert row.drawers_inspected == 0
     assert row.drawers_rejected_unique == 7
@@ -178,28 +178,28 @@ def test_update_sets_only_drawers_inspected_and_leaves_every_other_column(unauth
     assert row.notes == "typed by hand"
     assert row.cost_per_drawer_at_time == decimal.Decimal("40.00")
 
-    _post(unauth_client, {"2026-09-29": 144})
-    assert _rows(unauth_client)[(dt.date(2026, 9, 29), "Day")].drawers_inspected == 144
+    _post(unauth_client, {"2026-10-06": 144})
+    assert _rows(unauth_client)[(dt.date(2026, 10, 6), "Day")].drawers_inspected == 144
 
 
 def test_only_the_day_shift_row_is_touched(unauth_client):
     db = unauth_client.testing_sessionmaker()
     db.add(
         DailyProductionSummary(
-            production_date=dt.date(2026, 9, 29), shift="Night", drawers_inspected=20
+            production_date=dt.date(2026, 10, 6), shift="Night", drawers_inspected=20
         )
     )
     db.commit()
     db.close()
 
-    _post(unauth_client, {"2026-09-29": 100})
+    _post(unauth_client, {"2026-10-06": 100})
     rows = _rows(unauth_client)
-    assert rows[(dt.date(2026, 9, 29), "Night")].drawers_inspected == 20
-    assert rows[(dt.date(2026, 9, 29), "Day")].drawers_inspected == 100
+    assert rows[(dt.date(2026, 10, 6), "Night")].drawers_inspected == 20
+    assert rows[(dt.date(2026, 10, 6), "Day")].drawers_inspected == 100
 
 
 def test_same_body_twice_is_idempotent(unauth_client):
-    counts = {f"2026-09-{d}": n for d, n in [(24, 0), (25, 171), (26, 0), (29, 60), (30, 57)]}
+    counts = {f"2026-10-{d:02d}": n for d, n in [(1, 0), (2, 171), (3, 0), (6, 60), (7, 57)]}
     first = _post(unauth_client, counts)
     state_after_first = _snapshot(unauth_client)
     second = _post(unauth_client, counts)
@@ -211,22 +211,22 @@ def test_same_body_twice_is_idempotent(unauth_client):
 
 
 def test_trailing_resend_applies_a_correction(unauth_client):
-    _post(unauth_client, {"2026-09-29": 60})
-    _post(unauth_client, {"2026-09-29": 58, "2026-09-30": 12})  # a QC undo on the 29th
+    _post(unauth_client, {"2026-10-06": 60})
+    _post(unauth_client, {"2026-10-06": 58, "2026-10-07": 12})  # a QC undo on the 29th
     rows = _rows(unauth_client)
-    assert rows[(dt.date(2026, 9, 29), "Day")].drawers_inspected == 58
-    assert rows[(dt.date(2026, 9, 30), "Day")].drawers_inspected == 12
+    assert rows[(dt.date(2026, 10, 6), "Day")].drawers_inspected == 58
+    assert rows[(dt.date(2026, 10, 7), "Day")].drawers_inspected == 12
 
 
 def test_saturday_count_is_recorded_not_rejected(unauth_client):
     """Unlike the schedule ingest, a count > 0 on a weekend is real overtime QC
     scans - recorded."""
-    resp = _post(unauth_client, {"2026-09-26": 40})  # a Saturday
+    resp = _post(unauth_client, {"2026-10-03": 40})  # a Saturday
     assert resp.json()["created"] == 1
 
 
 def test_each_call_writes_one_sync_log_row(unauth_client):
-    _post(unauth_client, {"2026-09-29": 60, "2026-09-27": 0})
+    _post(unauth_client, {"2026-10-06": 60, "2026-10-04": 0})
     db = unauth_client.testing_sessionmaker()
     logs = db.query(SyncLog).all()
     db.close()
@@ -245,7 +245,7 @@ def test_each_call_writes_one_sync_log_row(unauth_client):
 
 @pytest.mark.parametrize("key", [None, "wrong-key"])
 def test_missing_or_wrong_relay_key_is_rejected_and_writes_nothing(unauth_client, key):
-    resp = _post(unauth_client, {"2026-09-29": 60}, key=key)
+    resp = _post(unauth_client, {"2026-10-06": 60}, key=key)
     assert resp.status_code == 401
     assert _rows(unauth_client) == {}
     db = unauth_client.testing_sessionmaker()
@@ -259,7 +259,7 @@ def test_missing_key_with_no_body_is_still_401_not_422(unauth_client):
 
 def test_works_without_a_login_session(unauth_client):
     assert not unauth_client.cookies
-    assert _post(unauth_client, {"2026-09-29": 1}).status_code == 200
+    assert _post(unauth_client, {"2026-10-06": 1}).status_code == 200
 
 
 # ---------------------------------------------------------------------------
@@ -270,17 +270,17 @@ def test_works_without_a_login_session(unauth_client):
 @pytest.mark.parametrize(
     "counts",
     [
-        {"2026-09-29": 60, "2026-13-01": 5},  # bad date
-        {"2026-09-29": 60, "09/30/2026": 5},  # wrong date format
-        {"2026-09-29": 60, "2026-09-30": -1},  # negative
-        {"2026-09-29": 60, "2026-09-30": "57"},  # string, not int
-        {"2026-09-29": 60, "2026-09-30": 5.5},  # float
-        {"2026-09-29": 60, "2026-09-30": True},  # bool is not a count
-        {"2026-09-29": 60, "2026-09-30": None},
+        {"2026-10-06": 60, "2026-13-01": 5},  # bad date
+        {"2026-10-06": 60, "09/30/2026": 5},  # wrong date format
+        {"2026-10-06": 60, "2026-10-07": -1},  # negative
+        {"2026-10-06": 60, "2026-10-07": "57"},  # string, not int
+        {"2026-10-06": 60, "2026-10-07": 5.5},  # float
+        {"2026-10-06": 60, "2026-10-07": True},  # bool is not a count
+        {"2026-10-06": 60, "2026-10-07": None},
     ],
 )
 def test_invalid_entry_rejects_whole_request_with_422(unauth_client, counts):
-    _post(unauth_client, {"2026-09-29": 10})
+    _post(unauth_client, {"2026-10-06": 10})
     before = _snapshot(unauth_client)
 
     resp = _post(unauth_client, counts)
@@ -301,32 +301,32 @@ def test_malformed_body_is_422(unauth_client, body):
 
 
 def test_brief_summary_reflects_the_fed_value(unauth_client):
-    # 2026-09-29 is a Tuesday - "yesterday" as of Wednesday 2026-09-30.
-    _post(unauth_client, {"2026-09-29": 171})
+    # 2026-10-06 is a Tuesday - "yesterday" as of Wednesday 2026-10-07.
+    _post(unauth_client, {"2026-10-06": 171})
     resp = unauth_client.get(
         "/api/v1/brief/summary",
-        params={"product": "drawers", "asof": "2026-09-30"},
+        params={"product": "drawers", "asof": "2026-10-07"},
         headers={"X-Brief-Key": TEST_BRIEF_KEY},
     )
     assert resp.status_code == 200
     last_day = resp.json()["last_production_day"]
-    assert last_day["date"] == "2026-09-29"
+    assert last_day["date"] == "2026-10-06"
     assert last_day["entered"] is True
     assert last_day["inspected"] == 171
 
 
 def test_manual_save_after_feed_keeps_fed_value_and_rejects_typing_it(unauth_client):
-    _post(unauth_client, {"2026-09-29": 171})
+    _post(unauth_client, {"2026-10-06": 171})
     _login(unauth_client)
 
     rejected = unauth_client.put(
-        "/api/v1/daily-production/2026-09-29",
+        "/api/v1/daily-production/2026-10-06",
         json={"shift": "Day", "drawers_inspected": 5, "drawers_rejected_unique": 2},
     )
     assert rejected.status_code == 422
 
     ok = unauth_client.put(
-        "/api/v1/daily-production/2026-09-29",
+        "/api/v1/daily-production/2026-10-06",
         json={"shift": "Day", "drawers_rejected_unique": 2},
     )
     assert ok.status_code == 200
@@ -344,3 +344,50 @@ def test_daily_summary_form_shows_inspected_read_only(unauth_client):
     assert "name=" not in tag
     assert "from Production Count" in html
     assert "drawers_inspected: Number(" not in html
+
+
+# ---------------------------------------------------------------------------
+# FEED_START_DATE: hand-typed history before 2026-09-30 is never overwritten
+# ---------------------------------------------------------------------------
+
+
+def test_dates_before_start_date_are_ignored_and_typed_history_kept(unauth_client):
+    db = unauth_client.testing_sessionmaker()
+    db.add(
+        DailyProductionSummary(
+            production_date=dt.date(2026, 9, 29), shift="Day", drawers_inspected=150
+        )
+    )
+    db.commit()
+    db.close()
+
+    # The first real send: trailing 7 days, 09-24..09-30.
+    counts = {
+        "2026-09-24": 160,
+        "2026-09-25": 171,
+        "2026-09-26": 0,
+        "2026-09-27": 0,
+        "2026-09-28": 140,
+        "2026-09-29": 144,
+        "2026-09-30": 57,
+    }
+    resp = _post(unauth_client, counts)
+    assert resp.status_code == 200
+    assert resp.json() == {"received": 7, "updated": 0, "created": 1, "skipped_zero": 0}
+
+    rows = _rows(unauth_client)
+    assert rows[(dt.date(2026, 9, 29), "Day")].drawers_inspected == 150  # typed value kept
+    assert (dt.date(2026, 9, 28), "Day") not in rows  # no row created before the start
+    assert rows[(dt.date(2026, 9, 30), "Day")].drawers_inspected == 57  # start date fed
+
+    db = unauth_client.testing_sessionmaker()
+    log = db.query(SyncLog).one()
+    db.close()
+    assert log.records_skipped == 6
+    assert "before 2026-09-30 ignored" in log.errors
+
+
+def test_invalid_value_before_start_date_still_rejects_the_request(unauth_client):
+    resp = _post(unauth_client, {"2026-09-29": -1, "2026-09-30": 57})
+    assert resp.status_code == 422
+    assert _rows(unauth_client) == {}

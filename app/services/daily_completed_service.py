@@ -21,6 +21,12 @@ Idempotent by construction: every write is "set to this value".
 Unlike the schedule ingest, a non-working day is NOT rejected: a count > 0 on
 a Saturday is real QC scans (overtime), and working_days_service already treats
 a date with inspected > 0 as a working day.
+
+FEED_START_DATE (Rodolfo, 2026-09-30): dates before it are validated like any
+other (a bad value still 422s the request) but never written - the
+hand-typed drawers_inspected history up to then is kept exactly as typed, even
+though every send re-sends the trailing 7 days. They count in "received" only
+(the response keys are a fixed contract) and are noted in the SyncLog row.
 """
 
 from __future__ import annotations
@@ -35,6 +41,7 @@ from app.models import DailyProductionSummary, SyncLog
 from app.services import settings_service
 
 FEED_SHIFT = "Day"
+FEED_START_DATE = dt.date(2026, 9, 30)
 EXPECTED_SOURCE = "eagle-drawers-production-count"
 
 
@@ -118,7 +125,10 @@ def process_payload(db: Session, data: dict[str, Any]) -> dict[str, int]:
     Raises UnprocessableError before any write if the body is invalid."""
     counts = validate_payload(data)
     started = dt.datetime.now(dt.timezone.utc)
-    summary = apply_counts(db, counts)
+    kept = {d: n for d, n in counts.items() if d >= FEED_START_DATE}
+    before_start = len(counts) - len(kept)
+    summary = apply_counts(db, kept)
+    summary["received"] = len(counts)
 
     source = data.get("source") or EXPECTED_SOURCE
     station = data.get("station") or "QC_SORTING"
@@ -130,8 +140,12 @@ def process_payload(db: Session, data: dict[str, Any]) -> dict[str, int]:
             records_fetched=summary["received"],
             records_created=summary["created"],
             records_updated=summary["updated"],
-            records_skipped=summary["skipped_zero"],
-            errors=None,
+            records_skipped=summary["skipped_zero"] + before_start,
+            errors=(
+                f"{before_start} date(s) before {FEED_START_DATE} ignored (typed history kept)"
+                if before_start
+                else None
+            ),
             status="success",
         )
     )

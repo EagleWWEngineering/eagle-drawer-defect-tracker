@@ -85,8 +85,13 @@ its rows as `updated`). `sync_logs.source_url` is
 The production brief reads the fed value through the existing
 `GET /api/v1/brief/summary` with no brief-side change.
 
-**Existing data:** hand-typed `drawers_inspected` values stay. The first feed run
-overwrites the trailing 7 days; older days keep their typed history.
+**Existing data / start date (Rodolfo, 2026-09-30):** the feed never writes a
+date before `FEED_START_DATE` = **2026-09-30** (`daily_completed_service.py`).
+Such dates are still validated (a bad value still 422s the whole request), count
+in `received` only, and are noted in the `sync_logs` row ("N date(s) before
+2026-09-30 ignored"). So every hand-typed `drawers_inspected` value up to
+2026-09-29 is kept exactly as typed, even though each send re-sends the trailing
+7 days; 2026-09-30 onward comes from production count.
 
 Code: `app/services/daily_completed_service.py`, `app/routers/sync.py`.
 
