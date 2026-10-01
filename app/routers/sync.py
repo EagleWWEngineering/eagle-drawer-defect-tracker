@@ -31,6 +31,7 @@ from app.errors import ValidationError
 from app.models import SyncLog
 from app.schemas import (
     DailyCompletedIngestOut,
+    DrawerEventsIngestOut,
     ManualSyncRequestOut,
     OrderLinesIngestOut,
     RelayConnectionStatusOut,
@@ -39,6 +40,7 @@ from app.schemas import (
 )
 from app.services import (
     daily_completed_service,
+    drawer_event_service,
     order_line_service,
     schedule_service,
     sync_service,
@@ -186,6 +188,22 @@ def ingest_order_lines(
     _verify_relay_key(x_relay_key)
     summary = order_line_service.process_payload(db, payload)
     return OrderLinesIngestOut(**summary)
+
+
+@router.post("/drawer-events/ingest-raw", response_model=DrawerEventsIngestOut)
+def ingest_drawer_events(
+    payload: Any = Body(default=None),
+    x_relay_key: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> DrawerEventsIngestOut:
+    """PROJECT_SPEC_PHASE11.md: production count's drawer events. A "kickback"
+    (UNDO card) opens a Set Aside case for the drawer; a "counted" scan at any
+    station closes its open cases as Repaired. Resends are ignored per
+    (source, event_id). Same X-Relay-Key check; any malformed event -> 422,
+    nothing written. See app/services/drawer_event_service.py."""
+    _verify_relay_key(x_relay_key)
+    summary = drawer_event_service.process_payload(db, payload)
+    return DrawerEventsIngestOut(**summary)
 
 
 @router.get("/customer-issues/relay-status", response_model=RelayHeartbeatOut)

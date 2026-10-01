@@ -454,3 +454,29 @@ Replaced per order on each push; never deleted when an order is absent from a sn
 - `POST /api/v1/sync/daily-completed/ingest-raw` — `X-Relay-Key`; `{counts: {date: int}}` → `{received, updated, created, skipped_zero}`
 - `POST /api/v1/sync/order-lines/ingest-raw` — `X-Relay-Key`; `{orders: {order_no: {lines: [...]}}}` → `{orders, lines}`
 - `POST /api/v1/labels/resolve` — login; `{text}` → `{order_no, order_detail_id, unit, line_known, line_label, qty, detail}`
+
+## Phase 11: UNDO-card kickbacks (see `PROJECT_SPEC_PHASE11.md`)
+
+### DrawerEvent (`drawer_events`)
+| Field | Type | Notes |
+|---|---|---|
+| id | int | primary key |
+| source | string | sender name; unique with event_id |
+| event_id | int | production count's own scan id; unique with source |
+| event_type | string | `kickback` or `counted` |
+| area | string | `qc` or `assembly` |
+| order_no | string | from the label |
+| order_detail_id | int | indexed |
+| drawer_unit | int | unit within the line |
+| occurred_at | datetime (UTC) | when the scan happened |
+| received_at | datetime (UTC) | when this app stored it |
+| outcome | string | what this app did: `case created: DF-…`, `already open: DF-…`, `closed: DF-…`, `no open case`, `failed: …` |
+| defect_case_id | int, optional | FK the case created or closed |
+
+`defect_cases.entry_source = "undo_card"` marks a case opened by a kickback.
+App settings `undo_category_qc` / `undo_category_assembly` hold the category id
+(blank = Other).
+
+### API
+- `POST /api/v1/sync/drawer-events/ingest-raw` — `X-Relay-Key`; `{events: [...]}` → `{received, duplicates, cases_created, cases_closed, failed}`
+- `GET/PUT /api/v1/settings/undo-categories` — login; `{qc_category_id, assembly_category_id}`

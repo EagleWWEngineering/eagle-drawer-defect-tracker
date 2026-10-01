@@ -88,6 +88,19 @@ each priority):
   down a root cause on a case that's still Open without having to pick a status
   change at the same time.
 
+### Kickbacks with the UNDO card (automatic)
+
+When QC or Assembly In scans the **UNDO card** and then a drawer, that drawer
+comes off the count, and a **Set Aside** case opens for it automatically. It is
+marked **UNDO card** in the Rework Queue, with the order, line letter and drawer
+filled in, and the category set in Admin. Open the case later to describe the
+problem or add photos.
+
+When that drawer is scanned again at **any** station (without the UNDO card),
+the case closes by itself as **Closed – Repaired**. The same happens to any open
+case that was logged from a scanned drawer label. You can still close a case by
+hand at any time. This only works with the new drawer labels.
+
 ## Reviewing quality data (Manufacturing Engineer)
 
 The **Dashboard** and **Reports** screens both show:
@@ -113,6 +126,11 @@ The **Admin** screen lets you rename, reorder, and activate/deactivate stations 
 defect categories. Deactivating hides something from new-entry dropdowns without
 deleting its history — anything already referenced by a real defect case stays
 intact and visible in reports.
+
+**UNDO Card Kickbacks** (on the same screen) picks the category that kickback
+cases get, separately for QC and Assembly In. Leave it on "Other (default)" or
+pick a category you created, such as "QC Kick Back". Renaming that category later
+is fine.
 
 ## Backing up your data
 

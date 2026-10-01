@@ -765,3 +765,10 @@ canvas.chart-canvas {
   .app-header { padding: 0.5rem; }
   main { padding: 0.6rem; }
 }
+
+/* Rework queue: a case opened by an UNDO-card kickback (PROJECT_SPEC_PHASE11.md). */
+.undo-card-badge {
+  color: var(--color-warning);
+  border-color: var(--color-warning);
+  margin-top: 0.25rem;
+}

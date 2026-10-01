@@ -77,6 +77,7 @@ services:
       # Phase 10: the same key also guards /daily-completed/ingest-raw and
       # /order-lines/ingest-raw, pushed by eagle-drawers-production-count on
       # eagle-vm (which also takes over the laptop relay's feeds) - no new secret.
+      # Phase 11: and /drawer-events/ingest-raw (UNDO-card kickbacks, +1 scans).
       - key: RELAY_API_KEY
         sync: false
       # Brief Export (Part A): checked against the X-Brief-Key header on

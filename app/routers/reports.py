@@ -398,6 +398,10 @@ def get_rework_queue(
                 root_cause=c.root_cause,
                 corrective_action=c.corrective_action,
                 repair_action=c.repair_action,
+                line_label=c.line_label,
+                entry_source=c.entry_source,
+                order_detail_id=c.order_detail_id,
+                drawer_unit=c.drawer_unit,
             )
         )
     return result

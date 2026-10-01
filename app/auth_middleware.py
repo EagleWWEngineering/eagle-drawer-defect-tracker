@@ -51,6 +51,9 @@ PUBLIC_EXACT_PATHS: set[str] = {
     # Exempting these exact paths only - nothing broader.
     "/api/v1/sync/daily-completed/ingest-raw",
     "/api/v1/sync/order-lines/ingest-raw",
+    # PROJECT_SPEC_PHASE11.md: production count's drawer events (UNDO-card
+    # kickbacks, +1 scans) - same caller, same RELAY_API_KEY check.
+    "/api/v1/sync/drawer-events/ingest-raw",
     # Brief Export (Part A): the Eagle production brief's VM fetches this daily
     # (~06:15 ET) to build its drawers TV board - also an unattended,
     # machine-to-machine caller with no browser session, protected instead by its

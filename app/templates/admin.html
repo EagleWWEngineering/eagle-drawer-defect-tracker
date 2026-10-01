@@ -55,6 +55,27 @@
 </section>
 
 <section class="card">
+  <h2>UNDO Card Kickbacks</h2>
+  <p class="hint">When QC or Assembly In scans the UNDO card and then a drawer, a
+    Set Aside case is opened for that drawer automatically, and it closes as
+    Repaired the next time the drawer is scanned at any station. Pick the
+    category those cases get.</p>
+  <form id="undo-categories-form" class="filters">
+    <div class="field">
+      <label for="undo-category-qc">QC kickbacks</label>
+      <select id="undo-category-qc"></select>
+    </div>
+    <div class="field">
+      <label for="undo-category-assembly">Assembly In kickbacks</label>
+      <select id="undo-category-assembly"></select>
+    </div>
+    <div class="field">
+      <button type="submit">Save</button>
+    </div>
+  </form>
+</section>
+
+<section class="card">
   <h2>Deleted Items</h2>
   <p class="hint">Soft-deleted records only - nothing on this screen ever permanently
     removes data. Restoring a record sets its deleted flag back off, exactly as it
@@ -145,6 +166,8 @@ async function loadTables() {
   document.querySelectorAll(".favorites-only").forEach((el) => {
     el.style.display = favoritesEnabled ? "" : "none";
   });
+
+  await fillUndoCategorySelects(md.defect_categories);
 
   document.querySelectorAll(".save-row-btn").forEach((btn) => {
     btn.addEventListener("click", async () => {
@@ -257,6 +280,24 @@ async function loadSyncLog() {
   tbody.innerHTML = logs.map(syncLogRowHtml).join("") || `<tr><td colspan="7">No syncs have run yet.</td></tr>`;
 }
 
+/** UNDO Card Kickbacks: one dropdown per area, listing every category
+ * (inactive ones only if currently chosen). Blank = the built-in Other. */
+async function fillUndoCategorySelects(categories) {
+  const current = await Api.get("/api/v1/settings/undo-categories");
+  const fill = (selectId, selectedId) => {
+    const options = categories
+      .filter((c) => c.active || c.id === selectedId)
+      .map(
+        (c) =>
+          `<option value="${c.id}"${c.id === selectedId ? " selected" : ""}>${escapeHtml(c.name)}${c.active ? "" : " (inactive)"}</option>`
+      );
+    document.getElementById(selectId).innerHTML =
+      `<option value="">Other (default)</option>` + options.join("");
+  };
+  fill("undo-category-qc", current.qc_category_id);
+  fill("undo-category-assembly", current.assembly_category_id);
+}
+
 async function loadCostSettings() {
   const settings = await Api.getCostPerDrawer();
   document.getElementById("cost-per-drawer-input").value = settings.cost_per_drawer;
@@ -279,6 +320,23 @@ document.addEventListener("DOMContentLoaded", async () => {
     try {
       const updated = await Api.updateCostPerDrawer(value);
       showToast(`Saved: $${updated.cost_per_drawer.toFixed(2)}/drawer.`, "success");
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  });
+
+  document.getElementById("undo-categories-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const idOf = (selectId) => {
+      const value = document.getElementById(selectId).value;
+      return value ? Number(value) : null;
+    };
+    try {
+      await Api.put("/api/v1/settings/undo-categories", {
+        qc_category_id: idOf("undo-category-qc"),
+        assembly_category_id: idOf("undo-category-assembly"),
+      });
+      showToast("Kickback categories saved.", "success");
     } catch (err) {
       showToast(err.message, "error");
     }

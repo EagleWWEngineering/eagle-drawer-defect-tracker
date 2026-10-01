@@ -447,6 +447,17 @@ class OrderLinesIngestOut(BaseModel):
     lines: int
 
 
+class DrawerEventsIngestOut(BaseModel):
+    """POST /api/v1/sync/drawer-events/ingest-raw response (PROJECT_SPEC_PHASE11.md).
+    Contract with production count; don't rename keys."""
+
+    received: int
+    duplicates: int
+    cases_created: int
+    cases_closed: int
+    failed: int
+
+
 class LabelResolveIn(BaseModel):
     """The raw decoded QR text from a drawer label."""
 
@@ -668,6 +679,12 @@ class ReworkQueueItemOut(BaseModel):
     root_cause: str | None
     corrective_action: str | None
     repair_action: str | None
+    # PROJECT_SPEC_PHASE11.md: "undo_card" marks a case opened by an UNDO-card
+    # kickback (no details entered yet); line/drawer come from the label.
+    line_label: str | None = None
+    entry_source: str | None = None
+    order_detail_id: int | None = None
+    drawer_unit: int | None = None
 
     @computed_field
     @property
@@ -844,6 +861,14 @@ class CostSettingsOut(BaseModel):
 
 class CostSettingsUpdate(BaseModel):
     cost_per_drawer: float = Field(gt=0)
+
+
+class UndoCategorySettings(BaseModel):
+    """PROJECT_SPEC_PHASE11.md: the defect category an UNDO-card kickback case
+    gets at QC and at Assembly. None = the built-in Other category."""
+
+    qc_category_id: int | None = None
+    assembly_category_id: int | None = None
 
 
 # ---------------------------------------------------------------------------

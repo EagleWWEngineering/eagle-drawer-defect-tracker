@@ -287,6 +287,34 @@ class OrderLine(Base):
     received_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class DrawerEvent(Base):
+    """One drawer scan event pushed by eagle-drawers-production-count
+    (PROJECT_SPEC_PHASE11.md): a "kickback" (the UNDO card took the drawer off
+    a station's count -> a Set Aside case is opened) or "counted" (the drawer
+    got a +1 at a station -> its open cases close as Repaired).
+
+    Every received event is kept, keyed by (source, event_id) - production
+    count's own scan id - so a resend is never applied twice. `outcome` is what
+    this app did with it, for the audit trail.
+    """
+
+    __tablename__ = "drawer_events"
+    __table_args__ = (UniqueConstraint("source", "event_id", name="uq_drawer_event_source_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    event_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    area: Mapped[str] = mapped_column(String(20), nullable=False)
+    order_no: Mapped[str] = mapped_column(String(20), nullable=False)
+    order_detail_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    drawer_unit: Mapped[int] = mapped_column(Integer, nullable=False)
+    occurred_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    received_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(255), nullable=False)
+    defect_case_id: Mapped[int | None] = mapped_column(ForeignKey("defect_cases.id"), nullable=True)
+
+
 class DefectItem(Base):
     """One category on one case, with the affected drawer quantity for that category."""
 

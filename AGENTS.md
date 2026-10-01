@@ -47,6 +47,16 @@ parsed only in `app/services/label_service.py` (`/api/v1/labels/resolve`), never
 in JS; `order_lines` (pushed hourly to `/api/v1/sync/order-lines/ingest-raw`) is
 replaced per order and never deleted for an order missing from a snapshot.
 
+UNDO-card kickbacks (`docs/PROJECT_SPEC_PHASE11.md`): production count pushes
+drawer events to `/api/v1/sync/drawer-events/ingest-raw`
+(`app/services/drawer_event_service.py`). A `kickback` opens a Set Aside case
+(`entry_source="undo_card"`), and a `counted` scan at any station closes the
+drawer's open cases logged before it as Closed - Repaired. Matching is only by
+`(order_detail_id, drawer_unit)`, and resends are ignored per `(source, event_id)`.
+The kickback category is an Admin setting that stores the category id (default:
+Other, found by seed_key). Never create, rename or seed categories in code for
+this.
+
 ## What this is
 
 A local FastAPI + SQLite app for tracking drawer defects at Eagle Woodworking's

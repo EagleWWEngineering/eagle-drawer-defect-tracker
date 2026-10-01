@@ -1,6 +1,7 @@
-"""Generic app_settings key-value store (Phase 4). Currently just cost_per_drawer,
-but reads/writes go through here rather than directly against the model so a
-future setting doesn't need bespoke plumbing.
+"""Generic app_settings key-value store (Phase 4): cost_per_drawer, plus the
+Phase 11 UNDO-card kickback categories. Reads/writes go through here rather
+than directly against the model so a future setting doesn't need bespoke
+plumbing.
 
 Historical note: DailyProductionSummary.cost_per_drawer_at_time snapshots
 whatever get_cost_per_drawer() returns at save time (see
@@ -15,7 +16,7 @@ import decimal
 from sqlalchemy.orm import Session
 
 from app.errors import ValidationError
-from app.models import AppSetting
+from app.models import AppSetting, DefectCategory
 from app.seed_data import COST_PER_DRAWER_SETTING_KEY
 
 DEFAULT_FALLBACK_COST_PER_DRAWER = decimal.Decimal("35.00")
@@ -45,3 +46,39 @@ def set_cost_per_drawer(db: Session, value: decimal.Decimal) -> decimal.Decimal:
     db.commit()
     db.refresh(setting)
     return decimal.Decimal(setting.value)
+
+
+# PROJECT_SPEC_PHASE11.md: which defect category an UNDO-card kickback case
+# gets, per area ("qc" / "assembly"). Stores the category's id, so renaming it
+# in Admin never breaks the link. Unset (or pointing at a category that no
+# longer exists) -> the built-in Other category - see drawer_event_service.
+UNDO_CATEGORY_SETTING_KEYS: dict[str, str] = {
+    "qc": "undo_category_qc",
+    "assembly": "undo_category_assembly",
+}
+
+
+def get_undo_category_id(db: Session, area: str) -> int | None:
+    setting = db.get(AppSetting, UNDO_CATEGORY_SETTING_KEYS[area])
+    if setting is None or not setting.value:
+        return None
+    return int(setting.value)
+
+
+def set_undo_category_ids(db: Session, ids: dict[str, int | None]) -> dict[str, int | None]:
+    """Save both areas at once. None clears an area back to the default."""
+    for area, category_id in ids.items():
+        if category_id is not None and db.get(DefectCategory, category_id) is None:
+            raise ValidationError(
+                f"Defect category {category_id} doesn't exist.", field=f"{area}_category_id"
+            )
+    for area, category_id in ids.items():
+        key = UNDO_CATEGORY_SETTING_KEYS[area]
+        value = str(category_id) if category_id is not None else ""
+        setting = db.get(AppSetting, key)
+        if setting is None:
+            db.add(AppSetting(key=key, value=value))
+        else:
+            setting.value = value
+    db.commit()
+    return {area: get_undo_category_id(db, area) for area in UNDO_CATEGORY_SETTING_KEYS}

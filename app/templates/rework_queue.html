@@ -103,8 +103,8 @@ function rowHtml(item) {
   return `<tr>
     <td class="row-check-cell"><input type="checkbox" class="row-check" data-id="${item.id}" aria-label="Select ${escapeHtml(item.case_number)}"></td>
     <td><a href="#" data-case="${item.id}">${escapeHtml(item.case_number)}</a></td>
-    <td>${escapeHtml(item.work_order_number)}</td>
-    <td>${item.categories.map(escapeHtml).join(", ")}</td>
+    <td>${escapeHtml(item.work_order_number)}${item.line_label ? ` / ${escapeHtml(item.line_label)}` : ""}${item.order_detail_id ? `<br><span class="hint">Drawer ${item.order_detail_id}-${item.drawer_unit}</span>` : ""}</td>
+    <td>${item.categories.map(escapeHtml).join(", ")}${item.entry_source === "undo_card" ? `<br><span class="badge undo-card-badge">UNDO card</span>` : ""}</td>
     <td>${priorityBadge(item.priority)}</td>
     <td>${statusBadge(item.status)}</td>
     <td>${escapeHtml(item.found_station_name)} / ${escapeHtml(item.possible_source_station_name || "unknown")}</td>
