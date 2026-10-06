@@ -48,7 +48,15 @@ def resolve_label(db: Session, text: str | None) -> dict:
     detail. line_known False means: fill the order number only and leave the
     A-Z line picker to the operator, exactly as for an order-only label."""
     parsed = parse_label_text(text)
-    result = {**parsed, "line_known": False, "line_label": None, "qty": None, "detail": None}
+    result = {
+        **parsed,
+        "line_known": False,
+        "line_label": None,
+        "qty": None,
+        "detail": None,
+        "customer_name": order_line_service.customer_of(db, parsed["order_no"]),
+        "spec": None,
+    }
     if parsed["order_detail_id"] is None:
         return result
     row = order_line_service.get_line(db, parsed["order_detail_id"])
@@ -61,5 +69,6 @@ def resolve_label(db: Session, text: str | None) -> dict:
         line_label=row.line,
         qty=row.qty,
         detail=order_line_service.detail_of(row),
+        spec=order_line_service.format_spec(order_line_service.detail_of(row)),
     )
     return result

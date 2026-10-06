@@ -296,6 +296,18 @@ label {
   margin-bottom: 0.35rem;
 }
 
+/* New Defect / Daily Summary: one label style for every form section. */
+#defect-form .field > label:not(.leave-open-label),
+#defect-form .field > label[for] {
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 0.4rem;
+}
+#defect-form .field { margin-bottom: 1.15rem; }
+
 .hint {
   font-weight: 400;
   color: var(--muted);

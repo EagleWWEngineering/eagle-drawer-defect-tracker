@@ -20,6 +20,7 @@ from app.dependencies import get_actor_role, get_db
 from app.errors import ValidationError
 from app.models import DefectCase, DefectItem, DefectPhoto
 from app.schemas import (
+    AddDefectIn,
     BulkActionOut,
     BulkIdsIn,
     DefectCaseCreate,
@@ -30,6 +31,7 @@ from app.schemas import (
     DefectItemIn,
     DefectItemUpdate,
     DefectPhotoOut,
+    OpenCaseBriefOut,
     WorkOrderLastStationOut,
     defect_case_to_out,
 )
@@ -179,6 +181,70 @@ def get_last_station_for_work_order(
         found_station_id=case.found_station_id,
         found_station_name=case.found_station.name,
     )
+
+
+@router.get("/open-for-drawer", response_model=list[OpenCaseBriefOut])
+def list_open_cases_for_drawer(
+    db: Session = Depends(get_db),
+    order_detail_id: int | None = None,
+    unit: int | None = None,
+    work_order_number: str | None = None,
+) -> list[OpenCaseBriefOut]:
+    """Open cases on one drawer (order_detail_id + unit) or, without a drawer, on a
+    whole work order - New Defect's "this drawer already has an open case" check."""
+    cases = defect_service.open_cases_for_drawer(
+        db,
+        order_detail_id=order_detail_id,
+        drawer_unit=unit,
+        work_order_number=work_order_number,
+    )
+    return [
+        OpenCaseBriefOut(
+            id=c.id,
+            case_number=c.case_number,
+            categories=[i.defect_category.name for i in c.items],
+            status=c.status,
+            entry_source=c.entry_source,
+            found_station_name=c.found_station.name,
+            detected_at=c.detected_at,
+            line_label=c.line_label,
+        )
+        for c in cases
+    ]
+
+
+@router.post("/{case_id}/add-defect", response_model=DefectCaseOut)
+def add_defect_to_case(
+    case_id: int,
+    payload: AddDefectIn,
+    db: Session = Depends(get_db),
+    actor_role: str = Depends(get_actor_role),
+) -> DefectCaseOut:
+    """New Defect's "Add to that case": the new defect goes on the drawer's open
+    case instead of a second case (defect_service.add_defects_to_case)."""
+    case = defect_service.get_case_or_404(db, case_id)
+    before = defect_case_to_out(case).model_dump(mode="json")
+    case = defect_service.add_defects_to_case(
+        db,
+        case,
+        items=[i.model_dump() for i in payload.items],
+        notes=payload.notes,
+        priority=payload.priority,
+        instant_close_outcome=payload.instant_close_outcome,
+        repair_action=payload.repair_action,
+    )
+    db.refresh(case)
+    audit_service.record(
+        db,
+        actor_role=actor_role,
+        action="add_defect",
+        entity_type="DefectCase",
+        entity_id=case.case_number,
+        inputs=payload.model_dump(),
+        before=before,
+        after=defect_case_to_out(case).model_dump(mode="json"),
+    )
+    return defect_case_to_out(case)
 
 
 @router.get("/by-number/{case_number}", response_model=DefectCaseOut)

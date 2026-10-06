@@ -656,6 +656,109 @@ def update_case_status(
     return case
 
 
+def open_cases_for_drawer(
+    db: Session,
+    *,
+    order_detail_id: int | None = None,
+    drawer_unit: int | None = None,
+    work_order_number: str | None = None,
+) -> list[DefectCase]:
+    """Open (not deleted) cases on one drawer, or on a whole work order when no
+    drawer is given - what New Defect warns about before a second case is opened
+    for the same drawer (2026-10 redesign)."""
+    query = db.query(DefectCase).filter(
+        DefectCase.is_deleted.is_(False), DefectCase.status.in_(DIRECT_CLOSE_SOURCE_STATUSES)
+    )
+    if order_detail_id is not None and drawer_unit is not None:
+        query = query.filter(
+            DefectCase.order_detail_id == order_detail_id, DefectCase.drawer_unit == drawer_unit
+        )
+    elif work_order_number:
+        query = query.filter(DefectCase.work_order_number == work_order_number)
+    else:
+        raise ValidationError("Give a drawer (order_detail_id + unit) or a work order number.")
+    return query.order_by(DefectCase.detected_at).all()
+
+
+def add_defects_to_case(
+    db: Session,
+    case: DefectCase,
+    *,
+    items: list[dict],
+    notes: str | None = None,
+    priority: str | None = None,
+    instant_close_outcome: str | None = None,
+    repair_action: str | None = None,
+) -> DefectCase:
+    """New Defect's "Add to that case" (2026-10 redesign): the drawer already has an
+    open case, so the newly found defect goes on it instead of a second case - the
+    reinspection rule (CLAUDE.md: reinspecting an unresolved defect updates the
+    existing case, never a duplicate).
+
+    - every category is added next to what is already there (merged into the same
+      category if present). An UNDO card's "QC kickback" category stays: Rodolfo,
+      10-06 - it records that the drawer was kicked back, the new one says why;
+    - notes are appended; priority only ever goes UP (Normal -> High -> Urgent);
+    - fixed on the spot (instant_close_outcome) closes it through the normal
+      status map, with the repair action, exactly like a new case would.
+    """
+    _require_open_for_item_edit(case)
+    if not items:
+        raise ValidationError("Pick at least one defect category.", field="items")
+    if priority is not None and priority not in VALID_PRIORITIES:
+        raise ValidationError(f"Priority must be one of {VALID_PRIORITIES}.", field="priority")
+    if instant_close_outcome is not None and instant_close_outcome not in INSTANT_CLOSE_OUTCOMES:
+        raise ValidationError(
+            f"Outcome must be one of {sorted(INSTANT_CLOSE_OUTCOMES)}.",
+            field="instant_close_outcome",
+        )
+    if instant_close_outcome is not None and not (repair_action or "").strip():
+        raise ValidationError("Say what was done to fix it.", field="repair_action")
+
+    for item in items:
+        add_or_merge_item(
+            db,
+            case,
+            defect_category_id=item["defect_category_id"],
+            affected_drawer_quantity=item.get("affected_drawer_quantity", 1),
+            notes=item.get("notes"),
+        )
+    db.refresh(case)
+
+    if notes and notes.strip():
+        case.notes = f"{case.notes}; {notes.strip()}" if case.notes else notes.strip()
+    if priority is not None and VALID_PRIORITIES.index(priority) < VALID_PRIORITIES.index(
+        case.priority
+    ):
+        case.priority = priority
+    added = ", ".join(
+        i.defect_category.name
+        for i in case.items
+        if i.defect_category_id in {item["defect_category_id"] for item in items}
+    )
+    if instant_close_outcome is None:
+        db.add(
+            StatusHistory(
+                defect_case_id=case.id,
+                from_status=case.status,
+                to_status=case.status,
+                note=f"Defect added from New Defect: {added}",
+            )
+        )
+        db.commit()
+        db.refresh(case)
+        return case
+
+    db.commit()
+    return update_case_status(
+        db,
+        case,
+        new_status=INSTANT_CLOSE_OUTCOMES[instant_close_outcome],
+        repair_action=repair_action.strip(),
+        note=f"Defect added from New Defect and fixed on the spot: {added}",
+    )
+
+
 def soft_delete_case(db: Session, case: DefectCase) -> DefectCase:
     case.is_deleted = True
     db.commit()

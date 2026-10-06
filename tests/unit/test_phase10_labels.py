@@ -79,8 +79,11 @@ def test_defect_entry_resolves_labels_server_side_and_sends_drawer_identity():
     assert "onQrText" in DEFECT_ENTRY_HTML
     assert "currentDrawerIdentity()" in DEFECT_ENTRY_HTML
     assert 'id="scanned-drawer"' in DEFECT_ENTRY_HTML
-    # The permanent A-Z picker is still there for unknown/order-only labels.
-    assert 'id="line-label-picker"' in DEFECT_ENTRY_HTML
+    # 2026-10 redesign: no letter picker and no typed line - the line comes only
+    # from the label; an order-only label or a typed work order saves no line.
+    assert 'id="line-label-picker"' not in DEFECT_ENTRY_HTML
+    assert 'type="hidden" id="line_label"' in DEFECT_ENTRY_HTML
+    assert "possible_source_station_id" not in DEFECT_ENTRY_HTML
 
 
 # ---------------------------------------------------------------------------

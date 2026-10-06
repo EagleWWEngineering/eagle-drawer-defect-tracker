@@ -124,6 +124,34 @@ class DefectItemIn(BaseModel):
     notes: str | None = None
 
 
+class AddDefectIn(BaseModel):
+    """New Defect's "Add to that case" (defect_service.add_defects_to_case)."""
+
+    items: list[DefectItemIn] = Field(min_length=1)
+    notes: str | None = None
+    priority: str | None = None
+    instant_close_outcome: str | None = None
+    repair_action: str | None = None
+
+
+class OpenCaseBriefOut(BaseModel):
+    """One open case on a drawer / work order, for New Defect's duplicate warning."""
+
+    id: int
+    case_number: str
+    categories: list[str]
+    status: str
+    entry_source: str | None
+    found_station_name: str
+    detected_at: dt.datetime
+    line_label: str | None
+
+    @computed_field
+    @property
+    def detected_at_local(self) -> str | None:
+        return to_display_string(self.detected_at)
+
+
 class DefectItemUpdate(BaseModel):
     """Partial edit of one existing DefectItem (Phase 2 - child-collection edit,
     not a scalar case field). Both fields optional/independent: quantity and
@@ -477,6 +505,9 @@ class LabelResolveOut(BaseModel):
     line_label: str | None
     qty: int | None
     detail: dict | None
+    # 2026-10 redesign: shown on New Defect's scanned-drawer card.
+    customer_name: str | None = None
+    spec: str | None = None
 
 
 class DailySummarySuggestionOut(BaseModel):

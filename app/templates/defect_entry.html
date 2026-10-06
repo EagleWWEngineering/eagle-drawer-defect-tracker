@@ -3,40 +3,35 @@
 {% block page_name %}defect_entry{% endblock %}
 
 {% block content %}
-<h1 class="page-title">New Defect</h1>
+<div class="page-head">
+  <h1 class="page-title">New Defect</h1>
+</div>
 
 <div id="save-flash" class="save-flash" style="display:none;" role="status" aria-live="polite"></div>
 
 <form id="defect-form" class="card">
   <div class="field">
-    <label for="work_order_number">Work order number</label>
+    <label for="work_order_number" class="field-label">Work order <span class="hint">· scan the drawer label</span></label>
     <div style="display:flex; gap:0.5rem; align-items:center;">
-      <input type="text" id="work_order_number" name="work_order_number" required autocomplete="off" list="recent-work-orders" style="flex:1;">
+      <input type="text" id="work_order_number" name="work_order_number" required autocomplete="off" list="recent-work-orders" style="flex:1; font-family:var(--display); font-size:1.4rem; font-weight:700;" placeholder="Scan the label, or type the work order">
       <button type="button" id="scan-label-btn" class="secondary">📷 Scan label</button>
     </div>
-    <p class="hint">Scans the QR code on the label to fill this field.</p>
     <datalist id="recent-work-orders"></datalist>
-  </div>
-
-  <div class="field">
-    <label for="line_label">Line <span class="hint">(optional — work order line, e.g. E)</span></label>
-    <input type="text" id="line_label" name="line_label" maxlength="2" style="text-transform:uppercase; max-width:6ch;">
-    <p class="hint">Tap the work order line, or type it.</p>
-    <!-- Permanent letter picker (PROJECT_SPEC_PHASE9.md Part 2) - always
-         visible, independent of scanning. Tapping a letter fills the Line
-         input; tapping the selected letter again clears it. Typing stays in
-         sync (see syncLineLabelPickerHighlight below) - this is also how the
-         rare two-letter labels (AA-ZZ) are entered, by typing. -->
-    <div id="line-label-picker" class="letter-picker-grid" role="group" aria-label="Line letter picker"></div>
-    <!-- PROJECT_SPEC_PHASE10.md Part 2: after scanning a unique-ID drawer
-         label, the drawer's details (size, wood...) show here so the
-         operator can confirm it's the right drawer. Hidden otherwise. -->
-    <div id="scanned-drawer" class="card" style="display:none; margin-top:0.5rem; padding:0.6rem 0.8rem; background:#f8f9fb;" role="status" aria-live="polite"></div>
+    <!-- 2026-10 redesign: the line comes only from a drawer label (its
+         order_detail_id, via production count's order lines) - there is no
+         letter picker and no typing. A typed work order is saved with no line. -->
+    <input type="hidden" id="line_label" name="line_label">
+    <!-- The scanned drawer (WO, line, customer, size/options) so the operator can
+         check it is the drawer in front of them. -->
+    <div id="scanned-drawer" style="margin-top:0.6rem;" role="status" aria-live="polite" hidden></div>
+    <!-- "This drawer already has an open case" (or, for a typed work order, how
+         many open cases it has). -->
+    <div id="open-case-warning" style="margin-top:0.6rem;" role="alert" hidden></div>
   </div>
 
   <div class="filters">
     <div class="field">
-      <label for="production_date">Production date <span class="hint">(defaults to today; pick an earlier date for paper-log entry)</span></label>
+      <label for="production_date">Production date <span class="hint">(today; pick an earlier day for a paper log)</span></label>
       <input type="date" id="production_date" name="production_date" required>
     </div>
     <div class="field">
@@ -66,13 +61,6 @@
     <div id="found-station-common" class="button-grid" role="group" aria-label="Common found stations"></div>
     <div id="found-station-all" class="button-grid" role="group" aria-label="All found stations" style="display:none;"></div>
     <button type="button" id="found-station-more-btn" class="secondary">More stations...</button>
-  </div>
-
-  <div class="field">
-    <label>Possible source station <span class="hint">(optional — where do you think it came from? a hypothesis, not a confirmed root cause)</span></label>
-    <div id="source-station-common" class="button-grid" role="group" aria-label="Common possible source stations"></div>
-    <div id="source-station-all" class="button-grid" role="group" aria-label="All possible source stations" style="display:none;"></div>
-    <button type="button" id="source-station-more-btn" class="secondary">More stations...</button>
   </div>
 
   <div class="field">
@@ -203,7 +191,6 @@ let recentWorkOrders = [];
 
 let selectedCategoryIds = new Set();
 let selectedFoundStationId = null;
-let selectedSourceStationId = null;
 let selectedDisposition = DISPOSITION_PRIMARY; // Rework pre-selected by default
 let selectedPriority = "Normal";
 let selectedAmPm = "AM";
@@ -225,6 +212,10 @@ let lineEntrySource = "manual";
 // order number still matches it - see currentDrawerIdentity().
 let scannedDrawer = null;
 let scanController = null;
+// The open case this entry will be ADDED to instead of creating a new case - set
+// by "Add to that case" on the duplicate warning, cleared by "Log a new defect
+// anyway" / a different work order / the next entry.
+let addToCase = null;
 
 function dispositionSupportsInstantClose(disposition) {
   return INSTANT_CLOSE_DISPOSITIONS.has(disposition);
@@ -398,9 +389,6 @@ async function maybePrefillStationFromWorkOrder() {
 function renderFoundStations() {
   renderStationGroup("found-station-common", "found-station-all", selectedFoundStationId);
 }
-function renderSourceStations() {
-  renderStationGroup("source-station-common", "source-station-all", selectedSourceStationId);
-}
 
 /** Phase 3: the "common" quick-pick tier both Found Station and Possible
  * Source already had (vs. the "More stations..." full list below) is sourced
@@ -450,76 +438,110 @@ function wireStationGroup(commonId, allId, moreBtnId, onSelect) {
 }
 
 // ---------------------------------------------------------------------------
-// Line letter picker (PROJECT_SPEC_PHASE9.md Part 2) - a permanent part of
-// the New Defect form, independent of scanning: A-Z buttons directly under
-// the Line input. Tapping a letter fills the input; tapping the currently
-// selected letter again clears it. Typing and tapping stay in sync -
-// syncLineLabelPickerHighlight() highlights whichever button matches the
-// input's current value (none, for a two-letter value like "AB" - those are
-// only ever typed).
-// ---------------------------------------------------------------------------
-
-const LINE_LABEL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
-
-function renderLineLabelPicker() {
-  document.getElementById("line-label-picker").innerHTML = LINE_LABEL_ALPHABET.map(
-    (letter) => `<button type="button" class="letter-picker-btn" data-letter="${letter}">${letter}</button>`
-  ).join("");
-}
-
-function syncLineLabelPickerHighlight() {
-  const value = document.getElementById("line_label").value.trim().toUpperCase();
-  document.querySelectorAll("#line-label-picker .letter-picker-btn").forEach((btn) => {
-    const isSelected = btn.dataset.letter === value;
-    btn.classList.toggle("selected", isSelected);
-    btn.setAttribute("aria-pressed", String(isSelected));
-  });
-}
-
-function handleLineLabelPickerClick(e) {
-  const btn = e.target.closest(".letter-picker-btn");
-  if (!btn) return;
-  const input = document.getElementById("line_label");
-  const letter = btn.dataset.letter;
-  // Tapping the already-selected letter clears it - a mistaken tap is one
-  // tap to undo.
-  input.value = input.value.trim().toUpperCase() === letter ? "" : letter;
-  markLineEditedByHand();
-  syncLineLabelPickerHighlight();
-}
-
-/** A hand change to a scan-filled Line field is recorded as "scanned_edited". */
-function markLineEditedByHand() {
-  if (lineEntrySource === "scanned") lineEntrySource = "scanned_edited";
-}
-
-// ---------------------------------------------------------------------------
 // Scanned drawer identity (PROJECT_SPEC_PHASE10.md Part 2)
 // ---------------------------------------------------------------------------
 
 function renderScannedDrawer() {
   const el = document.getElementById("scanned-drawer");
-  if (!scannedDrawer || scannedDrawer.order_detail_id === null) {
-    el.style.display = "none";
+  if (!scannedDrawer) {
+    el.hidden = true;
     el.innerHTML = "";
     return;
   }
   const d = scannedDrawer;
-  const unitText = d.qty ? `drawer ${d.unit} of ${d.qty}` : `drawer ${d.unit}`;
-  let html = `<strong>Order ${escapeHtml(d.order_no)}`;
+  const hasDrawer = d.order_detail_id !== null;
+  const unitText = !hasDrawer ? "" : d.qty ? `drawer ${d.unit} of ${d.qty}` : `drawer ${d.unit}`;
+  let spec;
   if (d.line_known) {
-    html += ` · Line ${escapeHtml(d.line_label)} · ${unitText}</strong>`;
-    const parts = Object.entries(d.detail || {})
-      .filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== "")
-      .map(([key, value]) => `${escapeHtml(key)}: ${escapeHtml(String(value))}`);
-    if (parts.length) html += `<div>${parts.join(" · ")}</div>`;
-    html += `<div class="hint">Check this matches the drawer in front of you.</div>`;
+    spec = d.spec ? escapeHtml(d.spec) : '<span class="hint">No size on file for this line.</span>';
+  } else if (hasDrawer) {
+    spec = '<span class="fc-missing">This drawer\'s line hasn\'t arrived from production count yet. It will be filled in later.</span>';
   } else {
-    html += ` · ${unitText}</strong>`;
-    html += `<div class="hint">Line details for this drawer haven't arrived yet - tap its line above.</div>`;
+    spec = '<span class="fc-missing">Old label with no drawer ID: saved on the work order, no line.</span>';
   }
-  el.innerHTML = html;
-  el.style.display = "block";
+  el.innerHTML = `<div class="floor-card">
+    <div class="stripe good" aria-hidden="true"></div>
+    <div class="fc-main">
+      <div class="fc-top">
+        <span class="fc-wo">WO ${escapeHtml(d.order_no)}</span>
+        ${d.line_known ? `<span class="fc-line">Line ${escapeHtml(d.line_label)}</span>` : ""}
+        ${d.customer_name ? `<span class="fc-cust">${escapeHtml(d.customer_name)}</span>` : ""}
+      </div>
+      <div class="fc-spec">${spec}</div>
+      <div class="fc-meta">${unitText ? `<span>${escapeHtml(unitText)}</span>` : ""}<span>Check this is the drawer in front of you.</span></div>
+    </div>
+    <div class="fc-side"><span class="tag tag-qc">✓ Label read</span></div>
+  </div>`;
+  el.hidden = false;
+}
+
+// ---------------------------------------------------------------------------
+// "This drawer already has an open case" (2026-10 redesign)
+// ---------------------------------------------------------------------------
+
+function clearOpenCaseWarning() {
+  addToCase = null;
+  const el = document.getElementById("open-case-warning");
+  el.hidden = true;
+  el.innerHTML = "";
+  renderSaveLabels();
+}
+
+function openCaseLine(c) {
+  const kick = c.entry_source === "undo_card" ? " · Kickback" : "";
+  return `${escapeHtml(c.case_number)} · ${c.categories.map(escapeHtml).join(", ")}${kick} · found at ${escapeHtml(c.found_station_name)} · ${escapeHtml(c.detected_at_local || "")}`;
+}
+
+function renderSaveLabels() {
+  const withPhoto = document.getElementById("save-with-photo-btn");
+  const without = document.getElementById("save-btn");
+  if (!withPhoto || !without) return;
+  withPhoto.textContent = addToCase ? `📷 Add to ${addToCase.case_number} with photo` : "📷 Save with photo";
+  without.textContent = addToCase ? `Add to ${addToCase.case_number} without photo` : "Save without photo";
+}
+
+function renderOpenCaseWarning(rows, { drawer }) {
+  const el = document.getElementById("open-case-warning");
+  if (!rows.length) {
+    clearOpenCaseWarning();
+    return;
+  }
+  if (!drawer) {
+    // A typed work order: we can't tell which drawer, so just say so.
+    el.innerHTML = `<div class="alert-panel"><div><b>This work order has ${rows.length} open case${rows.length === 1 ? "" : "s"}.</b> ${rows.map(openCaseLine).join("<br>")}</div></div>`;
+    el.hidden = false;
+    return;
+  }
+  const c = rows[0];
+  if (addToCase && addToCase.id === c.id) {
+    el.innerHTML = `<div class="alert-panel"><div><b>Adding to ${escapeHtml(c.case_number)}.</b> Saving puts this defect on that case, next to what is already there.</div>
+      <div class="btn-row"><button type="button" id="open-case-new">Log a new case instead</button></div></div>`;
+  } else {
+    el.innerHTML = `<div class="alert-panel"><div><b>This drawer already has an open case.</b> ${openCaseLine(c)}</div>
+      <div class="btn-row"><button type="button" id="open-case-add">Add to that case</button><button type="button" id="open-case-new">Log a new defect anyway</button></div></div>`;
+  }
+  el.hidden = false;
+  const addBtn = document.getElementById("open-case-add");
+  if (addBtn) addBtn.addEventListener("click", () => { addToCase = c; renderOpenCaseWarning(rows, { drawer }); renderSaveLabels(); });
+  document.getElementById("open-case-new").addEventListener("click", () => clearOpenCaseWarning());
+}
+
+async function checkOpenCases() {
+  clearOpenCaseWarning();
+  const wo = document.getElementById("work_order_number").value.trim();
+  if (!wo) return;
+  const identity = currentDrawerIdentity();
+  const drawer = identity.order_detail_id !== null;
+  try {
+    const rows = await Api.get(
+      "/api/v1/defect-cases/open-for-drawer",
+      drawer ? { order_detail_id: identity.order_detail_id, unit: identity.drawer_unit } : { work_order_number: wo }
+    );
+    if (document.getElementById("work_order_number").value.trim() !== wo) return; // changed meanwhile
+    renderOpenCaseWarning(rows, { drawer });
+  } catch (err) {
+    // A convenience check - never block entry over it.
+  }
 }
 
 function clearScannedDrawer() {
@@ -562,14 +584,14 @@ async function resolveScannedLabel(text) {
     lineEntrySource = "scanned";
     setScanStatus(`Order ${result.order_no}, line ${result.line_label} found.`, false);
   } else {
-    // Unknown order_detail_id or an old order-only label: order number only,
-    // the line stays the operator's to pick - exactly as before.
+    // Unknown order_detail_id or an old order-only label: the order only, no line
+    // (there is no letter picker any more - 2026-10 redesign).
     lineInput.value = "";
     lineEntrySource = "manual";
-    setScanStatus(`Order ${result.order_no} found. Tap the line.`, false);
+    setScanStatus(`Order ${result.order_no} found.`, false);
   }
-  syncLineLabelPickerHighlight();
   renderScannedDrawer();
+  await checkOpenCases();
 }
 
 // ---------------------------------------------------------------------------
@@ -665,7 +687,6 @@ function collectPayload() {
     ...currentDrawerIdentity(),
     drawer_part_reference: document.getElementById("drawer_part_reference").value || null,
     found_station_id: selectedFoundStationId,
-    possible_source_station_id: selectedSourceStationId,
     priority: selectedPriority,
     items: Array.from(selectedCategoryIds).map((id) => ({
       defect_category_id: id,
@@ -748,7 +769,6 @@ function addSessionLogRow(created, hasPhoto) {
 function resetFormForNextEntry() {
   selectedCategoryIds = new Set();
   selectedFoundStationId = null;
-  selectedSourceStationId = null;
   selectedDisposition = DISPOSITION_PRIMARY;
   selectedPriority = "Normal";
   leaveOpen = false;
@@ -758,14 +778,13 @@ function resetFormForNextEntry() {
   document.getElementById("line_label").value = "";
   lineEntrySource = "manual";
   clearScannedDrawer();
-  syncLineLabelPickerHighlight();
+  clearOpenCaseWarning();
   document.getElementById("drawer_part_reference").value = "";
   document.getElementById("notes").value = "";
   document.getElementById("repair-preset-other-text").value = "";
   setDetectedTimeToNow();
   renderCategoryGrid();
   renderFoundStations();
-  renderSourceStations();
   renderDispositionButtons();
   renderResolutionFields();
   renderPriorityButtons();
@@ -798,10 +817,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   wireStationGroup("found-station-common", "found-station-all", "found-station-more-btn", (id) => {
     selectedFoundStationId = selectedFoundStationId === id ? null : id;
     renderFoundStations();
-  });
-  wireStationGroup("source-station-common", "source-station-all", "source-station-more-btn", (id) => {
-    selectedSourceStationId = selectedSourceStationId === id ? null : id;
-    renderSourceStations();
   });
 
   function handleCategoryTap(e) {
@@ -882,19 +897,31 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   document.getElementById("work_order_number").addEventListener("blur", maybePrefillStationFromWorkOrder);
 
-  // Permanent line letter picker (PROJECT_SPEC_PHASE9.md Part 2) - typing and
-  // tapping stay in sync.
-  renderLineLabelPicker();
-  document.getElementById("line-label-picker").addEventListener("click", handleLineLabelPickerClick);
-  document.getElementById("line_label").addEventListener("input", () => {
-    markLineEditedByHand();
-    syncLineLabelPickerHighlight();
-  });
   // A different order typed over a scanned one is a different drawer - drop
-  // the scanned identity and its details panel.
-  document.getElementById("work_order_number").addEventListener("input", () => {
-    const wo = document.getElementById("work_order_number").value.trim();
+  // the scanned identity, its card and any open-case warning. A USB/Bluetooth
+  // scanner "types" the whole label URL into this box: treat that as a scan.
+  const woInput = document.getElementById("work_order_number");
+  const looksLikeLabel = (text) => /#drawer=|workorderpdfs|^https?:\/\//i.test(text);
+  let woTimer = null;
+  woInput.addEventListener("input", () => {
+    const wo = woInput.value.trim();
     if (scannedDrawer && wo !== scannedDrawer.order_no) clearScannedDrawer();
+    clearOpenCaseWarning();
+    clearTimeout(woTimer);
+    if (looksLikeLabel(wo)) woTimer = setTimeout(() => resolveScannedLabel(wo), 250);
+  });
+  woInput.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    const wo = woInput.value.trim();
+    if (looksLikeLabel(wo)) {
+      e.preventDefault();
+      clearTimeout(woTimer);
+      resolveScannedLabel(wo);
+    }
+  });
+  // A typed work order (no label): say how many open cases it already has.
+  woInput.addEventListener("change", () => {
+    if (!scannedDrawer && !looksLikeLabel(woInput.value.trim())) checkOpenCases();
   });
 
   // "Scan label" (PROJECT_SPEC_PHASE9.md Part 3): hidden outright on a browser
@@ -955,6 +982,19 @@ document.addEventListener("DOMContentLoaded", async () => {
   const savePhotoInput = document.getElementById("save-photo-input");
   let saving = false;
 
+  /** "Add to that case": the same form, sent to the open case instead of
+   * creating a new one (defect_service.add_defects_to_case). */
+  async function addToOpenCase(target) {
+    const payload = collectPayload();
+    return Api.post(`/api/v1/defect-cases/${target.id}/add-defect`, {
+      items: payload.items,
+      notes: payload.notes,
+      priority: payload.priority === "Normal" ? null : payload.priority,
+      instant_close_outcome: payload.resolved_on_the_spot ? payload.instant_close_outcome : null,
+      repair_action: payload.resolved_on_the_spot ? payload.repair_action : null,
+    });
+  }
+
   /** Create the case, then (optionally) upload its photo. The case is saved
    * first so a failed photo upload never loses the defect itself - the
    * operator can retry from the session log's "Add photo" button. */
@@ -964,7 +1004,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     saveBtn.disabled = true;
     saveWithPhotoBtn.disabled = true;
     try {
-      const created = await Api.createDefectCase(collectPayload());
+      const target = addToCase;
+      const created = target ? await addToOpenCase(target) : await Api.createDefectCase(collectPayload());
       let photoNote = "";
       if (photoFile) {
         try {
@@ -978,9 +1019,13 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
       }
       showSaveFlash(
-        (created.resolved_on_the_spot
-          ? `Resolved on the spot — ${created.case_number} closed.`
-          : `Saved: ${created.case_number}`) + photoNote
+        (target
+          ? created.status.startsWith("Closed")
+            ? `Added to ${created.case_number} and closed (fixed on the spot).`
+            : `Added to ${created.case_number}.`
+          : created.resolved_on_the_spot
+            ? `Resolved on the spot — ${created.case_number} closed.`
+            : `Saved: ${created.case_number}`) + photoNote
       );
       addSessionLogRow(created, Boolean(photoNote));
       if (!recentWorkOrders.includes(created.work_order_number)) {

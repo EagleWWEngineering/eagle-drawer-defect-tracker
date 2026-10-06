@@ -196,6 +196,9 @@ def test_resolve_known_unique_id_label_fills_order_line_and_detail(client, relay
         "line_label": "A",
         "qty": 2,
         "detail": LINE_A["detail"],
+        # 2026-10 redesign: for New Defect's drawer card.
+        "customer_name": None,
+        "spec": "8 x 37.875 x 27 · Maple · 1/4 bottom · N&B 2",
     }
 
 
