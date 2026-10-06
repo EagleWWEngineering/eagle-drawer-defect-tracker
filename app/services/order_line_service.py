@@ -291,3 +291,63 @@ def get_line(db: Session, order_detail_id: int) -> OrderLine | None:
 
 def detail_of(row: OrderLine) -> dict | None:
     return json.loads(row.detail_json) if row.detail_json else None
+
+
+def clamp_by_case(db: Session, cases: list[DefectCase]) -> dict[int, str]:
+    """{case.id: clamp} for the cases a clamp is known for (2026-10 redesign):
+    a kickback case takes the clamp on the event that opened it; any other case on
+    an identified drawer takes the clamp on that drawer's latest event up to when
+    the case was logged."""
+    from app.models import DrawerEvent
+
+    if not cases:
+        return {}
+    out: dict[int, str] = {}
+    by_case = dict(
+        db.query(DrawerEvent.defect_case_id, DrawerEvent.clamp)
+        .filter(
+            DrawerEvent.defect_case_id.in_([c.id for c in cases]),
+            DrawerEvent.clamp.is_not(None),
+        )
+        .all()
+    )
+    drawers = {(c.order_detail_id, c.drawer_unit) for c in cases if c.order_detail_id}
+    events: dict[tuple[int, int], list] = {}
+    if drawers:
+        rows = (
+            db.query(
+                DrawerEvent.order_detail_id,
+                DrawerEvent.drawer_unit,
+                DrawerEvent.occurred_at,
+                DrawerEvent.clamp,
+            )
+            .filter(
+                DrawerEvent.order_detail_id.in_([d for d, _u in drawers]),
+                DrawerEvent.clamp.is_not(None),
+            )
+            .order_by(DrawerEvent.occurred_at)
+            .all()
+        )
+        for detail_id, unit, occurred_at, clamp in rows:
+            events.setdefault((detail_id, unit), []).append((occurred_at, clamp))
+    for case in cases:
+        if case.id in by_case:
+            out[case.id] = by_case[case.id]
+            continue
+        if not case.order_detail_id:
+            continue
+        logged = (
+            case.detected_at
+            if case.detected_at.tzinfo
+            else case.detected_at.replace(tzinfo=dt.timezone.utc)
+        )
+        latest = None
+        for occurred_at, clamp in events.get((case.order_detail_id, case.drawer_unit), []):
+            occurred = (
+                occurred_at if occurred_at.tzinfo else occurred_at.replace(tzinfo=dt.timezone.utc)
+            )
+            if occurred <= logged:
+                latest = clamp
+        if latest:
+            out[case.id] = latest
+    return out

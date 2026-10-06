@@ -740,6 +740,8 @@ class ReworkQueueItemOut(BaseModel):
     kind: str = "qc"
     # "assembly" / "qc" - where the UNDO card was used, for kickbacks only.
     kickback_area: str | None = None
+    # The clamp that assembled the drawer, when production count named one.
+    clamp: str | None = None
     closed_at: dt.datetime | None = None
 
     @computed_field

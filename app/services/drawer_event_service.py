@@ -124,9 +124,18 @@ def validate_payload(data: Any) -> list[dict]:
                 "order_detail_id": raw["order_detail_id"],
                 "unit": raw["unit"],
                 "occurred_at": occurred_at.astimezone(dt.timezone.utc),
+                "clamp": _clamp(raw.get("clamp")),
             }
         )
     return parsed
+
+
+def _clamp(value) -> str | None:
+    """Optional (2026-10 redesign); anything that isn't short text is ignored
+    rather than refusing the whole batch."""
+    if isinstance(value, str) and value.strip():
+        return value.strip()[:40]
+    return None
 
 
 def _seeded(db: Session, model: type[Station] | type[DefectCategory], default_name: str):
@@ -285,6 +294,7 @@ def process_payload(db: Session, data: Any) -> dict[str, int]:
                 received_at=dt.datetime.now(dt.timezone.utc),
                 outcome=outcome[:255],
                 defect_case_id=case_id,
+                clamp=event["clamp"],
             )
         )
         db.commit()

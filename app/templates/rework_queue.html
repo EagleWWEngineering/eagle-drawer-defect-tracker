@@ -131,7 +131,7 @@ function cardHtml(item) {
       <div class="fc-spec">${spec}</div>
       <div class="fc-meta">
         <span>Defect: <strong>${item.categories.map(escapeHtml).join(", ")}</strong></span>
-        <span>Found at ${escapeHtml(item.found_station_name)}</span>
+        <span>Found at ${escapeHtml(item.found_station_name)}${item.clamp ? ` · assembled at <strong>${escapeHtml(item.clamp)}</strong>` : ""}</span>
         <a href="#" class="fc-caseno" data-case="${item.id}">case ${escapeHtml(item.case_number)}${drawer}</a>
         <label class="fc-caseno" style="display:inline-flex;align-items:center;gap:0.3rem;margin:0;font-weight:500;">
           <input type="checkbox" class="row-check" data-id="${item.id}" style="width:18px;height:18px;min-height:0;"> select

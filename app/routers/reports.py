@@ -182,7 +182,8 @@ def get_pareto(
     limit: int = 10,
 ) -> list[ParetoRowOut]:
     """group_by: 'category' (default), 'found_station', 'line' (no line ->
-    'No line') or 'source_station' (API only since the 2026-10 redesign).
+    'No line'), 'clamp' (cases a clamp is known for only) or 'source_station'
+    (API only since the 2026-10 redesign).
 
     Possible source station is a hypothesis, not a confirmed root cause — the label
     returned for that grouping is "possible source station", never "root cause".
@@ -203,8 +204,17 @@ def get_pareto(
     )
 
     counts: dict[str, int] = {}
-    for item, case in items_query.all():
-        if group_by == "source_station":
+    rows = items_query.all()
+    clamps = (
+        order_line_service.clamp_by_case(db, _distinct_cases(rows)) if group_by == "clamp" else {}
+    )
+    for item, case in rows:
+        if group_by == "clamp":
+            # Only cases a clamp is known for - the others have nothing to say here.
+            if case.id not in clamps:
+                continue
+            label = clamps[case.id]
+        elif group_by == "source_station":
             label = case.possible_source_station.name if case.possible_source_station else "Unknown"
         elif group_by == "found_station":
             label = case.found_station.name
@@ -456,6 +466,7 @@ def get_rework_queue(
 
     cases = query.all()
     info = order_line_service.drawer_info(db, cases)
+    clamps = order_line_service.clamp_by_case(db, cases)
     kickback_areas = (
         dict(
             db.query(DrawerEvent.defect_case_id, DrawerEvent.area)
@@ -533,6 +544,7 @@ def get_rework_queue(
                 notes=d["notes"],
                 kind="kickback" if c.entry_source == "undo_card" else "qc",
                 kickback_area=kickback_areas.get(c.id),
+                clamp=clamps.get(c.id),
                 closed_at=c.closed_at if c.status in CLOSED_STATUSES else None,
             )
         )

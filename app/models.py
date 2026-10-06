@@ -353,6 +353,9 @@ class DrawerEvent(Base):
     received_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     outcome: Mapped[str] = mapped_column(String(255), nullable=False)
     defect_case_id: Mapped[int | None] = mapped_column(ForeignKey("defect_cases.id"), nullable=True)
+    # 2026-10 redesign: the clamp that assembled this drawer (production count's
+    # ASSEMBLY_CLAMPS display name), or None.
+    clamp: Mapped[str | None] = mapped_column(String(40), nullable=True)
 
 
 class DefectItem(Base):

@@ -70,6 +70,7 @@
         <button type="button" class="chip" data-group="category" aria-pressed="true">Category</button>
         <button type="button" class="chip" data-group="found_station" aria-pressed="false">Found at</button>
         <button type="button" class="chip" data-group="line" aria-pressed="false">Line</button>
+        <button type="button" class="chip" data-group="clamp" aria-pressed="false">Clamp</button>
       </div>
     </div>
     <div id="pareto"></div>
@@ -250,8 +251,8 @@ async function loadPareto(params) {
       return { label: r.label, value: r.defect_events, cum: r.cumulative_pct, vital: before < 80 };
     }),
     {
-      head: [{ category: "Category", found_station: "Found at", line: "Line" }[paretoGroup], "Defects", "Cum."],
-      empty: "No defects for these filters.",
+      head: [{ category: "Category", found_station: "Found at", line: "Line", clamp: "Assembled at" }[paretoGroup], "Defects", "Cum."],
+      empty: paretoGroup === "clamp" ? "No clamp is known for these cases yet (production count started sending it on the redesign)." : "No defects for these filters.",
       onClick: (row) => drillInto(row.label),
     }
   );
