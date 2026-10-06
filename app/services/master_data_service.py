@@ -11,6 +11,8 @@ already was.
 
 from __future__ import annotations
 
+import datetime as dt
+
 from sqlalchemy.orm import Session
 
 from app.errors import NotFoundError, ValidationError
@@ -128,3 +130,80 @@ def update_category(
     db.commit()
     db.refresh(category)
     return category
+
+
+# --- Delete / restore (2026-10 redesign) ------------------------------------------
+#
+# Admin's Delete only HIDES a station or category (is_deleted): the row stays, so
+# every historical case still shows its name and app/seed_data.py's seed loop still
+# finds the name and never re-creates it - CLAUDE.md: never hard-delete master
+# data, not even an unused row. Deleted rows drop out of every picker and of
+# Admin's normal lists, and come back with Restore.
+
+
+def _protected_station_ids(db: Session) -> dict[int, str]:
+    """Stations the UNDO-card kickbacks open their cases at - deleting one would
+    make every kickback in that area fail."""
+    from app.services.drawer_event_service import AREA_STATIONS, _seeded
+
+    out: dict[int, str] = {}
+    for area, name in AREA_STATIONS.items():
+        station = _seeded(db, Station, name)
+        if station is not None:
+            out[station.id] = f"UNDO-card kickbacks ({area}) are recorded at it"
+    return out
+
+
+def _protected_category_ids(db: Session) -> dict[int, str]:
+    """The kickback categories chosen in Admin, plus the fallback category."""
+    from app.services import settings_service
+    from app.services.drawer_event_service import FALLBACK_CATEGORY, _seeded
+
+    out: dict[int, str] = {}
+    for area in settings_service.UNDO_CATEGORY_SETTING_KEYS:
+        category_id = settings_service.get_undo_category_id(db, area)
+        if category_id is not None:
+            area_name = {"qc": "QC", "assembly": "Assembly In"}.get(area, area)
+            out[category_id] = f"it is the {area_name} kickback category (Admin > UNDO Card)"
+    fallback = _seeded(db, DefectCategory, FALLBACK_CATEGORY)
+    if fallback is not None:
+        out.setdefault(fallback.id, "kickbacks fall back to it when no category is set")
+    return out
+
+
+def _get_row(db: Session, model: type[Station] | type[DefectCategory], row_id: int, label: str):
+    row = db.get(model, row_id)
+    if row is None:
+        raise NotFoundError(f"{label} {row_id} not found.")
+    return row
+
+
+def delete_master_row(
+    db: Session, model: type[Station] | type[DefectCategory], row_id: int
+) -> Station | DefectCategory:
+    is_station = model is Station
+    label = "Station" if is_station else "Defect category"
+    row = _get_row(db, model, row_id, label)
+    protected = _protected_station_ids(db) if is_station else _protected_category_ids(db)
+    if row.id in protected:
+        raise ValidationError(f"Can't delete '{row.name}': {protected[row.id]}.")
+    if not row.is_deleted:
+        row.is_deleted = True
+        row.deleted_at = dt.datetime.now(dt.timezone.utc)
+        row.is_favorite = False
+        db.commit()
+        db.refresh(row)
+    return row
+
+
+def restore_master_row(
+    db: Session, model: type[Station] | type[DefectCategory], row_id: int
+) -> Station | DefectCategory:
+    label = "Station" if model is Station else "Defect category"
+    row = _get_row(db, model, row_id, label)
+    if row.is_deleted:
+        row.is_deleted = False
+        row.deleted_at = None
+        db.commit()
+        db.refresh(row)
+    return row

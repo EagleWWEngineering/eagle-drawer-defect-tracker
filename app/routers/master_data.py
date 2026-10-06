@@ -1,7 +1,8 @@
 """Master data: stations and defect categories (PROJECT_SPEC.md section 3).
 
-Records may be deactivated but are never hard-deleted — there is intentionally no
-DELETE route here. Historical defect cases keep referencing them by id.
+Records may be deactivated, or deleted - which only HIDES them (is_deleted; 2026-10
+redesign). Nothing is ever hard-deleted: historical defect cases keep referencing
+them by id, and the seed loop still sees their names.
 """
 
 from __future__ import annotations
@@ -45,9 +46,16 @@ def get_master_data(
             "retired values reachable for historical filtering."
         ),
     ),
+    include_deleted: bool = Query(
+        default=False,
+        description="Admin's Deleted list only - deleted rows are hidden everywhere else.",
+    ),
 ) -> MasterDataOut:
     station_query = db.query(Station)
     category_query = db.query(DefectCategory)
+    if not include_deleted:
+        station_query = station_query.filter(Station.is_deleted.is_(False))
+        category_query = category_query.filter(DefectCategory.is_deleted.is_(False))
     if active_only:
         station_query = station_query.filter(Station.active.is_(True))
         category_query = category_query.filter(DefectCategory.active.is_(True))
@@ -169,3 +177,62 @@ def update_category(
         after=DefectCategoryOut.model_validate(category).model_dump(),
     )
     return DefectCategoryOut.model_validate(category)
+
+
+def _row_out(row):
+    return (
+        StationOut.model_validate(row)
+        if isinstance(row, Station)
+        else DefectCategoryOut.model_validate(row)
+    )
+
+
+def _delete_or_restore(db, actor_role, model, row_id: int, *, restore: bool):
+    existing = db.get(model, row_id)
+    before = _row_out(existing).model_dump(mode="json") if existing is not None else None
+    action = (
+        master_data_service.restore_master_row if restore else master_data_service.delete_master_row
+    )
+    row = action(db, model, row_id)
+    audit_service.record(
+        db,
+        actor_role=actor_role,
+        action=("restore_" if restore else "delete_")
+        + ("station" if model is Station else "category"),
+        entity_type=model.__name__,
+        entity_id=str(row.id),
+        inputs={"id": row_id},
+        before=before,
+        after=_row_out(row).model_dump(mode="json"),
+    )
+    return _row_out(row)
+
+
+@router.delete("/stations/{station_id}", response_model=StationOut)
+def delete_station(
+    station_id: int, db: Session = Depends(get_db), actor_role: str = Depends(get_actor_role)
+) -> StationOut:
+    """Hide a station everywhere (never a real delete - see the module docstring)."""
+    return _delete_or_restore(db, actor_role, Station, station_id, restore=False)
+
+
+@router.post("/stations/{station_id}/restore", response_model=StationOut)
+def restore_station(
+    station_id: int, db: Session = Depends(get_db), actor_role: str = Depends(get_actor_role)
+) -> StationOut:
+    return _delete_or_restore(db, actor_role, Station, station_id, restore=True)
+
+
+@router.delete("/defect-categories/{category_id}", response_model=DefectCategoryOut)
+def delete_category(
+    category_id: int, db: Session = Depends(get_db), actor_role: str = Depends(get_actor_role)
+) -> DefectCategoryOut:
+    """Hide a defect category everywhere (never a real delete)."""
+    return _delete_or_restore(db, actor_role, DefectCategory, category_id, restore=False)
+
+
+@router.post("/defect-categories/{category_id}/restore", response_model=DefectCategoryOut)
+def restore_category(
+    category_id: int, db: Session = Depends(get_db), actor_role: str = Depends(get_actor_role)
+) -> DefectCategoryOut:
+    return _delete_or_restore(db, actor_role, DefectCategory, category_id, restore=True)

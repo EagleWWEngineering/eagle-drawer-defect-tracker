@@ -62,6 +62,11 @@ class Station(Base):
     # before this fix - deliberately left NULL and untouched, never backfilled,
     # by the migration that added this column).
     seed_key: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # 2026-10 redesign: Admin's Delete only hides a row (never a SQL DELETE) -
+    # historical cases keep its name and the seed loop still sees it. See
+    # app/services/master_data_service.py delete_master_row.
+    is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    deleted_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
@@ -84,6 +89,11 @@ class DefectCategory(Base):
     favorite_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # See Station.seed_key above - identical mechanism, same reasoning.
     seed_key: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # 2026-10 redesign: Admin's Delete only hides a row (never a SQL DELETE) -
+    # historical cases keep its name and the seed loop still sees it. See
+    # app/services/master_data_service.py delete_master_row.
+    is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    deleted_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow

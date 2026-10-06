@@ -31,6 +31,8 @@ class StationOut(BaseModel):
     # read off the exact same active-only master-data response Phase 1 fixed.
     is_favorite: bool
     favorite_rank: int | None
+    # 2026-10 redesign: hidden by Admin's Delete (see app/models.py).
+    is_deleted: bool = False
     # Read-only, Admin display only (seed-duplicate investigation step 2, per
     # the Phase 3 follow-up prompt): a stray duplicate row created by the
     # seed-on-every-startup bug will have a created_at from some later restart,
@@ -53,6 +55,7 @@ class DefectCategoryOut(BaseModel):
     sort_order: int
     is_favorite: bool
     favorite_rank: int | None
+    is_deleted: bool = False
     created_at: dt.datetime
 
     @computed_field

@@ -158,6 +158,10 @@ const Api = {
   // values reachable for historical filtering.
   getMasterData: (activeOnly) =>
     request("GET", "/api/v1/master-data", { params: { active_only: activeOnly || undefined } }),
+  deleteStation: (id) => request("DELETE", `/api/v1/master-data/stations/${id}`),
+  restoreStation: (id) => request("POST", `/api/v1/master-data/stations/${id}/restore`),
+  deleteCategory: (id) => request("DELETE", `/api/v1/master-data/defect-categories/${id}`),
+  restoreCategory: (id) => request("POST", `/api/v1/master-data/defect-categories/${id}/restore`),
   createStation: (payload) => request("POST", "/api/v1/master-data/stations", { body: payload }),
   updateStation: (id, payload) =>
     request("PATCH", `/api/v1/master-data/stations/${id}`, { body: payload }),
