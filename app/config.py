@@ -99,6 +99,11 @@ class Settings:
         # the prefix. Machine callers (production count's feeds) hit the app
         # directly on its loopback port and never use it.
         self.root_path: str = _normalize_root_path(os.getenv("ROOT_PATH", ""))
+        # The shared login (Phase 2). On by default, as on Render (internet-facing).
+        # Off on eagle-vm (Rodolfo, 2026-10-06): there the app is reachable only from
+        # the office network, through production count, which has had no password
+        # since 10-02 either. Turning it back on is LOGIN_REQUIRED=true + restart.
+        self.login_required: bool = _env_bool("LOGIN_REQUIRED", True)
 
     @property
     def max_upload_bytes(self) -> int:

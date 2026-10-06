@@ -84,7 +84,7 @@ def _is_public(path: str) -> bool:
 class LoginRequiredMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
-        if _is_public(path):
+        if not get_settings().login_required or _is_public(path):
             return await call_next(request)
 
         token = request.cookies.get(auth_service.SESSION_COOKIE_NAME)

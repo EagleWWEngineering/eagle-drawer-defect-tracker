@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import text
@@ -86,6 +86,8 @@ def static_version(relative_path: str) -> int:
 templates.env.globals["static_version"] = static_version
 # URL prefix for every link a template writes (see Settings.root_path).
 templates.env.globals["base"] = settings.root_path
+# Hides the login-only UI (Settings: Log out / Log out everywhere) when the login is off.
+templates.env.globals["login_required"] = settings.login_required
 
 
 @asynccontextmanager
@@ -197,7 +199,10 @@ def page_settings(request: Request):
 @app.get("/login")
 def page_login(request: Request):
     """Public (see app/auth_middleware.py PUBLIC_EXACT_PATHS) - the one page
-    reachable with no session at all, other than the health check."""
+    reachable with no session at all, other than the health check. With the login
+    turned off (LOGIN_REQUIRED=false) there is nothing to log in to: go home."""
+    if not get_settings().login_required:
+        return RedirectResponse(url=f"{get_settings().root_path}/", status_code=303)
     return templates.TemplateResponse(request, "login.html")
 
 

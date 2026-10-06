@@ -5,6 +5,13 @@
 {% block content %}
 <h1 class="page-title">Settings</h1>
 
+{% if not login_required %}
+<section class="card">
+  <h2>No login</h2>
+  <p class="hint">This tracker runs without a password: anyone on the shop network can
+    use it. There is nothing to log out of.</p>
+</section>
+{% else %}
 <section class="card">
   <h2>This device</h2>
   <p class="hint">Logging out here only ends the session on this device/browser -
@@ -29,9 +36,11 @@
     </div>
   </form>
 </section>
+{% endif %}
 {% endblock %}
 
 {% block extra_scripts %}
+{% if login_required %}
 <script>
 document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("logout-btn").addEventListener("click", async () => {
@@ -67,4 +76,5 @@ document.addEventListener("DOMContentLoaded", () => {
   );
 });
 </script>
+{% endif %}
 {% endblock %}

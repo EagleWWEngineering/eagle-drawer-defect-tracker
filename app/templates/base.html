@@ -21,7 +21,7 @@
       <a href="{{ base }}/customer-issues">Customer Issues</a>
       <a href="{{ base }}/admin">Admin</a>
       <a href="{{ base }}/print-daily-log">Print Log</a>
-      <a href="{{ base }}/settings">Settings</a>
+      {% if login_required %}<a href="{{ base }}/settings">Settings</a>{% endif %}
     </nav>
     <div class="role-selector">
       <label for="actor-role-select">Role (prototype)</label>
