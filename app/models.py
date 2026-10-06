@@ -287,6 +287,20 @@ class OrderLine(Base):
     received_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class WorkOrder(Base):
+    """Per-order facts pushed with the order-line snapshot (2026-10 redesign):
+    today only the customer name, so the Rework & Kickback Queue and the other
+    pages can say whose drawer it is. Kept per order (not per line) so a typed
+    work order with no line still shows its customer. Never deleted - same rule as
+    OrderLine: a shipped order can still have defects logged against it."""
+
+    __tablename__ = "work_orders"
+
+    order_no: Mapped[str] = mapped_column(String(20), primary_key=True)
+    customer_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    received_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class DrawerEvent(Base):
     """One drawer scan event pushed by eagle-drawers-production-count
     (PROJECT_SPEC_PHASE11.md): a "kickback" (the UNDO card took the drawer off

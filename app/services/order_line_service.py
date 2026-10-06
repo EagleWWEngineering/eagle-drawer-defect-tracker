@@ -12,6 +12,11 @@ POST /api/v1/sync/order-lines/ingest-raw:
          {"order_detail_id": 285016, "line": "A", "qty": 2,
           "detail": {"Size": "8 x 37.875 x 27", "Wood": "maple", ...}}]}}}
 
+Each order may also carry "customer" (2026-10 redesign), stored per order in
+work_orders. Optional: a payload without it is still valid and leaves any stored
+name alone. Cases saved before their lines arrived get their line letter filled
+in here (_backfill_case_lines).
+
 Rules:
   - each order in the body has its stored lines REPLACED (lines no longer
     listed for that order are removed);
@@ -31,18 +36,46 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.errors import UnprocessableError
-from app.models import OrderLine, SyncLog
+from app.models import DefectCase, OrderLine, SyncLog, WorkOrder
 from app.services.defect_service import normalize_line_label
 
 ORDER_NO_RE = re.compile(r"^\d{1,20}$")
+CUSTOMER_MAX = 120
+# Marks "the order had no customer key" apart from "customer: null".
+_ABSENT = object()
 
 
 def _is_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def _customer(order_no: str, order: dict) -> Any:
+    """The order's customer name (stripped, cut to CUSTOMER_MAX), None when sent as
+    null or blank, or _ABSENT when the key is not there at all."""
+    if "customer" not in order:
+        return _ABSENT
+    raw = order["customer"]
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise UnprocessableError(f"{order_no}: customer must be text.", field="orders")
+    return raw.strip()[:CUSTOMER_MAX] or None
+
+
+def validate_customers(data: dict) -> dict[str, str | None]:
+    """{order_no: name or None} for every order that carries a customer key. Call
+    after validate_payload, which has already checked the overall shape."""
+    customers: dict[str, str | None] = {}
+    for order_no, order in data["orders"].items():
+        value = _customer(str(order_no), order)
+        if value is not _ABSENT:
+            customers[str(order_no)] = value
+    return customers
+
+
 def validate_payload(data: Any) -> dict[str, list[dict]]:
-    """Returns {order_no: [clean line dicts]} or raises UnprocessableError."""
+    """Returns {order_no: [clean line dicts]} or raises UnprocessableError.
+    The optional per-order customer is read by validate_customers."""
     if not isinstance(data, dict):
         raise UnprocessableError("Body must be a JSON object.")
     orders = data.get("orders")
@@ -102,8 +135,17 @@ def process_payload(db: Session, data: Any) -> dict[str, int]:
     """Validate, replace-per-order, log one SyncLog row, commit.
     Returns {"orders": N, "lines": N} (counts in this snapshot)."""
     orders = validate_payload(data)
+    customers = validate_customers(data)
     now = dt.datetime.now(dt.timezone.utc)
-    created = updated = removed = 0
+    created = updated = removed = backfilled = 0
+
+    for order_no, name in customers.items():
+        work_order = db.get(WorkOrder, order_no)
+        if work_order is None:
+            work_order = WorkOrder(order_no=order_no)
+            db.add(work_order)
+        work_order.customer_name = name
+        work_order.received_at = now
 
     for order_no, lines in orders.items():
         keep_ids = {line["order_detail_id"] for line in lines}
@@ -125,6 +167,7 @@ def process_payload(db: Session, data: Any) -> dict[str, int]:
             row.detail_json = json.dumps(line["detail"]) if line["detail"] is not None else None
             row.received_at = now
         db.flush()
+        backfilled += _backfill_case_lines(db, order_no, lines)
 
     total_lines = sum(len(lines) for lines in orders.values())
     source = data.get("source") or "eagle-drawers-production-count"
@@ -137,12 +180,109 @@ def process_payload(db: Session, data: Any) -> dict[str, int]:
             records_created=created,
             records_updated=updated,
             records_skipped=0,
-            errors=f"{removed} line(s) no longer on their order were removed" if removed else None,
+            errors="; ".join(
+                note
+                for note in (
+                    f"{removed} line(s) no longer on their order were removed" if removed else "",
+                    f"line letter filled in on {backfilled} case(s)" if backfilled else "",
+                )
+                if note
+            )
+            or None,
             status="success",
         )
     )
     db.commit()
     return {"orders": len(orders), "lines": total_lines}
+
+
+def _backfill_case_lines(db: Session, order_no: str, lines: list[dict]) -> int:
+    """Kickback cases can arrive before their order's lines do, and were saved with
+    no line letter. Fill it in now: only on cases for the same drawer AND the same
+    order (the label trust rule), only where the line is still blank. A line
+    someone typed is never touched."""
+    by_id = {line["order_detail_id"]: line["line"] for line in lines}
+    if not by_id:
+        return 0
+    cases = (
+        db.query(DefectCase)
+        .filter(
+            DefectCase.work_order_number == order_no,
+            DefectCase.order_detail_id.in_(list(by_id)),
+            (DefectCase.line_label.is_(None)) | (DefectCase.line_label == ""),
+        )
+        .all()
+    )
+    for case in cases:
+        case.line_label = by_id[case.order_detail_id]
+    return len(cases)
+
+
+def format_spec(detail: dict | None) -> str | None:
+    """'3.5 x 12.6875 x 20 · Maple · 1/4 bottom · Scoops Standard': the line's
+    size, wood, bottom and options in one string for the floor cards. Empty parts
+    are left out; None when there is nothing to show."""
+    if not detail:
+        return None
+    size = str(detail.get("Size") or "").strip()
+    wood = str(detail.get("Wood") or "").strip()
+    bottom = str(detail.get("Bottom") or "").strip()
+    options = str(detail.get("Options") or "").strip()
+    parts = [
+        size,
+        wood[:1].upper() + wood[1:],
+        f"{bottom} bottom" if bottom else "",
+        options,
+    ]
+    return " · ".join(p for p in parts if p) or None
+
+
+def drawer_info(db: Session, cases: list[DefectCase]) -> dict[int, dict]:
+    """{case.id: {"customer", "line", "spec", "notes"}} for display, in three bulk
+    queries. The line comes from, in order:
+      1. the drawer's own order line (order_detail_id on the same order - the label
+         trust rule), even when the case was saved before its lines arrived;
+      2. the case's own line letter, matched to its order's line by letter.
+    Size and options come from whichever line matched."""
+    if not cases:
+        return {}
+    orders = {c.work_order_number for c in cases if c.work_order_number}
+    detail_ids = {c.order_detail_id for c in cases if c.order_detail_id}
+    customers: dict[str, str | None] = {}
+    by_letter: dict[tuple[str, str], OrderLine] = {}
+    if orders:
+        for w in db.query(WorkOrder).filter(WorkOrder.order_no.in_(orders)).all():
+            customers[w.order_no] = w.customer_name
+        for r in db.query(OrderLine).filter(OrderLine.order_no.in_(orders)).all():
+            by_letter.setdefault((r.order_no, r.line), r)
+    by_id: dict[int, OrderLine] = {}
+    if detail_ids:
+        for r in db.query(OrderLine).filter(OrderLine.order_detail_id.in_(detail_ids)).all():
+            by_id[r.order_detail_id] = r
+
+    info: dict[int, dict] = {}
+    for case in cases:
+        row = by_id.get(case.order_detail_id) if case.order_detail_id else None
+        if row is not None and row.order_no != case.work_order_number:
+            row = None
+        if row is None and case.line_label:
+            row = by_letter.get((case.work_order_number, case.line_label))
+        detail = detail_of(row) if row is not None else None
+        notes = str(detail.get("Notes") or "").strip() if detail else ""
+        info[case.id] = {
+            "customer": customers.get(case.work_order_number),
+            "line": row.line if row is not None else (case.line_label or None),
+            "spec": format_spec(detail),
+            "notes": notes or None,
+        }
+    return info
+
+
+def customer_of(db: Session, order_no: str | None) -> str | None:
+    if not order_no:
+        return None
+    row = db.get(WorkOrder, order_no)
+    return row.customer_name if row is not None else None
 
 
 def get_line(db: Session, order_detail_id: int) -> OrderLine | None:
