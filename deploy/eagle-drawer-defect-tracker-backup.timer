@@ -1,0 +1,9 @@
+[Unit]
+Description=Drawer defect tracker DB + photos snapshot (02:20 ET, before the 03:18 off-VM export)
+
+[Timer]
+OnCalendar=*-*-* 02:20 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

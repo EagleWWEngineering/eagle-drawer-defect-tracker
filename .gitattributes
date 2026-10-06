@@ -1,0 +1,5 @@
+# Run on Linux (eagle-vm) or by Git Bash -- CRLF breaks both.
+*.sh text eol=lf
+deploy/*.service text eol=lf
+deploy/*.timer text eol=lf
+deploy/*.py text eol=lf

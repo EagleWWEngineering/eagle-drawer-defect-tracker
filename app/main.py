@@ -220,6 +220,16 @@ async def service_error_handler(_request: Request, exc: ServiceError) -> JSONRes
     )
 
 
+def _deployed_commit() -> str | None:
+    """deploy/push.sh writes the shipped commit to VERSION, so /health can prove
+    which code is actually running after a restart."""
+    version_file = APP_DIR.parent / "VERSION"
+    try:
+        return version_file.read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
 @app.get("/api/v1/health", response_model=HealthOut)
 def health(db=Depends(get_db)) -> HealthOut:
     # Uses the injected session (not the raw engine) so tests that override get_db
@@ -229,4 +239,4 @@ def health(db=Depends(get_db)) -> HealthOut:
         db_status = "ok"
     except Exception:  # noqa: BLE001 - health check must never raise, just report status
         db_status = "unavailable"
-    return HealthOut(status="ok", database=db_status)
+    return HealthOut(status="ok", database=db_status, git_commit=_deployed_commit())

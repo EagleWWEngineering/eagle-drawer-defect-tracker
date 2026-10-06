@@ -1049,3 +1049,5 @@ class ErrorResponse(BaseModel):
 class HealthOut(BaseModel):
     status: str
     database: str
+    # Commit stamped into VERSION by deploy/push.sh; None outside a VM deploy.
+    git_commit: str | None = None

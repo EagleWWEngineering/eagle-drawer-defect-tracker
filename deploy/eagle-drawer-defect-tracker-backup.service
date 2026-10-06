@@ -1,0 +1,7 @@
+[Unit]
+Description=Nightly snapshot of the drawer defect tracker DB and photos into ~/state-backups (picked up off-VM by eagle-sql-export)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /home/eagleagent/eagle-drawer-defect-tracker/deploy/backup_snapshot.py
+Nice=10

@@ -1,0 +1,22 @@
+[Unit]
+Description=Eagle drawer defect tracker (127.0.0.1:8112, served to the shop at production count's /defects/)
+After=network.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+WorkingDirectory=/home/eagleagent/eagle-drawer-defect-tracker
+# No EnvironmentFile: the app reads .env from WorkingDirectory itself
+# (app/config.py load_dotenv), and systemd's env-file parsing would mangle the
+# "$" characters in APP_PASSWORD_HASH.
+ExecStartPre=/home/eagleagent/eagle-drawer-defect-tracker/.venv/bin/alembic upgrade head
+# Loopback only: no NSG rule, nothing on the network reaches this port directly.
+ExecStart=/home/eagleagent/eagle-drawer-defect-tracker/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8112
+# Shares a small VM with many other apps -- cap this one so a runaway can
+# never starve them.
+MemoryMax=400M
+CPUWeight=50
+
+[Install]
+WantedBy=default.target
