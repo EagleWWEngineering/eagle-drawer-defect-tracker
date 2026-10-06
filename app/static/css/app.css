@@ -80,6 +80,9 @@
 
 * { box-sizing: border-box; }
 
+/* The hidden attribute always wins (buttons/flex rules below would otherwise show it). */
+[hidden] { display: none !important; }
+
 html { -webkit-text-size-adjust: 100%; }
 
 body {
@@ -1034,6 +1037,14 @@ canvas.chart-canvas {
   main { max-width: none; padding: 0; }
   body { background: #fff; }
   table, th, td { border-color: #000; }
+}
+
+@media (max-width: 760px) {
+  /* Phone/small tablet: brand on its own line, the menu as one swipeable row. */
+  .app-header { flex-direction: column; align-items: stretch; gap: 0.15rem; }
+  .app-nav { flex-wrap: nowrap; overflow-x: auto; min-width: 0; max-width: 100%; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  .app-nav a { white-space: nowrap; }
+  .role-selector { display: none; }
 }
 
 @media (max-width: 480px) {

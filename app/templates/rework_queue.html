@@ -1,49 +1,66 @@
 {% extends "base.html" %}
-{% block title %}Rework Queue - Eagle Drawer Defect Tracker{% endblock %}
+{% block title %}Rework & Kickback Queue - Drawer Defects{% endblock %}
 {% block page_name %}rework_queue{% endblock %}
 
 {% block content %}
-<h1 class="page-title">Rework Queue</h1>
-<p class="hint">Sorted Urgent first, then High, then Normal; oldest open item first within each priority.</p>
-
-<div class="card">
-  <div class="filters">
-    <div class="field">
-      <label for="f-priority">Priority</label>
-      <select id="f-priority"><option value="">All</option><option>Urgent</option><option>High</option><option>Normal</option></select>
-    </div>
-    <div class="field">
-      <label for="f-status">Status</label>
-      <select id="f-status"><option value="">All open statuses</option></select>
-    </div>
-  </div>
+<div class="page-head">
+  <h1 class="page-title">Rework &amp; Kickback Queue</h1>
+  <span class="live" id="queue-live"><span class="dot" aria-hidden="true"></span><span id="queue-updated">Loading…</span></span>
 </div>
 
-<div class="table-scroll">
-  <table id="queue-table">
-    <thead>
-      <tr>
-        <th class="row-check-header"><input type="checkbox" id="queue-select-all" aria-label="Select all queue items"></th>
-        <th>Case</th><th>Work order</th><th>Categories</th><th>Priority</th><th>Status</th>
-        <th>Found / Possible source</th><th>Age (hrs)</th><th>Update</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  </table>
+<div class="search-box" style="margin-bottom:0.5rem;">
+  <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16.5 16.5L21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>
+  <input id="queue-search" type="search" autocomplete="off"
+         placeholder="Search work order, customer, line, defect or case. Or scan a drawer label."
+         aria-label="Search the queue">
+  <button type="button" id="queue-search-clear" class="secondary" hidden>Clear</button>
 </div>
+
+<div class="chip-row" style="margin-bottom:0.9rem;" role="group" aria-label="Filter the queue">
+  <button type="button" class="chip" data-kind="" aria-pressed="true">All</button>
+  <button type="button" class="chip" data-kind="kickback" aria-pressed="false">Kickbacks</button>
+  <button type="button" class="chip" data-kind="qc" aria-pressed="false">QC defects</button>
+  <span id="queue-drawer-chip" hidden></span>
+  <label class="leave-open-label" style="margin:0 0 0 0.5rem;">
+    <input type="checkbox" id="queue-include-closed"> Include closed (last 7 days)
+  </label>
+  <label class="leave-open-label" style="margin:0 0 0 auto;">
+    <input type="checkbox" id="queue-select-all" aria-label="Select all cases shown"> Select all
+  </label>
+  <span id="queue-count" class="hint" style="font-weight:600;"></span>
+</div>
+
+<div class="floor-cards" id="queue-cards"></div>
 {% endblock %}
 
 {% block extra_scripts %}
 <script>
+const REFRESH_SECONDS = 30;
+const CLOSED_DAYS = 7;
 let masterData = null;
 let queueBulkSelect;
+let kindFilter = "";
+let drawerFilter = null; // {key: "285016-1", label: "..."} after a label scan
+let lastLoadedAt = null;
+let searchTimer = null;
 
-// The primary action for every queue row: close the case directly, no intermediate
-// "mark ready for recheck" step. Every non-closed status has a full set of direct
-// close targets now (see app/services/defect_service.py direct_close_statuses) -
-// PROJECT_SPEC_PHASE7.md's two closed statuses (Repaired / Use As Is) - the shop
-// floor has no real recheck moment, a repaired part just continues down the line
-// and gets caught at the next station if something's still wrong.
+function ageHtml(hours) {
+  if (hours >= 24) return `${(hours / 24).toFixed(1)}<small> days</small>`;
+  return `${hours.toFixed(1)}<small> h</small>`;
+}
+
+function priorityKey(priority) {
+  return (priority || "Normal").toLowerCase();
+}
+
+function kindTag(item) {
+  if (item.kind !== "kickback") return '<span class="tag tag-qc">QC defect</span>';
+  const where = item.kickback_area === "assembly" ? " · Assembly" : item.kickback_area === "qc" ? " · QC" : "";
+  return `<span class="tag tag-kick">Kickback${where}</span>`;
+}
+
+// The primary action on every open card: close the case directly (Repaired / Use
+// As Is) with an optional note - PROJECT_SPEC_PHASE7.md, no recheck step.
 function closeFormHtml(item) {
   const options = item.direct_close_statuses
     .map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`)
@@ -52,23 +69,15 @@ function closeFormHtml(item) {
     <form class="close-form" data-case-id="${item.id}">
       <div class="field"><label>Close as</label><select name="close_status">${options}</select></div>
       <div class="field"><label>What was done <span class="hint">(optional)</span></label>
-        <input type="text" name="note" placeholder="e.g. Confirmed repaired at the bench"></div>
+        <input type="text" name="note" placeholder="e.g. Reglued at the bench"></div>
       <button type="submit">Close case</button>
     </form>
   </div>`;
 }
 
-// Secondary, collapsed by default: editing root cause/corrective action. This
-// does NOT reopen a closed case, despite what an earlier version of this
-// comment claimed - item.allowed_next_statuses is empty for every status,
-// closed ones included (PROJECT_SPEC_PHASE7.md: there is no more generic
-// "move between open states" transition at all), so this dropdown can only
-// ever offer the row's own current status. It's also moot in practice: this
-// page never lists a closed case to begin with (loadQueue() only ever
-// requests Open, or no status filter at all - see the #f-status options
-// below, which never include a closed value). Reopening a case lives on the
-// case-detail modal instead (app/static/js/app.js renderCaseDetail) - see the
-// Reopen button there, the one actual UI path for it.
+// Secondary, collapsed: root cause / corrective action / repair action. The status
+// dropdown only ever offers the current status (no open-to-open transitions since
+// Phase 7); reopening lives on the case-detail modal.
 function moreOptionsFormHtml(item) {
   const statusOptions = [item.status, ...item.allowed_next_statuses]
     .filter((v, i, arr) => arr.indexOf(v) === i)
@@ -78,13 +87,13 @@ function moreOptionsFormHtml(item) {
     .map((d) => `<option value="${escapeHtml(d)}" ${d === (item.disposition || "") ? "selected" : ""}>${d || "-- none --"}</option>`)
     .join("");
   return `<details class="more-options">
-    <summary>More: root cause, corrective action, other status changes</summary>
+    <summary>More: root cause, corrective action</summary>
     <form class="status-form" data-case-id="${item.id}" data-current-status="${escapeHtml(item.status)}">
       <div class="field"><label>Status</label><select name="new_status">${statusOptions}</select></div>
       <div class="field"><label>Disposition</label><select name="disposition">${dispositionOptions}</select></div>
       <div class="field"><label>Note <span class="hint">(optional)</span></label>
         <input type="text" name="note" placeholder="Optional note"></div>
-      <div class="field"><label>Root cause <span class="hint">(optional — filled in here, not at entry time)</span></label>
+      <div class="field"><label>Root cause <span class="hint">(optional)</span></label>
         <textarea name="root_cause" rows="2">${escapeHtml(item.root_cause || "")}</textarea></div>
       <div class="field"><label>Corrective action <span class="hint">(optional)</span></label>
         <textarea name="corrective_action" rows="2">${escapeHtml(item.corrective_action || "")}</textarea></div>
@@ -95,34 +104,105 @@ function moreOptionsFormHtml(item) {
   </details>`;
 }
 
-function updateFormHtml(item) {
-  return `<div>${closeFormHtml(item)}${moreOptionsFormHtml(item)}</div>`;
+function cardHtml(item) {
+  const line = item.resolved_line || item.line_label;
+  const spec = item.spec
+    ? escapeHtml(item.spec)
+    : line
+      ? '<span class="hint">No size on file for this line yet</span>'
+      : '<span class="fc-missing">No line on this case</span>';
+  const drawer = item.order_detail_id ? ` · drawer ${item.order_detail_id}-${item.drawer_unit}` : "";
+  const pri = priorityKey(item.priority);
+  const side = item.is_closed
+    ? `<span class="tag tag-closed">${escapeHtml(item.status)}</span>
+       <span class="fc-status">closed ${escapeHtml(item.closed_at_local || "")}</span>
+       <button type="button" class="secondary" data-reopen="${item.id}">Reopen…</button>`
+    : `<div class="fc-tags">${kindTag(item)}<span class="fc-pri ${pri}">${escapeHtml(item.priority)}</span></div>
+       <div class="fc-age">${ageHtml(item.age_hours)}</div>
+       <span class="fc-status">${escapeHtml(item.status)}</span>`;
+  return `<article class="floor-card${item.is_closed ? " closed" : ""}" data-id="${item.id}">
+    <div class="stripe ${item.is_closed ? "good" : pri}" aria-hidden="true"></div>
+    <div class="fc-main">
+      <div class="fc-top">
+        <span class="fc-wo">WO ${escapeHtml(item.work_order_number)}</span>
+        ${line ? `<span class="fc-line">Line ${escapeHtml(line)}</span>` : ""}
+        ${item.customer_name ? `<span class="fc-cust">${escapeHtml(item.customer_name)}</span>` : ""}
+      </div>
+      <div class="fc-spec">${spec}</div>
+      <div class="fc-meta">
+        <span>Defect: <strong>${item.categories.map(escapeHtml).join(", ")}</strong></span>
+        <span>Found at ${escapeHtml(item.found_station_name)}</span>
+        <a href="#" class="fc-caseno" data-case="${item.id}">case ${escapeHtml(item.case_number)}${drawer}</a>
+        <label class="fc-caseno" style="display:inline-flex;align-items:center;gap:0.3rem;margin:0;font-weight:500;">
+          <input type="checkbox" class="row-check" data-id="${item.id}" style="width:18px;height:18px;min-height:0;"> select
+        </label>
+      </div>
+    </div>
+    <div class="fc-side">${side}</div>
+    ${item.is_closed ? "" : `<div class="fc-actions">${closeFormHtml(item)}${moreOptionsFormHtml(item)}</div>`}
+  </article>`;
 }
 
-function rowHtml(item) {
-  return `<tr>
-    <td class="row-check-cell"><input type="checkbox" class="row-check" data-id="${item.id}" aria-label="Select ${escapeHtml(item.case_number)}"></td>
-    <td><a href="#" data-case="${item.id}">${escapeHtml(item.case_number)}</a></td>
-    <td>${escapeHtml(item.work_order_number)}${item.line_label ? ` / ${escapeHtml(item.line_label)}` : ""}${item.order_detail_id ? `<br><span class="hint">Drawer ${item.order_detail_id}-${item.drawer_unit}</span>` : ""}</td>
-    <td>${item.categories.map(escapeHtml).join(", ")}${item.entry_source === "undo_card" ? `<br><span class="badge undo-card-badge">UNDO card</span>` : ""}</td>
-    <td>${priorityBadge(item.priority)}</td>
-    <td>${statusBadge(item.status)}</td>
-    <td>${escapeHtml(item.found_station_name)} / ${escapeHtml(item.possible_source_station_name || "unknown")}</td>
-    <td>${item.age_hours}</td>
-    <td>${updateFormHtml(item)}</td>
-  </tr>`;
+function queueParams() {
+  const q = document.getElementById("queue-search").value.trim();
+  return {
+    q: drawerFilter ? undefined : q || undefined,
+    drawer: drawerFilter ? drawerFilter.key : undefined,
+    include_closed_days: document.getElementById("queue-include-closed").checked ? CLOSED_DAYS : undefined,
+  };
 }
 
-async function loadQueue() {
-  const priority = document.getElementById("f-priority").value;
-  const status = document.getElementById("f-status").value;
-  const rows = await Api.getReworkQueue({ priority: priority || undefined, status: status || undefined });
-  const tbody = document.querySelector("#queue-table tbody");
-  tbody.innerHTML = rows.map(rowHtml).join("") || `<tr><td colspan="9">Nothing in the queue.</td></tr>`;
+function isBusy() {
+  // Never re-render under someone's hands: a focused/typed-in form field, an open
+  // "More" panel, a ticked select box or the case modal all pause the refresh.
+  const cards = document.getElementById("queue-cards");
+  if (cards.contains(document.activeElement) && document.activeElement !== document.body) return true;
+  if (cards.querySelector("details[open]")) return true;
+  if (cards.querySelector("input.row-check:checked")) return true;
+  for (const el of cards.querySelectorAll("input[type=text], textarea")) {
+    if (el.value !== el.defaultValue) return true;
+  }
+  const modal = document.getElementById("case-detail-modal");
+  return Boolean(modal && modal.style.display === "flex");
+}
+
+async function loadQueue({ background = false } = {}) {
+  if (background && isBusy()) return;
+  let rows;
+  try {
+    rows = await Api.getReworkQueue(queueParams());
+  } catch (err) {
+    if (!background) showToast(err.message, "error");
+    return;
+  }
+  if (kindFilter) rows = rows.filter((r) => r.kind === kindFilter);
+  const cards = document.getElementById("queue-cards");
+  const openCount = rows.filter((r) => !r.is_closed).length;
+  const closedCount = rows.length - openCount;
+  document.getElementById("queue-count").textContent =
+    `${openCount} open${closedCount ? ` · ${closedCount} closed` : ""}`;
+  cards.innerHTML = rows.length
+    ? rows.map(cardHtml).join("")
+    : `<div class="card" style="text-align:center;color:var(--muted);">${
+        drawerFilter || document.getElementById("queue-search").value.trim()
+          ? "Nothing matches. It may already be closed: tick “Include closed”."
+          : "Nothing in the queue."
+      }</div>`;
   queueBulkSelect.refresh();
-  wireCaseLinks(tbody);
+  wireCaseLinks(cards);
+  wireForms(cards);
+  cards.querySelectorAll("[data-reopen]").forEach((btn) =>
+    btn.addEventListener("click", () => openCaseDetail(Number(btn.dataset.reopen)))
+  );
+  if (drawerFilter && rows.length === 1) {
+    cards.querySelector(".floor-card")?.classList.add("highlight");
+  }
+  lastLoadedAt = Date.now();
+  tickUpdated();
+}
 
-  tbody.querySelectorAll(".status-form").forEach((form) => {
+function wireForms(container) {
+  container.querySelectorAll(".status-form").forEach((form) => {
     const btn = form.querySelector("button");
     form.addEventListener(
       "submit",
@@ -131,15 +211,11 @@ async function loadQueue() {
         const fd = new FormData(form);
         const caseId = form.dataset.caseId;
         try {
-          // Root cause / corrective action / repair action are case details, saved
-          // independently of the status dropdown below - so jotting down a root
-          // cause on an open case doesn't require picking a (no-op) status.
           await Api.updateDefectCase(caseId, {
             root_cause: fd.get("root_cause") || null,
             corrective_action: fd.get("corrective_action") || null,
             repair_action: fd.get("repair_action") || null,
           });
-
           const newStatus = fd.get("new_status");
           if (newStatus !== form.dataset.currentStatus) {
             await Api.changeStatus(caseId, {
@@ -157,20 +233,16 @@ async function loadQueue() {
     );
   });
 
-  tbody.querySelectorAll(".close-form").forEach((form) => {
+  container.querySelectorAll(".close-form").forEach((form) => {
     const btn = form.querySelector("button");
     form.addEventListener(
       "submit",
       guardDoubleSubmit(btn, async (e) => {
         e.preventDefault();
         const fd = new FormData(form);
-        const caseId = form.dataset.caseId;
-        // Optional - what was done to close the case. Blank is fine; it just
-        // means neither the note nor repair_action get set, same as leaving
-        // either field untouched.
         const note = fd.get("note") || null;
         try {
-          await Api.changeStatus(caseId, {
+          await Api.changeStatus(form.dataset.caseId, {
             new_status: fd.get("close_status"),
             note,
             repair_action: note,
@@ -185,29 +257,109 @@ async function loadQueue() {
   });
 }
 
+function tickUpdated() {
+  const el = document.getElementById("queue-updated");
+  if (!lastLoadedAt) return;
+  const secs = Math.round((Date.now() - lastLoadedAt) / 1000);
+  el.textContent = `${secs < 5 ? "Updated just now" : `Updated ${secs} s ago`} · refreshes every ${REFRESH_SECONDS} s`;
+}
+
+function looksLikeLabel(text) {
+  return /#drawer=|workorderpdfs|^https?:\/\//i.test(text);
+}
+
+function setDrawerFilter(filter) {
+  drawerFilter = filter;
+  const chip = document.getElementById("queue-drawer-chip");
+  if (filter) {
+    chip.innerHTML = `<button type="button" class="chip active">${escapeHtml(filter.label)} ✕</button>`;
+    chip.hidden = false;
+    chip.querySelector("button").addEventListener("click", () => {
+      setDrawerFilter(null);
+      document.getElementById("queue-search").value = "";
+      loadQueue();
+    });
+  } else {
+    chip.hidden = true;
+    chip.innerHTML = "";
+  }
+}
+
+async function onSearch() {
+  const input = document.getElementById("queue-search");
+  const text = input.value.trim();
+  document.getElementById("queue-search-clear").hidden = !text && !drawerFilter;
+  if (text && looksLikeLabel(text)) {
+    // A scanned drawer label: jump straight to that drawer's case(s).
+    try {
+      const r = await Api.post("/api/v1/labels/resolve", { text });
+      if (r.order_detail_id) {
+        input.value = "";
+        setDrawerFilter({
+          key: `${r.order_detail_id}-${r.unit}`,
+          label: `Scanned: WO ${r.order_no}${r.line_label ? ` · Line ${r.line_label}` : ""} · drawer ${r.unit}`,
+        });
+      } else if (r.order_no) {
+        input.value = r.order_no;
+        setDrawerFilter(null);
+      }
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  } else if (drawerFilter && text) {
+    setDrawerFilter(null);
+  }
+  await loadQueue();
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   queueBulkSelect = initBulkSelect({
-    tableBodySelector: "#queue-table tbody",
+    tableBodySelector: "#queue-cards",
     selectAllId: "queue-select-all",
     entityLabel: "case",
     onDelete: (ids) => Api.bulkDeleteDefectCases(ids),
     onDeleted: () => loadQueue(),
   });
 
+  const search = document.getElementById("queue-search");
+  search.addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    // Scanners type fast and end with Enter; people type slowly. Either way, wait
+    // for a short pause.
+    searchTimer = setTimeout(onSearch, 300);
+  });
+  search.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      clearTimeout(searchTimer);
+      onSearch();
+    }
+  });
+  document.getElementById("queue-search-clear").addEventListener("click", () => {
+    search.value = "";
+    setDrawerFilter(null);
+    onSearch();
+    search.focus();
+  });
+  document.querySelectorAll("[data-kind]").forEach((chip) =>
+    chip.addEventListener("click", () => {
+      kindFilter = chip.dataset.kind;
+      document.querySelectorAll("[data-kind]").forEach((c) =>
+        c.setAttribute("aria-pressed", String(c === chip))
+      );
+      loadQueue();
+    })
+  );
+  document.getElementById("queue-include-closed").addEventListener("change", () => loadQueue());
+
   try {
     masterData = await Api.getMasterData();
-    // Open is the only actionable/open status now (PROJECT_SPEC_PHASE7.md) - the
-    // legacy In Rework/Waiting/Ready for QC Recheck options are gone from this
-    // filter since the Phase 7 migration moves every currently-open case in one
-    // of them to Open; none should exist going forward.
-    const statusSelect = document.getElementById("f-status");
-    statusSelect.insertAdjacentHTML("beforeend", "<option>Open</option>");
     await loadQueue();
   } catch (err) {
     showToast(err.message, "error");
   }
-  document.getElementById("f-priority").addEventListener("change", loadQueue);
-  document.getElementById("f-status").addEventListener("change", loadQueue);
+  setInterval(() => loadQueue({ background: true }), REFRESH_SECONDS * 1000);
+  setInterval(tickUpdated, 1000);
 });
 </script>
 {% endblock %}

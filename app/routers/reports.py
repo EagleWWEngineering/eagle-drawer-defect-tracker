@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import datetime as dt
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session, selectinload
 
 from app.dependencies import get_db
-from app.models import DailyProductionSummary, DefectCase, DefectItem
+from app.errors import ValidationError
+from app.models import DailyProductionSummary, DefectCase, DefectItem, DrawerEvent
 from app.schemas import (
     DatePresetOut,
     KpiOut,
@@ -23,8 +24,14 @@ from app.schemas import (
     WorkOrderLineBreakdownOut,
     defect_case_to_out,
 )
-from app.services import metrics_service, schedule_service, settings_service, working_days_service
-from app.services.defect_service import DIRECT_CLOSE_SOURCE_STATUSES
+from app.services import (
+    metrics_service,
+    order_line_service,
+    schedule_service,
+    settings_service,
+    working_days_service,
+)
+from app.services.defect_service import CLOSED_STATUSES, DIRECT_CLOSE_SOURCE_STATUSES
 from app.timezone_utils import resolve_date_preset, today_in_display_timezone
 
 router = APIRouter(prefix="/api/v1/reports", tags=["reports"])
@@ -339,19 +346,46 @@ def get_work_order_history(
     )
 
 
+def _aware(value: dt.datetime) -> dt.datetime:
+    return value if value.tzinfo else value.replace(tzinfo=dt.timezone.utc)
+
+
+def _parse_drawer(drawer: str | None) -> tuple[int, int] | None:
+    """'285016-1' -> (285016, 1); anything else -> None."""
+    if not drawer:
+        return None
+    detail, _, unit = drawer.partition("-")
+    if detail.isdigit() and unit.isdigit():
+        return int(detail), int(unit)
+    raise ValidationError("drawer must look like 285016-1.", field="drawer")
+
+
 @rework_router.get("/rework-queue", response_model=list[ReworkQueueItemOut])
 def get_rework_queue(
     db: Session = Depends(get_db),
     priority: str | None = None,
     status: str | None = None,
+    q: str | None = None,
+    include_closed_days: int = Query(default=0, ge=0, le=31),
+    drawer: str | None = None,
 ) -> list[ReworkQueueItemOut]:
-    """Open work only, sorted Urgent > High > Normal, oldest first within priority.
+    """Open work, sorted Urgent > High > Normal, oldest first within priority.
+
+    2026-10 redesign (Rework & Kickback Queue):
+      - every row carries the drawer's customer, line and size/options
+        (order_line_service.drawer_info) and whether it is a kickback;
+      - q: every word must appear in the work order, case number, customer,
+        "line X", categories, size/options, found station or status;
+      - include_closed_days: also cases closed in the last N days, after the open
+        ones, newest first (so "was this drawer already fixed?" has an answer);
+      - drawer=285016-1: only that drawer's cases (a scanned label in the search).
 
     open_statuses reuses defect_service.DIRECT_CLOSE_SOURCE_STATUSES rather than a
     separately hardcoded set - "actionable/open" and "closeable" are the same set
     of statuses now (PROJECT_SPEC_PHASE7.md), so one shared constant keeps them
     from drifting apart."""
     open_statuses = DIRECT_CLOSE_SOURCE_STATUSES
+    now = dt.datetime.now(dt.timezone.utc)
     query = (
         db.query(DefectCase)
         .options(
@@ -363,23 +397,73 @@ def get_rework_queue(
     )
     if status is not None:
         query = query.filter(DefectCase.status == status)
+    elif include_closed_days:
+        since = now - dt.timedelta(days=include_closed_days)
+        query = query.filter(
+            DefectCase.status.in_(open_statuses)
+            | (DefectCase.status.in_(CLOSED_STATUSES) & (DefectCase.closed_at >= since))
+        )
     else:
         query = query.filter(DefectCase.status.in_(open_statuses))
     if priority is not None:
         query = query.filter(DefectCase.priority == priority)
+    drawer_key = _parse_drawer(drawer)
+    if drawer_key is not None:
+        query = query.filter(
+            DefectCase.order_detail_id == drawer_key[0], DefectCase.drawer_unit == drawer_key[1]
+        )
 
     cases = query.all()
-    now = dt.datetime.now(dt.timezone.utc)
-    ordered = sorted(
-        cases, key=lambda c: (metrics_service.priority_sort_index(c.priority), c.detected_at)
+    info = order_line_service.drawer_info(db, cases)
+    kickback_areas = (
+        dict(
+            db.query(DrawerEvent.defect_case_id, DrawerEvent.area)
+            .filter(
+                DrawerEvent.defect_case_id.in_([c.id for c in cases]),
+                DrawerEvent.event_type == "kickback",
+            )
+            .all()
+        )
+        if cases
+        else {}
     )
+
+    words = (q or "").lower().split()
+    if words:
+
+        def _haystack(c: DefectCase) -> str:
+            d = info[c.id]
+            parts = [
+                c.work_order_number,
+                c.case_number,
+                d["customer"] or "",
+                f"line {d['line']}" if d["line"] else "",
+                d["spec"] or "",
+                c.found_station.name,
+                c.status,
+                "kickback" if c.entry_source == "undo_card" else "qc defect",
+                *(i.defect_category.name for i in c.items),
+            ]
+            return " ".join(parts).lower()
+
+        cases = [c for c in cases if all(w in _haystack(c) for w in words)]
+
+    open_cases = sorted(
+        (c for c in cases if c.status not in CLOSED_STATUSES),
+        key=lambda c: (metrics_service.priority_sort_index(c.priority), c.detected_at),
+    )
+    closed_cases = sorted(
+        (c for c in cases if c.status in CLOSED_STATUSES),
+        key=lambda c: _aware(c.closed_at or c.detected_at),
+        reverse=True,
+    )
+    ordered = open_cases + closed_cases
 
     result = []
     for c in ordered:
-        detected = (
-            c.detected_at if c.detected_at.tzinfo else c.detected_at.replace(tzinfo=dt.timezone.utc)
-        )
+        detected = _aware(c.detected_at)
         age_hours = (now - detected).total_seconds() / 3600
+        d = info[c.id]
         result.append(
             ReworkQueueItemOut(
                 id=c.id,
@@ -402,6 +486,13 @@ def get_rework_queue(
                 entry_source=c.entry_source,
                 order_detail_id=c.order_detail_id,
                 drawer_unit=c.drawer_unit,
+                customer_name=d["customer"],
+                resolved_line=d["line"],
+                spec=d["spec"],
+                notes=d["notes"],
+                kind="kickback" if c.entry_source == "undo_card" else "qc",
+                kickback_area=kickback_areas.get(c.id),
+                closed_at=c.closed_at if c.status in CLOSED_STATUSES else None,
             )
         )
     return result

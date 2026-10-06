@@ -686,11 +686,32 @@ class ReworkQueueItemOut(BaseModel):
     entry_source: str | None = None
     order_detail_id: int | None = None
     drawer_unit: int | None = None
+    # 2026-10 redesign: what the floor needs to find the drawer
+    # (order_line_service.drawer_info) and why it is in the queue.
+    customer_name: str | None = None
+    resolved_line: str | None = None
+    spec: str | None = None
+    notes: str | None = None
+    # "kickback" (opened by an UNDO card) or "qc" (entered on New Defect).
+    kind: str = "qc"
+    # "assembly" / "qc" - where the UNDO card was used, for kickbacks only.
+    kickback_area: str | None = None
+    closed_at: dt.datetime | None = None
 
     @computed_field
     @property
     def detected_at_local(self) -> str | None:
         return to_display_string(self.detected_at)
+
+    @computed_field
+    @property
+    def closed_at_local(self) -> str | None:
+        return to_display_string(self.closed_at) if self.closed_at else None
+
+    @computed_field
+    @property
+    def is_closed(self) -> bool:
+        return self.closed_at is not None
 
     @computed_field
     @property
