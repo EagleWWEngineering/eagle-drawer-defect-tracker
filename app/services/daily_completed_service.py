@@ -103,6 +103,9 @@ def apply_counts(db: Session, counts: dict[dt.date, int]) -> dict[str, int]:
                 shift=FEED_SHIFT,
                 drawers_inspected=count,
                 drawers_rejected_unique=0,
+                # Nobody typed a rejected count: the reports use the live count
+                # of the day's cases until someone saves one (2026-10 redesign).
+                rejected_source="auto",
                 drawers_reworked=0,
                 drawers_scrapped=0,
                 notes=None,

@@ -922,6 +922,8 @@ def upsert_daily_summary(
     if row.drawers_inspected is None:
         row.drawers_inspected = 0
     row.drawers_rejected_unique = drawers_rejected_unique
+    # A saved number always wins over the automatic count (2026-10 redesign).
+    row.rejected_source = "manual"
     row.drawers_reworked = effective_reworked
     row.drawers_scrapped = effective_scrapped
     row.notes = notes
@@ -990,6 +992,58 @@ def suggested_daily_counts(db: Session, production_date: dt.date) -> dict:
         "defect_case_count": case_count,
         "suggested_drawers_rejected_unique": case_count,
     }
+
+
+def auto_rejected_by_date(db: Session, dates: set[dt.date] | list[dt.date]) -> dict[dt.date, int]:
+    """The automatic "unique drawers rejected" per date (2026-10 redesign): distinct
+    non-deleted cases on that production_date, kickbacks included - the same rule
+    as suggested_daily_counts, in one grouped query."""
+    dates = list(dates)
+    if not dates:
+        return {}
+    rows = (
+        db.query(DefectCase.production_date, func.count(DefectCase.id))
+        .filter(DefectCase.production_date.in_(dates), DefectCase.is_deleted.is_(False))
+        .group_by(DefectCase.production_date)
+        .all()
+    )
+    return {d: n for d, n in rows}
+
+
+def effective_rejected(db: Session, rows: list[DailyProductionSummary]) -> dict[int, int]:
+    """{row.id: rejected count the reports should use}. 'manual' rows: the saved
+    number. 'auto' rows: the live count of the day's cases, put on that date's
+    "Day" row only (cases have no shift - see suggested_daily_counts), so a
+    two-shift day never counts them twice."""
+    auto_dates = {r.production_date for r in rows if r.rejected_source == "auto"}
+    auto = auto_rejected_by_date(db, auto_dates)
+    out: dict[int, int] = {}
+    for r in rows:
+        if r.rejected_source != "auto":
+            out[r.id] = r.drawers_rejected_unique
+        else:
+            out[r.id] = auto.get(r.production_date, 0) if r.shift == "Day" else 0
+    return out
+
+
+def use_automatic_rejected(
+    db: Session, production_date: dt.date, shift: str
+) -> DailyProductionSummary:
+    """Daily Summary's "Use automatic": hand the count back to the live case count."""
+    row = (
+        db.query(DailyProductionSummary)
+        .filter(
+            DailyProductionSummary.production_date == production_date,
+            DailyProductionSummary.shift == shift,
+        )
+        .first()
+    )
+    if row is None:
+        raise NotFoundError(f"No daily summary for {production_date} ({shift}).")
+    row.rejected_source = "auto"
+    db.commit()
+    db.refresh(row)
+    return row
 
 
 def count_rework_cases_by_date(db: Session, production_dates: list[dt.date]) -> dict[dt.date, int]:

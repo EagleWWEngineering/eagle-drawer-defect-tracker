@@ -29,6 +29,7 @@ from app.schemas import (
     defect_case_to_out,
 )
 from app.services import (
+    defect_service,
     metrics_service,
     order_line_service,
     schedule_service,
@@ -77,10 +78,11 @@ def _daily_summary_rows(
     return query.all()
 
 
-def _daily_totals(rows: list[DailyProductionSummary]) -> dict:
+def _daily_totals(db: Session, rows: list[DailyProductionSummary]) -> dict:
+    rejected = defect_service.effective_rejected(db, rows)
     return {
         "drawers_inspected": sum(r.drawers_inspected for r in rows),
-        "drawers_rejected_unique": sum(r.drawers_rejected_unique for r in rows),
+        "drawers_rejected_unique": sum(rejected.values()),
     }
 
 
@@ -124,7 +126,7 @@ def get_summary(
     )
     items = items_query.all()
     defect_events = sum(item.affected_drawer_quantity for item, _case in items)
-    totals = _daily_totals(_daily_summary_rows(db, start_date, end_date))
+    totals = _daily_totals(db, _daily_summary_rows(db, start_date, end_date))
     cases = _distinct_cases(items)
 
     # PROJECT_SPEC_PHASE7.md "Cost model": one cost unit per case in the filtered
@@ -260,10 +262,11 @@ def get_trend(
 
     inspected_by_bucket: dict[str, int] = {}
     rejected_by_bucket: dict[str, int] = {}
+    effective = defect_service.effective_rejected(db, summary_rows)
     for row in summary_rows:
         label = metrics_service.trend_bucket_label(row.production_date, group_by)
         inspected_by_bucket[label] = inspected_by_bucket.get(label, 0) + row.drawers_inspected
-        rejected_by_bucket[label] = rejected_by_bucket.get(label, 0) + row.drawers_rejected_unique
+        rejected_by_bucket[label] = rejected_by_bucket.get(label, 0) + effective[row.id]
 
     # PROJECT_SPEC_PHASE7.md "Cost model": one cost unit per case, bucketed the
     # same way as every other per-date rollup here - replaces the old Phase 4

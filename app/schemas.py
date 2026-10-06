@@ -547,6 +547,11 @@ class DailyProductionSummaryOut(BaseModel):
     # here were removed for exactly that reason: they'd otherwise show a real
     # dollar figure that has nothing to do with the actual reported cost anymore.
     cost_per_drawer_at_time: float | None
+    # 2026-10 redesign: 'auto' (reports use the live case count) or 'manual' (the
+    # saved drawers_rejected_unique wins); effective_rejected is the number the
+    # reports actually use for this row.
+    rejected_source: str = "manual"
+    effective_rejected: int | None = None
     warnings: list[str] = []
     # Read-only, not stored on this row and not part of a save payload - set
     # explicitly by the router after model_validate() from

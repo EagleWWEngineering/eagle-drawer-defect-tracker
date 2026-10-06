@@ -179,9 +179,34 @@ def list_summaries(
     reworked_by_date = defect_service.count_rework_cases_by_date(
         db, [r.production_date for r in rows]
     )
+    effective = defect_service.effective_rejected(db, rows)
     results = []
     for r in rows:
         out = DailyProductionSummaryOut.model_validate(r)
         out.reworked_case_count = reworked_by_date.get(r.production_date, 0)
+        out.effective_rejected = effective[r.id]
         results.append(out)
     return results
+
+
+@router.post("/{production_date}/use-automatic-rejected", response_model=DailyProductionSummaryOut)
+def use_automatic_rejected(
+    production_date: dt.date,
+    shift: str = "Day",
+    db: Session = Depends(get_db),
+    actor_role: str = Depends(get_actor_role),
+) -> DailyProductionSummaryOut:
+    """Daily Summary's "Use automatic": the reports go back to the live count of
+    that day's cases instead of the saved number (2026-10 redesign)."""
+    row = defect_service.use_automatic_rejected(db, production_date, shift)
+    audit_service.record(
+        db,
+        actor_role=actor_role,
+        action="use_automatic_rejected",
+        entity_type="DailyProductionSummary",
+        entity_id=f"{production_date}:{shift}",
+        inputs={"production_date": str(production_date), "shift": shift},
+    )
+    out = DailyProductionSummaryOut.model_validate(row)
+    out.effective_rejected = defect_service.effective_rejected(db, [row])[row.id]
+    return out

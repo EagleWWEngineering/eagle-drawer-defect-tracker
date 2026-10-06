@@ -125,6 +125,9 @@ class DailyProductionSummary(Base):
     shift: Mapped[str] = mapped_column(String(40), nullable=False, default="Day")
     drawers_inspected: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     drawers_rejected_unique: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # 2026-10 redesign: 'auto' = reports use the live count of the day's cases
+    # (defect_service.auto_rejected_by_date); 'manual' = the saved number above wins.
+    rejected_source: Mapped[str] = mapped_column(String(10), nullable=False, default="manual")
     drawers_reworked: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     drawers_scrapped: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
