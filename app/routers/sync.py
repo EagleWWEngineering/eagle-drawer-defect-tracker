@@ -32,6 +32,7 @@ from app.models import SyncLog
 from app.schemas import (
     DailyCompletedIngestOut,
     DrawerEventsIngestOut,
+    FeedHealthOut,
     ManualSyncRequestOut,
     OrderLinesIngestOut,
     RelayConnectionStatusOut,
@@ -41,6 +42,7 @@ from app.schemas import (
 from app.services import (
     daily_completed_service,
     drawer_event_service,
+    feed_health_service,
     order_line_service,
     schedule_service,
     sync_service,
@@ -111,7 +113,8 @@ async def ingest_raw_customer_issues(
 
     settings = get_settings()
     source_url = f"relay:{settings.production_brief_url}{sync_service.QUALITY_ISSUES_PATH}"
-    log = sync_service.process_issues_payload(db, payload, source_url=source_url)
+    with feed_health_service.tracking(db, "customer_issues"):
+        log = sync_service.process_issues_payload(db, payload, source_url=source_url)
     return SyncLogOut.model_validate(log)
 
 
@@ -147,7 +150,8 @@ async def ingest_raw_daily_schedule(
 
     settings = get_settings()
     source_url = f"relay:{settings.production_brief_url}/drawers.html"
-    log = schedule_service.process_schedule_payload(db, payload, source_url=source_url)
+    with feed_health_service.tracking(db, "daily_schedule"):
+        log = schedule_service.process_schedule_payload(db, payload, source_url=source_url)
     return SyncLogOut.model_validate(log)
 
 
@@ -169,7 +173,8 @@ def ingest_daily_completed(
     at. Any bad date/count -> 422 for the whole request, nothing written. See
     app/services/daily_completed_service.py for the per-date upsert rules."""
     _verify_relay_key(x_relay_key)
-    summary = daily_completed_service.process_payload(db, payload)
+    with feed_health_service.tracking(db, "daily_completed"):
+        summary = daily_completed_service.process_payload(db, payload)
     return DailyCompletedIngestOut(**summary)
 
 
@@ -186,7 +191,8 @@ def ingest_order_lines(
     Same X-Relay-Key check; any invalid entry -> 422, nothing written. See
     app/services/order_line_service.py."""
     _verify_relay_key(x_relay_key)
-    summary = order_line_service.process_payload(db, payload)
+    with feed_health_service.tracking(db, "order_lines"):
+        summary = order_line_service.process_payload(db, payload)
     return OrderLinesIngestOut(**summary)
 
 
@@ -202,7 +208,8 @@ def ingest_drawer_events(
     (source, event_id). Same X-Relay-Key check; any malformed event -> 422,
     nothing written. See app/services/drawer_event_service.py."""
     _verify_relay_key(x_relay_key)
-    summary = drawer_event_service.process_payload(db, payload)
+    with feed_health_service.tracking(db, "drawer_events"):
+        summary = drawer_event_service.process_payload(db, payload)
     return DrawerEventsIngestOut(**summary)
 
 
@@ -224,6 +231,7 @@ def relay_status(
     """
     _verify_relay_key(x_relay_key)
     pending = sync_service.record_relay_heartbeat(db)
+    feed_health_service.record(db, "heartbeat", ok=True)
     return RelayHeartbeatOut(manual_sync_pending=pending)
 
 
@@ -260,3 +268,10 @@ def list_sync_logs(db: Session = Depends(get_db), limit: int = 20) -> list[SyncL
         .all()
     )
     return [SyncLogOut.model_validate(log) for log in logs]
+
+
+@router.get("/health", response_model=FeedHealthOut)
+def feed_health(db: Session = Depends(get_db)) -> FeedHealthOut:
+    """Is production count still talking to us? One line per feed - when it last
+    arrived and whether it is late or was refused (feed_health_service)."""
+    return FeedHealthOut(**feed_health_service.status(db))

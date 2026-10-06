@@ -1139,3 +1139,17 @@ class OpenAgingOut(BaseModel):
 class ShopVsCustomerOut(BaseModel):
     shop: list[LabelCountOut]
     customer: list[LabelCountOut]
+
+
+class FeedStateOut(BaseModel):
+    feed: str
+    label: str
+    state: str  # ok | late | error | never
+    last_received_local: str | None
+    minutes_ago: int | None
+    message: str | None
+
+
+class FeedHealthOut(BaseModel):
+    ok: bool
+    feeds: list[FeedStateOut]

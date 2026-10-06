@@ -314,6 +314,19 @@ class WorkOrder(Base):
     received_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class FeedStatus(Base):
+    """When each production-count feed last arrived and whether it was accepted
+    (2026-10 redesign, app/services/feed_health_service.py)."""
+
+    __tablename__ = "feed_statuses"
+
+    feed: Mapped[str] = mapped_column(String(40), primary_key=True)
+    last_received_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_ok_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_result: Mapped[str] = mapped_column(String(10), nullable=False)
+    last_message: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
 class DrawerEvent(Base):
     """One drawer scan event pushed by eagle-drawers-production-count
     (PROJECT_SPEC_PHASE11.md): a "kickback" (the UNDO card took the drawer off
