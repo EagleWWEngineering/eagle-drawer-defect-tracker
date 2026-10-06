@@ -67,9 +67,8 @@ shared login can reach any screen.
 
 ## Using a paper log first
 
-If you're on the floor without a screen: fill out the **Print Log** screen's printable
-form as defects are found, then have someone type it into **New Defect** later the
-same day, using the paper log's date as the Production Date (New Defect lets you pick
+If you're on the floor without a screen: write defects on paper as they're found, then
+have someone type them into **New Defect** later the same day, using the paper log's date as the Production Date (New Defect lets you pick
 a date in the past for exactly this reason).
 
 ## Moving a case through rework

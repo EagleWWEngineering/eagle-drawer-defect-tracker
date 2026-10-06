@@ -245,6 +245,18 @@ function initRoleSelector() {
   select.addEventListener("change", () => setActorRole(select.value));
 }
 
+/* The shop's calendar date ("YYYY-MM-DD") for a moment, in the shop's time zone
+ * (window.APP_TZ, from DISPLAY_TIMEZONE). Never toISOString().slice(0, 10): that is
+ * the UTC date, which is already tomorrow after about 8 PM in New York. */
+function isoDate(date = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: window.APP_TZ || "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
 function highlightActiveNavLink() {
   const links = document.querySelectorAll(".app-nav a");
   const path = window.location.pathname;

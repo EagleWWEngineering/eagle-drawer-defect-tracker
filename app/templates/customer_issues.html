@@ -328,8 +328,8 @@ function defaultDateRange() {
   const end = new Date();
   const start = new Date();
   start.setDate(start.getDate() - 6);
-  document.getElementById("f-start-date").value = start.toISOString().slice(0, 10);
-  document.getElementById("f-end-date").value = end.toISOString().slice(0, 10);
+  document.getElementById("f-start-date").value = isoDate(start);
+  document.getElementById("f-end-date").value = isoDate(end);
 }
 
 async function loadSyncStatus() {

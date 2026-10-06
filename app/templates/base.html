@@ -11,17 +11,17 @@
   <a href="#main-content" class="skip-link">Skip to main content</a>
 
   <header class="app-header no-print">
-    <a class="brand" href="{{ base }}/">Eagle Drawer Defect Tracker</a>
+    <a class="brand" href="{{ base }}/">Drawer Defects</a>
     <nav class="app-nav" aria-label="Main navigation">
       <a href="{{ base }}/">Dashboard</a>
       <a href="{{ base }}/defect-entry">New Defect</a>
       <a href="{{ base }}/daily-summary">Daily Summary</a>
-      <a href="{{ base }}/rework-queue">Rework Queue</a>
+      <a href="{{ base }}/rework-queue">Rework &amp; Kickback Queue</a>
       <a href="{{ base }}/reports">Reports</a>
       <a href="{{ base }}/customer-issues">Customer Issues</a>
       <a href="{{ base }}/admin">Admin</a>
-      <a href="{{ base }}/print-daily-log">Print Log</a>
       {% if login_required %}<a href="{{ base }}/settings">Settings</a>{% endif %}
+      {% if base %}<a class="nav-back" href="/admin/orders">← Production count</a>{% endif %}
     </nav>
     <div class="role-selector">
       <label for="actor-role-select">Role (prototype)</label>
@@ -59,7 +59,7 @@
     </div>
   </div>
 
-  <script>window.APP_BASE = {{ base | tojson }};</script>
+  <script>window.APP_BASE = {{ base | tojson }}; window.APP_TZ = {{ display_tz | tojson }};</script>
   <script src="{{ base }}/static/js/api.js?v={{ static_version('js/api.js') }}"></script>
   <script src="{{ base }}/static/js/charts.js?v={{ static_version('js/charts.js') }}"></script>
   <script src="{{ base }}/static/js/app.js?v={{ static_version('js/app.js') }}"></script>

@@ -38,7 +38,7 @@
     </div>
   </main>
   <div id="toast-region" role="status" aria-live="polite"></div>
-  <script>window.APP_BASE = {{ base | tojson }};</script>
+  <script>window.APP_BASE = {{ base | tojson }}; window.APP_TZ = {{ display_tz | tojson }};</script>
   <script src="{{ base }}/static/js/api.js?v={{ static_version('js/api.js') }}"></script>
   <script src="{{ base }}/static/js/app.js?v={{ static_version('js/app.js') }}"></script>
   <script>

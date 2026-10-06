@@ -243,7 +243,7 @@ async function loadForCurrentDateAndShift() {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
-  document.getElementById("production_date").value = new Date().toISOString().slice(0, 10);
+  document.getElementById("production_date").value = isoDate();
   renderRatePreview();
   try {
     await loadCurrentRate();
