@@ -310,7 +310,7 @@ async function populateCategoryFilter() {
 function updateCsvLink(params) {
   const query = new URLSearchParams(params).toString();
   document.getElementById("csv-export-link").href =
-    "/api/v1/exports/customer-issues.csv" + (query ? `?${query}` : "");
+    appUrl("/api/v1/exports/customer-issues.csv") + (query ? `?${query}` : "");
 }
 
 async function reloadAll() {

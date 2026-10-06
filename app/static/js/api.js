@@ -18,6 +18,12 @@ function setActorRole(role) {
   localStorage.setItem(ACTOR_ROLE_KEY, role);
 }
 
+/* URL prefix the app is served under ("" or e.g. "/defects", set by base.html /
+ * login.html from Settings.root_path). Every app-relative URL goes through here. */
+function appUrl(path) {
+  return (window.APP_BASE || "") + path;
+}
+
 class ApiError extends Error {
   constructor(message, field, status) {
     super(message);
@@ -77,7 +83,7 @@ async function shrinkPhotoForUpload(file) {
 }
 
 async function request(method, path, { params, body, isForm } = {}) {
-  const url = path + buildQueryString(params);
+  const url = appUrl(path) + buildQueryString(params);
   const headers = { "X-Actor-Role": getActorRole() };
   let payload = body;
   if (body !== undefined && !isForm) {
@@ -205,7 +211,7 @@ const Api = {
   getTrend: (params) => request("GET", "/api/v1/reports/trend", { params }),
   getWorkOrderHistory: (wo) => request("GET", `/api/v1/reports/work-orders/${encodeURIComponent(wo)}`),
 
-  exportCsvUrl: (params) => "/api/v1/exports/defects.csv" + buildQueryString(params),
+  exportCsvUrl: (params) => appUrl("/api/v1/exports/defects.csv") + buildQueryString(params),
 
   health: () => request("GET", "/api/v1/health"),
 };

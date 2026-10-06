@@ -8,6 +8,7 @@ import datetime as dt
 
 from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
+from app.config import get_settings
 from app.services.defect_service import (
     CLOSED_STATUSES,
     allowed_next_statuses,
@@ -168,7 +169,7 @@ class DefectPhotoOut(BaseModel):
     @computed_field
     @property
     def url(self) -> str:
-        return f"/uploads/{self.stored_filename}"
+        return f"{get_settings().root_path}/uploads/{self.stored_filename}"
 
     model_config = {"from_attributes": True}
 

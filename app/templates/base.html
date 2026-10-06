@@ -4,24 +4,24 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Eagle Drawer Defect Tracker{% endblock %}</title>
-  <link rel="stylesheet" href="/static/css/app.css?v={{ static_version('css/app.css') }}">
+  <link rel="stylesheet" href="{{ base }}/static/css/app.css?v={{ static_version('css/app.css') }}">
   {% block extra_head %}{% endblock %}
 </head>
 <body data-page="{% block page_name %}{% endblock %}">
   <a href="#main-content" class="skip-link">Skip to main content</a>
 
   <header class="app-header no-print">
-    <a class="brand" href="/">Eagle Drawer Defect Tracker</a>
+    <a class="brand" href="{{ base }}/">Eagle Drawer Defect Tracker</a>
     <nav class="app-nav" aria-label="Main navigation">
-      <a href="/">Dashboard</a>
-      <a href="/defect-entry">New Defect</a>
-      <a href="/daily-summary">Daily Summary</a>
-      <a href="/rework-queue">Rework Queue</a>
-      <a href="/reports">Reports</a>
-      <a href="/customer-issues">Customer Issues</a>
-      <a href="/admin">Admin</a>
-      <a href="/print-daily-log">Print Log</a>
-      <a href="/settings">Settings</a>
+      <a href="{{ base }}/">Dashboard</a>
+      <a href="{{ base }}/defect-entry">New Defect</a>
+      <a href="{{ base }}/daily-summary">Daily Summary</a>
+      <a href="{{ base }}/rework-queue">Rework Queue</a>
+      <a href="{{ base }}/reports">Reports</a>
+      <a href="{{ base }}/customer-issues">Customer Issues</a>
+      <a href="{{ base }}/admin">Admin</a>
+      <a href="{{ base }}/print-daily-log">Print Log</a>
+      <a href="{{ base }}/settings">Settings</a>
     </nav>
     <div class="role-selector">
       <label for="actor-role-select">Role (prototype)</label>
@@ -59,9 +59,10 @@
     </div>
   </div>
 
-  <script src="/static/js/api.js?v={{ static_version('js/api.js') }}"></script>
-  <script src="/static/js/charts.js?v={{ static_version('js/charts.js') }}"></script>
-  <script src="/static/js/app.js?v={{ static_version('js/app.js') }}"></script>
+  <script>window.APP_BASE = {{ base | tojson }};</script>
+  <script src="{{ base }}/static/js/api.js?v={{ static_version('js/api.js') }}"></script>
+  <script src="{{ base }}/static/js/charts.js?v={{ static_version('js/charts.js') }}"></script>
+  <script src="{{ base }}/static/js/app.js?v={{ static_version('js/app.js') }}"></script>
   {% block extra_scripts %}{% endblock %}
 </body>
 </html>

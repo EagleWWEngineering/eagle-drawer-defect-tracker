@@ -24,6 +24,13 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _normalize_root_path(raw: str) -> str:
+    """'' or '/x' (leading slash, no trailing slash) - "defects/", "/defects/" and
+    "/defects" all become "/defects"; "" and "/" both mean no prefix."""
+    stripped = raw.strip().strip("/")
+    return f"/{stripped}" if stripped else ""
+
+
 class Settings:
     """Central place for every configurable value in the app.
 
@@ -85,6 +92,13 @@ class Settings:
         # this env var once Admin has actually favorited something, not an
         # instant-on feature.
         self.favorites_enabled: bool = _env_bool("FAVORITES_ENABLED", False)
+        # URL prefix the app is served under. Empty when the app owns the whole
+        # host (local dev, Render). "/defects" on eagle-vm, where production count
+        # passes /defects/* through to this app (prefix stripped) - so routes stay
+        # at "/", and only the links/redirects/photo URLs the app generates carry
+        # the prefix. Machine callers (production count's feeds) hit the app
+        # directly on its loopback port and never use it.
+        self.root_path: str = _normalize_root_path(os.getenv("ROOT_PATH", ""))
 
     @property
     def max_upload_bytes(self) -> int:

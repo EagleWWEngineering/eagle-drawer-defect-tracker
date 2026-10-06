@@ -36,6 +36,7 @@ from app.routers import (
     exports,
     labels,
     master_data,
+    migration_export,
     reports,
     sync,
 )
@@ -83,6 +84,8 @@ def static_version(relative_path: str) -> int:
 
 
 templates.env.globals["static_version"] = static_version
+# URL prefix for every link a template writes (see Settings.root_path).
+templates.env.globals["base"] = settings.root_path
 
 
 @asynccontextmanager
@@ -132,6 +135,7 @@ app.include_router(sync.router)
 app.include_router(settings_router.router)
 app.include_router(brief.router)
 app.include_router(labels.router)
+app.include_router(migration_export.router)
 
 app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
 settings.uploads_dir.mkdir(parents=True, exist_ok=True)

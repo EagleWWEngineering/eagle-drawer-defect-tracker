@@ -19,6 +19,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse
 
+from app.config import get_settings
 from app.dependencies import get_db
 from app.services import auth_service
 
@@ -62,6 +63,12 @@ PUBLIC_EXACT_PATHS: set[str] = {
     # this is a different machine, calling in the opposite direction. Exempting
     # this ONE exact path only - nothing broader.
     "/api/v1/brief/summary",
+    # Eagle-vm migration (2026-10): one-off export of the database and photos off
+    # Render, protected by the same RELAY_API_KEY header check
+    # (app/routers/migration_export.py). Remove with that router once Render is
+    # suspended.
+    "/api/v1/sync/export/database",
+    "/api/v1/sync/export/uploads",
 }
 
 # Path prefixes reachable with no session (static assets only - no shop data lives
@@ -96,6 +103,8 @@ class LoginRequiredMiddleware(BaseHTTPMiddleware):
                     content={"error": {"message": "Login required.", "field": None}},
                 )
             next_qs = f"?next={quote(path)}" if path not in ("/", "") else ""
-            return RedirectResponse(url=f"/login{next_qs}", status_code=303)
+            return RedirectResponse(
+                url=f"{get_settings().root_path}/login{next_qs}", status_code=303
+            )
 
         return await call_next(request)

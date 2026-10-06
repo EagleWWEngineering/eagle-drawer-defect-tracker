@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.dependencies import get_db
 from app.errors import ValidationError
 from app.services import auth_service
@@ -46,7 +47,7 @@ def _set_session_cookie(response: Response, token: str) -> None:
         httponly=True,
         secure=False,  # plain HTTP on the LAN - Secure would block the cookie entirely
         samesite="lax",
-        path="/",
+        path=get_settings().root_path or "/",
     )
 
 
@@ -65,7 +66,7 @@ def logout(request: Request, response: Response, db: Session = Depends(get_db)) 
     devices) is left untouched."""
     token = request.cookies.get(auth_service.SESSION_COOKIE_NAME)
     auth_service.delete_session(db, token)
-    response.delete_cookie(auth_service.SESSION_COOKIE_NAME, path="/")
+    response.delete_cookie(auth_service.SESSION_COOKIE_NAME, path=get_settings().root_path or "/")
     return OkOut(ok=True)
 
 
@@ -80,5 +81,5 @@ def logout_everywhere(
     if not auth_service.verify_credentials(db, auth_service.get_app_username(db), payload.password):
         raise ValidationError("Incorrect password.", field="password")
     count = auth_service.delete_all_sessions(db)
-    response.delete_cookie(auth_service.SESSION_COOKIE_NAME, path="/")
+    response.delete_cookie(auth_service.SESSION_COOKIE_NAME, path=get_settings().root_path or "/")
     return LogoutEverywhereOut(ok=True, sessions_invalidated=count)

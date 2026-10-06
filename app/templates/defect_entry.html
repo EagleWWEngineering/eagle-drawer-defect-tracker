@@ -164,8 +164,8 @@
 {% block extra_scripts %}
 <!-- Vendored - never a CDN. jsQR is the QR fallback for browsers with no
      native BarcodeDetector (iOS Safari) - see app/static/js/label-scan.js. -->
-<script src="/static/js/vendor/jsqr.js?v={{ static_version('js/vendor/jsqr.js') }}"></script>
-<script src="/static/js/label-scan.js?v={{ static_version('js/label-scan.js') }}"></script>
+<script src="{{ base }}/static/js/vendor/jsqr.js?v={{ static_version('js/vendor/jsqr.js') }}"></script>
+<script src="{{ base }}/static/js/label-scan.js?v={{ static_version('js/label-scan.js') }}"></script>
 <script>
 // Real seeded station names (app/seed_data.py) that best match the common QC
 // catch points called out in the entry-speed redesign. Looked up by exact name at
