@@ -35,7 +35,7 @@ from app.schemas import (
     WorkOrderLastStationOut,
     defect_case_to_out,
 )
-from app.services import audit_service, defect_service
+from app.services import audit_service, defect_service, metrics_service, order_line_service
 
 router = APIRouter(prefix="/api/v1/defect-cases", tags=["defect-cases"])
 
@@ -106,6 +106,7 @@ def list_cases(
     priority: str | None = None,
     status: str | None = None,
     disposition: str | None = None,
+    kind: str | None = None,
     include_deleted: bool = False,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=500),
@@ -135,6 +136,7 @@ def list_cases(
         query = query.filter(DefectCase.status == status)
     if disposition is not None:
         query = query.filter(DefectCase.disposition == disposition)
+    query = metrics_service.apply_kind_filter(query, kind)
     if category_id is not None:
         query = query.filter(
             DefectCase.id.in_(
@@ -151,7 +153,16 @@ def list_cases(
         .limit(page_size)
         .all()
     )
-    return DefectCaseListOut(total=total, cases=[defect_case_to_out(c) for c in cases])
+    # 2026-10 redesign: the records table shows customer, line and size too.
+    info = order_line_service.drawer_info(db, cases)
+    outs = []
+    for c in cases:
+        out = defect_case_to_out(c)
+        out.customer_name = info[c.id]["customer"]
+        out.resolved_line = info[c.id]["line"]
+        out.spec = info[c.id]["spec"]
+        outs.append(out)
+    return DefectCaseListOut(total=total, cases=outs)
 
 
 @router.get("/work-orders/recent", response_model=list[str])

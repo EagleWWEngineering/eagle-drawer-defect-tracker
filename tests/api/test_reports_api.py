@@ -343,6 +343,10 @@ def test_trend_with_no_date_bounds_leaves_is_working_day_unset(client, master_da
 # end-to-end composition a preset-driven Reports request now unlocks.
 # ---------------------------------------------------------------------------
 
+# 2026-10 redesign: the chips match production count's presets - no "Last 7
+# working days" chip any more (the API still resolves last_7_days).
+PRESET_CHIPS = ("today", "yesterday", "this_week", "last_week", "month_to_date", "last_30_days")
+
 ALL_SEVEN_PRESETS = (
     "today",
     "yesterday",
@@ -427,7 +431,7 @@ def test_reports_page_renders_the_shared_preset_button_row_once(client):
     resp = client.get("/reports")
     assert resp.status_code == 200
     html = resp.text
-    for preset in ALL_SEVEN_PRESETS:
+    for preset in PRESET_CHIPS:
         assert html.count(f'data-range="{preset}"') == 1
     # Existing manual date inputs are still present - presets are additive.
     assert 'id="f-start-date"' in html
@@ -440,7 +444,7 @@ def test_dashboard_page_still_renders_the_shared_preset_button_row(client):
     resp = client.get("/")
     assert resp.status_code == 200
     html = resp.text
-    for preset in ALL_SEVEN_PRESETS:
+    for preset in PRESET_CHIPS:
         assert html.count(f'data-range="{preset}"') == 1
     assert 'id="dr-start-date"' in html
     assert 'id="dr-end-date"' in html

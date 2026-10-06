@@ -62,6 +62,7 @@
   <script>window.APP_BASE = {{ base | tojson }}; window.APP_TZ = {{ display_tz | tojson }};</script>
   <script src="{{ base }}/static/js/api.js?v={{ static_version('js/api.js') }}"></script>
   <script src="{{ base }}/static/js/charts.js?v={{ static_version('js/charts.js') }}"></script>
+  <script src="{{ base }}/static/js/viz.js?v={{ static_version('js/viz.js') }}"></script>
   <script src="{{ base }}/static/js/app.js?v={{ static_version('js/app.js') }}"></script>
   {% block extra_scripts %}{% endblock %}
 </body>

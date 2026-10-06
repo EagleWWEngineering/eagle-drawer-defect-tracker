@@ -918,6 +918,8 @@ canvas.chart-canvas {
 .bar-row .num { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
 .bar-row .cum { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
 .bar-row.vital .name { font-weight: 700; }
+/* Compact lists (side-by-side columns): no cumulative column, a wider track. */
+.bar-compact .bar-row { grid-template-columns: minmax(0, 1fr) 35% 2.6rem 0; gap: 0.5rem; }
 .bar-row.clickable { cursor: pointer; }
 .bar-row.clickable:hover .name { color: var(--accent); }
 .bar-row .up { color: var(--bad); font-size: 0.78rem; font-weight: 600; margin-left: 0.3rem; }

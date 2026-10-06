@@ -14,6 +14,7 @@ from app.services import (
     audit_service,
     export_service,
     metrics_service,
+    order_line_service,
     schedule_service,
     settings_service,
 )
@@ -35,6 +36,7 @@ def export_defects_csv(
     priority: str | None = None,
     status: str | None = None,
     disposition: str | None = None,
+    kind: str | None = None,
 ) -> Response:
     query = metrics_service.filtered_defect_items_query(
         db,
@@ -48,6 +50,7 @@ def export_defects_csv(
         priority=priority,
         status=status,
         disposition=disposition,
+        kind=kind,
     ).options(
         selectinload(DefectCase.found_station),
         selectinload(DefectCase.possible_source_station),
@@ -91,7 +94,12 @@ def export_defects_csv(
             }
 
     csv_text = export_service.build_defect_items_csv(
-        rows, fallback_rate=fallback_rate, daily_schedule_by_date=daily_schedule_by_date
+        rows,
+        fallback_rate=fallback_rate,
+        daily_schedule_by_date=daily_schedule_by_date,
+        drawer_info_by_case=order_line_service.drawer_info(
+            db, list({case.id: case for _item, case in rows}.values())
+        ),
     )
 
     audit_service.record(

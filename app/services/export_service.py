@@ -45,6 +45,11 @@ CSV_COLUMNS = [
     # docs/PRODUCTION_BRIEF_SCHEDULE_SOURCE.md.
     "day_drawers_scheduled",
     "day_schedule_attainment_pct",
+    # 2026-10 redesign: appended (existing column positions unchanged) - kickback
+    # vs QC defect, the order's customer, and the line's size/wood/bottom/options.
+    "case_type",
+    "customer",
+    "size_and_options",
 ]
 
 
@@ -53,6 +58,7 @@ def build_defect_items_csv(
     *,
     fallback_rate: decimal.Decimal | float,
     daily_schedule_by_date: dict | None = None,
+    drawer_info_by_case: dict[int, dict] | None = None,
 ) -> str:
     """fallback_rate: the currently-configured cost_per_drawer rate, used for any
     case whose cost_per_drawer_at_time snapshot is null (it predates that column) -
@@ -65,6 +71,7 @@ def build_defect_items_csv(
     metrics_service.compute_schedule_attainment_pct).
     """
     daily_schedule_by_date = daily_schedule_by_date or {}
+    drawer_info_by_case = drawer_info_by_case or {}
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow(CSV_COLUMNS)
@@ -117,6 +124,9 @@ def build_defect_items_csv(
                 case_cost_avoided,
                 day_drawers_scheduled,
                 day_schedule_attainment_pct,
+                "kickback" if case.entry_source == "undo_card" else "qc_defect",
+                (drawer_info_by_case.get(case.id) or {}).get("customer") or "",
+                (drawer_info_by_case.get(case.id) or {}).get("spec") or "",
             ]
         )
     return buffer.getvalue()

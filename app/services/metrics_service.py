@@ -307,6 +307,7 @@ def filtered_defect_items_query(
     priority: str | None = None,
     status: str | None = None,
     disposition: str | None = None,
+    kind: str | None = None,
 ):
     """Shared report filter set (PROJECT_SPEC.md section 9: 'chart totals must match
     the filtered record total'). Used by /reports/summary, /reports/pareto,
@@ -347,7 +348,22 @@ def filtered_defect_items_query(
         query = query.filter(DefectCase.status == status)
     if disposition is not None:
         query = query.filter(DefectCase.disposition == disposition)
+    query = apply_kind_filter(query, kind)
 
+    return query
+
+
+def apply_kind_filter(query, kind: str | None):
+    """2026-10 redesign: 'kickback' = cases opened by an UNDO card, 'qc' = every
+    other case (entered on New Defect). None/'' = both."""
+    from app.models import DefectCase
+
+    if kind == "kickback":
+        return query.filter(DefectCase.entry_source == "undo_card")
+    if kind == "qc":
+        return query.filter(
+            (DefectCase.entry_source.is_(None)) | (DefectCase.entry_source != "undo_card")
+        )
     return query
 
 

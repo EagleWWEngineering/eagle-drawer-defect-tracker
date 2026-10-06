@@ -284,6 +284,11 @@ class DefectCaseOut(BaseModel):
     entry_source: str | None
     order_detail_id: int | None = None
     drawer_unit: int | None = None
+    # 2026-10 redesign: filled in by GET /defect-cases (the Reports records table)
+    # from order_line_service.drawer_info; None everywhere else.
+    customer_name: str | None = None
+    resolved_line: str | None = None
+    spec: str | None = None
     found_station_id: int
     found_station_name: str
     possible_source_station_id: int | None
@@ -1106,3 +1111,26 @@ class HealthOut(BaseModel):
     database: str
     # Commit stamped into VERSION by deploy/push.sh; None outside a VM deploy.
     git_commit: str | None = None
+
+
+# --- 2026-10 redesign: Reports charts -----------------------------------------
+
+
+class LabelCountOut(BaseModel):
+    label: str
+    count: int
+
+
+class AgingBucketOut(LabelCountOut):
+    pass
+
+
+class OpenAgingOut(BaseModel):
+    open_cases: int
+    oldest_hours: float | None
+    buckets: list[AgingBucketOut]
+
+
+class ShopVsCustomerOut(BaseModel):
+    shop: list[LabelCountOut]
+    customer: list[LabelCountOut]

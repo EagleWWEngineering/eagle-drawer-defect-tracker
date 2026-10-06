@@ -13,12 +13,16 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.dependencies import get_db
 from app.errors import ValidationError
-from app.models import DailyProductionSummary, DefectCase, DefectItem, DrawerEvent
+from app.models import CustomerIssue, DailyProductionSummary, DefectCase, DefectItem, DrawerEvent
 from app.schemas import (
+    AgingBucketOut,
     DatePresetOut,
     KpiOut,
+    LabelCountOut,
+    OpenAgingOut,
     ParetoRowOut,
     ReworkQueueItemOut,
+    ShopVsCustomerOut,
     TrendPointOut,
     WorkOrderHistoryOut,
     WorkOrderLineBreakdownOut,
@@ -102,6 +106,7 @@ def get_summary(
     priority: str | None = None,
     status: str | None = None,
     disposition: str | None = None,
+    kind: str | None = None,
 ) -> KpiOut:
     items_query = metrics_service.filtered_defect_items_query(
         db,
@@ -115,6 +120,7 @@ def get_summary(
         priority=priority,
         status=status,
         disposition=disposition,
+        kind=kind,
     )
     items = items_query.all()
     defect_events = sum(item.affected_drawer_quantity for item, _case in items)
@@ -168,10 +174,13 @@ def get_pareto(
     priority: str | None = None,
     status: str | None = None,
     disposition: str | None = None,
+    kind: str | None = None,
+    category_id: int | None = None,
     group_by: str = "category",
     limit: int = 10,
 ) -> list[ParetoRowOut]:
-    """group_by: 'category' (default) or 'source_station'.
+    """group_by: 'category' (default), 'found_station', 'line' (no line ->
+    'No line') or 'source_station' (API only since the 2026-10 redesign).
 
     Possible source station is a hypothesis, not a confirmed root cause — the label
     returned for that grouping is "possible source station", never "root cause".
@@ -187,12 +196,18 @@ def get_pareto(
         priority=priority,
         status=status,
         disposition=disposition,
+        kind=kind,
+        category_id=category_id,
     )
 
     counts: dict[str, int] = {}
     for item, case in items_query.all():
         if group_by == "source_station":
             label = case.possible_source_station.name if case.possible_source_station else "Unknown"
+        elif group_by == "found_station":
+            label = case.found_station.name
+        elif group_by == "line":
+            label = f"Line {case.line_label}" if case.line_label else "No line"
         else:
             label = item.defect_category.name
         counts[label] = counts.get(label, 0) + item.affected_drawer_quantity
@@ -207,9 +222,32 @@ def get_trend(
     start_date: dt.date | None = None,
     end_date: dt.date | None = None,
     group_by: str = "day",
+    work_order_number: str | None = None,
+    line_label: str | None = None,
+    category_id: int | None = None,
+    found_station_id: int | None = None,
+    possible_source_station_id: int | None = None,
+    priority: str | None = None,
+    status: str | None = None,
+    disposition: str | None = None,
+    kind: str | None = None,
 ) -> list[TrendPointOut]:
+    """2026-10 redesign: follows every report filter, like summary/Pareto/records
+    (it used to follow the dates only). Denominators (drawers inspected) stay
+    date-only - the same as get_summary."""
     items_query = metrics_service.filtered_defect_items_query(
-        db, start_date=start_date, end_date=end_date
+        db,
+        start_date=start_date,
+        end_date=end_date,
+        work_order_number=work_order_number,
+        line_label=line_label,
+        category_id=category_id,
+        found_station_id=found_station_id,
+        possible_source_station_id=possible_source_station_id,
+        priority=priority,
+        status=status,
+        disposition=disposition,
+        kind=kind,
     )
     items = items_query.all()
     events_by_bucket: dict[str, int] = {}
@@ -496,3 +534,92 @@ def get_rework_queue(
             )
         )
     return result
+
+
+# --- 2026-10 redesign: two more Reports charts ------------------------------------
+
+AGING_BUCKETS: list[tuple[str, float, float]] = [
+    ("Under 4 h", 0, 4),
+    ("4 to 24 h", 4, 24),
+    ("1 to 3 days", 24, 72),
+    ("Over 3 days", 72, float("inf")),
+]
+
+
+@router.get("/open-aging", response_model=OpenAgingOut)
+def get_open_aging(
+    db: Session = Depends(get_db),
+    start_date: dt.date | None = None,
+    end_date: dt.date | None = None,
+    work_order_number: str | None = None,
+    line_label: str | None = None,
+    category_id: int | None = None,
+    found_station_id: int | None = None,
+    priority: str | None = None,
+    kind: str | None = None,
+) -> OpenAgingOut:
+    """How long the still-open cases in the current filter have been open, in four
+    buckets - the slow ones are the ones to chase."""
+    items = metrics_service.filtered_defect_items_query(
+        db,
+        start_date=start_date,
+        end_date=end_date,
+        work_order_number=work_order_number,
+        line_label=line_label,
+        category_id=category_id,
+        found_station_id=found_station_id,
+        priority=priority,
+        kind=kind,
+    ).all()
+    now = dt.datetime.now(dt.timezone.utc)
+    ages = [
+        (now - _aware(c.detected_at)).total_seconds() / 3600
+        for c in _distinct_cases(items)
+        if c.status in DIRECT_CLOSE_SOURCE_STATUSES
+    ]
+    buckets = [
+        AgingBucketOut(label=label, count=sum(1 for a in ages if lo <= a < hi))
+        for label, lo, hi in AGING_BUCKETS
+    ]
+    return OpenAgingOut(
+        open_cases=len(ages),
+        oldest_hours=round(max(ages), 1) if ages else None,
+        buckets=buckets,
+    )
+
+
+@router.get("/shop-vs-customer", response_model=ShopVsCustomerOut)
+def get_shop_vs_customer(
+    db: Session = Depends(get_db),
+    start_date: dt.date | None = None,
+    end_date: dt.date | None = None,
+    limit: int = Query(default=8, ge=1, le=30),
+) -> ShopVsCustomerOut:
+    """What the shop caught (defect events by category) next to what reached the
+    customer (customer-issue pieces by their own category), same dates. Two ranked
+    lists, side by side: the two category lists are different vocabularies and are
+    never mapped onto each other here."""
+    shop: dict[str, int] = {}
+    for item, _case in metrics_service.filtered_defect_items_query(
+        db, start_date=start_date, end_date=end_date
+    ).all():
+        name = item.defect_category.name
+        shop[name] = shop.get(name, 0) + item.affected_drawer_quantity
+
+    query = db.query(CustomerIssue).filter(
+        CustomerIssue.is_deleted.is_(False), CustomerIssue.status != "Ignored"
+    )
+    if start_date is not None:
+        query = query.filter(CustomerIssue.reported_date >= start_date)
+    if end_date is not None:
+        query = query.filter(CustomerIssue.reported_date <= end_date)
+    customer: dict[str, int] = {}
+    for issue in query.all():
+        name = issue.issue_category.name
+        customer[name] = customer.get(name, 0) + issue.piece_count
+
+    def ranked(counts: dict[str, int]) -> list[LabelCountOut]:
+        rows = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]
+        return [LabelCountOut(label=k, count=v) for k, v in rows]
+
+    return ShopVsCustomerOut(shop=ranked(shop), customer=ranked(customer))
