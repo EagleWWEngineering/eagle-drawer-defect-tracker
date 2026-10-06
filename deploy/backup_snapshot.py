@@ -8,7 +8,8 @@ vaults. Same arrangement as eagle-drawers-production-count's deploy/backup_snaps
   to a temp name and renamed, refused if `PRAGMA integrity_check` fails. The existing
   02:00 `eagle-state-backup` job prunes *.sqlite there after 7 days.
 - Photos: a .tar.gz of the uploads folder. That prune job only knows *.sqlite, so this
-  script deletes its own photo tarballs older than KEEP_DAYS.
+  script deletes its own photo tarballs older than KEEP_DAYS (2 nights: the
+  folder is ~0.5 GB, and the off-VM export already keeps every night it uploads).
 
 Stdlib only, so it runs under the system python3.
 """
@@ -26,7 +27,7 @@ SRC_DB = DATA_DIR / "defect_tracker.db"
 SRC_UPLOADS = DATA_DIR / "uploads"
 OUT_DIR = Path.home() / "state-backups" / "local"
 UPLOADS_PREFIX = "eagle_drawer_defect_tracker_uploads."
-KEEP_DAYS = 7
+KEEP_DAYS = 2  # photos never change once taken; 2 nights is ~1 GB at 534 MB each
 
 
 def snapshot_db(today: datetime.date) -> bool:
