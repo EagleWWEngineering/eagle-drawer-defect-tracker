@@ -87,6 +87,7 @@ templates.env.globals["static_version"] = static_version
 # URL prefix for every link a template writes (see Settings.root_path).
 templates.env.globals["base"] = settings.root_path
 templates.env.globals["display_tz"] = settings.display_timezone
+templates.env.globals["label_scanner_url"] = settings.label_scanner_url
 # Hides the login-only UI (Settings: Log out / Log out everywhere) when the login is off.
 templates.env.globals["login_required"] = settings.login_required
 

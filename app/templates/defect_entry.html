@@ -23,7 +23,10 @@
         <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7V4h3M21 7V4h-3M3 17v3h3M21 17v3h-3"/><path d="M7 8v8M10 8v8M13 8v8M16 8v8"/></svg>
         Scan the drawer label
       </button>
-      <button type="button" class="link-btn" id="wo-type-btn" style="margin-top:0.5rem;">No label? Type the work order</button>
+      <div style="display:flex; flex-wrap:wrap; gap:0.25rem 1.25rem; margin-top:0.5rem;">
+        <button type="button" class="link-btn" id="wo-type-btn">No label? Type the work order</button>
+        <button type="button" class="link-btn" id="wo-photo-btn" hidden>Take a photo instead</button>
+      </div>
     </div>
     <!-- Typed work order (no label): saved with no line. -->
     <div id="wo-typed" class="field" style="margin:0;" hidden>
@@ -933,6 +936,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   loadRecentWorkOrdersIntoDatalist();
   resetFormFully();
   backToScan();
+  // Back from the scanner page with a label: fill the drawer in.
+  if (window.location.hash.startsWith("#scan=")) {
+    const scanned = decodeURIComponent(window.location.hash.slice("#scan=".length));
+    history.replaceState(null, "", window.location.pathname + window.location.search);
+    if (scanned) resolveScannedLabel(scanned);
+  }
   document.getElementById("nd-subtitle").textContent = new Intl.DateTimeFormat("en-US", {
     timeZone: window.APP_TZ || "America/New_York",
     weekday: "long",
@@ -1058,13 +1067,26 @@ document.addEventListener("DOMContentLoaded", async () => {
   // the QR code is read from the picture (works on plain http, like eagle-vm).
   const scanBtn = document.getElementById("scan-label-btn");
   const labelPhotoInput = document.getElementById("label-photo-input");
-  scanBtn.addEventListener("click", () => {
-    if (window.LabelScan.liveCameraAvailable()) {
-      openScanModal();
-      return;
-    }
+  // Where the live camera isn't allowed on this page (plain http, e.g. eagle-vm),
+  // the https scanner page reads the QR live and comes back with #scan=<code>.
+  const SCANNER_URL = {{ label_scanner_url | tojson }};
+  const liveHere = window.LabelScan.liveCameraAvailable();
+  const photoBtn = document.getElementById("wo-photo-btn");
+  photoBtn.hidden = liveHere || !SCANNER_URL;
+  function takeLabelPhoto() {
     labelPhotoInput.value = "";
     labelPhotoInput.click(); // must run inside the tap, or the camera won't open
+  }
+  photoBtn.addEventListener("click", takeLabelPhoto);
+  scanBtn.addEventListener("click", () => {
+    if (liveHere) {
+      openScanModal();
+    } else if (SCANNER_URL) {
+      const back = window.location.origin + window.location.pathname;
+      window.location.href = SCANNER_URL + "?return=" + encodeURIComponent(back);
+    } else {
+      takeLabelPhoto();
+    }
   });
   labelPhotoInput.addEventListener("change", async () => {
     const file = labelPhotoInput.files[0];

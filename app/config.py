@@ -104,6 +104,14 @@ class Settings:
         # the office network, through production count, which has had no password
         # since 10-02 either. Turning it back on is LOGIN_REQUIRED=true + restart.
         self.login_required: bool = _env_bool("LOGIN_REQUIRED", True)
+        # 2026-10-07: Safari only allows the live camera on https pages, and on
+        # eagle-vm the app is plain http. New Defect's Scan button then opens this
+        # https page (repo EagleWWEngineering/eagle-label-scanner, GitHub Pages),
+        # which reads the QR live and comes back with #scan=<code>. Blank = off
+        # (take a photo instead).
+        self.label_scanner_url: str = os.getenv(
+            "LABEL_SCANNER_URL", "https://eaglewwengineering.github.io/eagle-label-scanner/"
+        ).strip()
 
     @property
     def max_upload_bytes(self) -> int:

@@ -166,3 +166,8 @@ def test_login_stays_on_by_default(client):
     client.cookies.clear()
     assert client.get("/reports", follow_redirects=False).status_code == 303
     assert 'href="/settings"' not in client.get("/login").text  # login page has no nav
+
+
+def test_scanner_page_url_renders_into_new_defect(client):
+    html = client.get("/defect-entry").text
+    assert "https://eaglewwengineering.github.io/eagle-label-scanner/" in html

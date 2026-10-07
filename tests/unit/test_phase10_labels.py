@@ -152,3 +152,13 @@ def test_new_defect_can_read_the_label_from_a_photo():
     assert "LabelScan.decodeImageFile(file)" in DEFECT_ENTRY_HTML
     assert "async function decodeImageFile" in LABEL_SCAN_JS
     assert "window.isSecureContext" in LABEL_SCAN_JS
+
+
+def test_new_defect_uses_the_https_scanner_page_when_the_live_camera_is_blocked():
+    """2026-10-07: Safari only allows the live camera on https; on eagle-vm (http)
+    the Scan button opens the https scanner page (GitHub Pages), which returns
+    with #scan=<code>."""
+    assert "label_scanner_url | tojson" in DEFECT_ENTRY_HTML
+    assert '"?return=" + encodeURIComponent(back)' in DEFECT_ENTRY_HTML
+    assert 'window.location.hash.startsWith("#scan=")' in DEFECT_ENTRY_HTML
+    assert 'id="wo-photo-btn"' in DEFECT_ENTRY_HTML
