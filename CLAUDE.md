@@ -63,7 +63,10 @@ weekends and flag (never silently drop) a working weekday holiday; the
 Yesterday/Last 7/Last 30 days date presets walk back working days, not
 calendar days (`working_days_service.resolve_working_day_preset` —
 `timezone_utils.resolve_date_preset` stays pure/DB-free and only handles
-Today/Month to date).
+Today/Month to date). Since the 2026-10 redesign the Reports chips match
+production count's (Today, Yesterday, This week, Last week, Month to date,
+Last 30 working days) - "Last 30 days" is WORKING days (Rodolfo, 2026-10-06);
+`last_7_days` still resolves in the API but has no chip.
 
 Production Count feeds (`docs/PROJECT_SPEC_PHASE10.md`):
 `DailyProductionSummary.drawers_inspected` is written ONLY by
@@ -152,6 +155,18 @@ UI → API routers (HTTP I/O only) → service layer (all business logic) → DB
 The MCP server calls the REST API — it must never write to SQLite directly. This is
 how the UI and MCP share one source of truth for business logic.
 
+## Where it runs (since 2026-10-06)
+
+eagle-vm, as its own user service on 127.0.0.1:8112, reached by the shop at
+production count's `http://20.62.194.32:8105/defects/` (production count passes
+`/defects/*` through, prefix stripped - its `app/routers/defects_proxy.py`).
+`ROOT_PATH=/defects` makes every link/redirect/cookie/photo URL carry the prefix;
+`LOGIN_REQUIRED=false` (office network only, Rodolfo's call). Production count's
+feeds call 127.0.0.1:8112 directly. Data: `~/eagle-drawer-defect-tracker-data/`
+(DB + uploads), nightly snapshot 02:20 into `~/state-backups/local` (off-VM at
+03:18). Deploy: commit, push the branch, `bash deploy/push.sh` (refuses a dirty
+tree; proves the restart via `/api/v1/health` git_commit). Render is retired.
+
 ## Build & run
 
 ```bash
@@ -178,3 +193,15 @@ ruff format --check .
 All tests pass, Ruff passes, `alembic upgrade head` applies cleanly to a fresh DB, the
 app starts with the one documented command, the core workflow works end to end at
 desktop and mobile widths, and no required functionality has a TODO placeholder.
+
+## 2026-10 redesign rules (docs/PROJECT_SPEC_PHASE12.md)
+
+- Master data Delete is a soft hide (`is_deleted`), never a SQL DELETE; the
+  kickback stations, the Admin kickback categories and "Other" can't be deleted.
+- `DailyProductionSummary.rejected_source`: 'auto' rows use the live count of the
+  day's cases (`defect_service.effective_rejected`); a saved number is 'manual' and
+  wins. Formulas are unchanged - every rate must use effective_rejected.
+- New Defect: no line picker and no typed line - the line comes only from a label.
+  Possible source is no longer collected (kept on old cases, read-only).
+- "Add to that case" keeps the kickback's category and adds the new one (Rodolfo).
+- Orange is reserved for kickbacks in the UI.

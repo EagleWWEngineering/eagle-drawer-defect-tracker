@@ -1,39 +1,50 @@
 # RESUME: where eagle-drawer-defect-tracker stands
 
-Last updated 2026-10-01 at `a23e483`. This is the hand-off for the next session. Recent
-architecture is in [`docs/TECHNICAL_SUMMARY_2026-10-01.md`](docs/TECHNICAL_SUMMARY_2026-10-01.md);
-the full baseline is [`docs/TECHNICAL_SUMMARY_2026-09-03.md`](docs/TECHNICAL_SUMMARY_2026-09-03.md).
+Last updated 2026-10-07. Hand-off for the next session. The redesign and the move to
+eagle-vm are in [`docs/PROJECT_SPEC_PHASE12.md`](docs/PROJECT_SPEC_PHASE12.md); the
+baseline is [`docs/TECHNICAL_SUMMARY_2026-10-01.md`](docs/TECHNICAL_SUMMARY_2026-10-01.md).
 
 ## State right now
 
-- **Live on Render**, deployed by pushing `master`. Render runs `alembic upgrade head` on start.
-  The head is `c9f4a1e6d3b2`.
-- **All data feeds come from production count on eagle-vm:** customer issues, schedule,
-  completed drawers, order lines and drawer events. The laptop relay task has been disabled since
-  09-30.
-- **Unique-ID drawer labels work.** The line letter fills itself and the drawer details show
-  (verified on the floor, 09-30).
-- **"Save with photo" works,** as does one-tap session-log photos (verified on the floor).
-- **UNDO-card kickbacks work** (Phase 11, verified on the floor 10-01):
-  - The UNDO card opens a Set Aside case.
-  - The next +1 scan closes it as Repaired.
-  - The kickback categories are set in Admin.
+- **Live on eagle-vm since 2026-10-06 14:11 ET** (off Render): shop address
+  `http://20.62.194.32:8105/defects/` (through production count), service on
+  127.0.0.1:8112, no login. Running branch `vm-migration` (30fea93 + photo-retention
+  commit). Render is still up but receives nothing - Rodolfo suspends it once the
+  brief's PR #37 (defect panel URL) is deployed.
+- **All five production-count feeds land on the VM** (verified 10-06).
+- **Redesign built, NOT deployed**: branch `redesign-2026-10` (pushed), 793 tests.
+  Waiting for Rodolfo's review on the laptop copy, then one deploy.
+- Production count master has two undeployed commits for the redesign: customer
+  name in the order-lines feed (39ce46f) and clamp on drawer events (4de3ab5). Both
+  are safe in either order (the live tracker ignores unknown keys).
+
+## Deploying the redesign (after Rodolfo says go)
+
+1. Tracker: merge `redesign-2026-10` into master, push, `bash deploy/push.sh`
+   (runs the 5 migrations on start; `alembic upgrade head` is ExecStartPre).
+2. Production count: `git push origin master` (already pushed) + `bash deploy/push.sh`.
+3. Check: `/defects/` pages, `/api/v1/sync/health` all ok, a customer name on the
+   queue after the next :30 order-lines push.
+4. Rodolfo sets the dashboard target in Admin; shop TV gets `/defects/?tv=1`.
 
 ## How to operate it
 
-- **Tests:** `pytest -q` (719 passing) and `ruff check .`.
-- **Deploy:** commit, then `git push origin master`.
-- **A schema change** needs a batch-mode Alembic migration. Test it up, down and up again on a
-  copy of `data/defect_tracker.db`.
-- **Keys:** `RELAY_API_KEY` is in `.env` and matches Render. The `BRIEF_API_KEY` in `.env` is
-  stale; use Render's value.
-- **Defect categories are Rodolfo's.** Never create, rename or seed them in code. Reference them
-  by id through an Admin setting.
+- **Tests:** `.venv/Scripts/python.exe -m pytest -q`, `ruff check .`, `ruff format --check .`.
+- **Deploy:** commit, push the branch, `bash deploy/push.sh`.
+- **Schema change:** batch-mode Alembic migration, tested up/down/up on a copy of
+  the live DB (`scp eagle-vm:eagle-drawer-defect-tracker-data/defect_tracker.db`).
+- **Secrets:** on the VM in `~/eagle-drawer-defect-tracker/.env` (relay key =
+  production count's DEFECT_TRACKER_RELAY_KEY; brief key = the brief's
+  DEFECT_TRACKER_API_KEY). Never printed.
+- **Defect categories are Rodolfo's.** Never create, rename or seed them in code.
 
 ## Open items
 
-1. **Photo access for production count** (browse versus showing at the QC station): asked, not
-   decided.
-2. **Rework Queue auto-refresh:** not requested yet, but kickback cases appear only on reload.
-3. **Order-only labels from the Access export:** these carry no drawer id, so they can't
-   auto-close (the 09-23 investigation, needs escalation).
+1. Review of the redesign (Rodolfo).
+2. Brief PR #37, then suspend Render; later delete it and remove
+   `app/routers/migration_export.py`.
+3. eagle-ops `services.toml` entry for the tracker (Blake).
+4. Optional: kickbacks from the on-screen Undo / admin voids; Slack alert for late
+   feeds (channel undecided).
+5. 2026-09-30 and 10-01 completed counts look low (31 and 12) - partial counts from
+   production count's first days; they spike the trend.
