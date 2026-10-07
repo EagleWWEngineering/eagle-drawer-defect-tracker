@@ -704,6 +704,7 @@ button.danger:hover, .btn.danger:hover { background: #991b1b; }
 .tag-kick { background: var(--kick-bg); color: var(--kick); }
 .tag-qc { background: var(--accent-bg); color: var(--accent); }
 .tag-closed { background: var(--line); color: var(--fg); }
+.tag-good { background: var(--good-bg); color: var(--good); }
 
 /* ---------------------------------------------------------------------- */
 /* Floor cards: one drawer per card (queue, dashboard, new defect)        */
@@ -745,7 +746,7 @@ button.danger:hover, .btn.danger:hover { background: #991b1b; }
   justify-items: end;
   align-content: space-between;
   border-left: 1px solid var(--line);
-  min-width: 170px;
+  width: 210px;
 }
 .floor-card .fc-age { font-family: var(--display); font-weight: 700; font-size: 1.35rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .floor-card .fc-age small { font-size: 0.85rem; color: var(--muted); font-weight: 600; }
@@ -817,7 +818,7 @@ tr.row-no-production { color: var(--muted); font-style: italic; }
 }
 
 .filters .field { margin-bottom: 0; }
-.filters label { font-size: 0.75rem; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); }
+.filters label, .filters-dates label { font-size: 0.75rem; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); }
 
 /* ---------------------------------------------------------------------- */
 /* Bulk select / floating action bar                                      */

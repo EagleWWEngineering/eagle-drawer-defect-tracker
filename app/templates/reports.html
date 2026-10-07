@@ -18,15 +18,18 @@
       <input type="search" id="f-work-order" name="work_order_number" placeholder="Work order number" aria-label="Work order number" autocomplete="off">
     </div>
     {% include "_date_presets.html" %}
-    <div class="filters" style="margin-top:0.75rem;">
-      <div class="field">
+    <div style="display:flex; flex-wrap:wrap; align-items:flex-end; gap:0.6rem; margin-top:0.75rem;" class="filters-dates">
+      <div class="field" style="margin:0;">
         <label for="f-start-date">From</label>
-        <input type="date" id="f-start-date" name="start_date">
+        <input type="date" id="f-start-date" name="start_date" style="width:auto;">
       </div>
-      <div class="field">
+      <div class="field" style="margin:0;">
         <label for="f-end-date">To</label>
-        <input type="date" id="f-end-date" name="end_date">
+        <input type="date" id="f-end-date" name="end_date" style="width:auto;">
       </div>
+      <span class="hint" style="padding-bottom:0.6rem;">Pick dates for a custom range. Same presets as production count; Yesterday on a Monday means Friday.</span>
+    </div>
+    <div class="filters" style="margin-top:0.6rem; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));">
       <div class="field">
         <label for="f-kind">Type</label>
         <select id="f-kind" name="kind"><option value="">All</option><option value="kickback">Kickbacks</option><option value="qc">QC defects</option></select>
@@ -41,21 +44,26 @@
       </div>
       <div class="field">
         <label for="f-line">Line</label>
-        <input type="text" id="f-line" name="line_label" maxlength="2" style="text-transform:uppercase;" placeholder="Any">
-      </div>
-      <div class="field">
-        <label for="f-priority">Priority</label>
-        <select id="f-priority" name="priority"><option value="">All</option><option>Urgent</option><option>High</option><option>Normal</option></select>
+        <select id="f-line" name="line_label"><option value="">All</option></select>
       </div>
       <div class="field">
         <label for="f-status">Status</label>
         <select id="f-status" name="status"><option value="">All</option></select>
       </div>
-      <div class="field">
-        <label for="f-disposition">Disposition</label>
-        <select id="f-disposition" name="disposition"><option value="">All</option></select>
-      </div>
     </div>
+    <details id="more-filters" style="margin-top:0.6rem;">
+      <summary class="hint" style="cursor:pointer;">More filters: priority, disposition</summary>
+      <div class="filters" style="margin-top:0.5rem;">
+        <div class="field">
+          <label for="f-priority">Priority</label>
+          <select id="f-priority" name="priority"><option value="">All</option><option>Urgent</option><option>High</option><option>Normal</option></select>
+        </div>
+        <div class="field">
+          <label for="f-disposition">Disposition</label>
+          <select id="f-disposition" name="disposition"><option value="">All</option></select>
+        </div>
+      </div>
+    </details>
     <div class="chip-row" id="active-filters" style="margin-top:0.75rem;"></div>
   </form>
 </section>
@@ -186,6 +194,8 @@ async function populateMasterDataFilters() {
   masterData.stations.forEach((s) => found.insertAdjacentHTML("beforeend", `<option value="${s.id}">${escapeHtml(s.name)}</option>`));
   const status = document.getElementById("f-status");
   masterData.statuses.forEach((s) => status.insertAdjacentHTML("beforeend", `<option>${escapeHtml(s)}</option>`));
+  const line = document.getElementById("f-line");
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").forEach((l) => line.insertAdjacentHTML("beforeend", `<option>${l}</option>`));
   const disp = document.getElementById("f-disposition");
   masterData.dispositions.forEach((d) => disp.insertAdjacentHTML("beforeend", `<option>${escapeHtml(d)}</option>`));
 }
@@ -199,9 +209,11 @@ function renderActiveFilters(params) {
       const shown = el.tagName === "SELECT" ? el.options[el.selectedIndex].text : params[k];
       return `<span class="filter-pill">${FILTER_LABELS[k]}: ${escapeHtml(shown)}<button type="button" data-clear="${k}" aria-label="Remove ${FILTER_LABELS[k]} filter">×</button></span>`;
     });
+  const active = document.querySelector("[data-range].active");
+  const span = active ? active.textContent.trim().toLowerCase() : `${params.start_date || "the start"} to ${params.end_date || "today"}`;
   box.innerHTML = pills.length
     ? `<span class="hint">Filtered by</span> ${pills.join("")} <button type="button" class="chip" id="clear-filters">Clear all</button>`
-    : "";
+    : `<span class="hint">Showing all cases for ${escapeHtml(span)}.</span>`;
   box.querySelectorAll("[data-clear]").forEach((b) =>
     b.addEventListener("click", () => {
       document.querySelector(`#filter-form [name="${b.dataset.clear}"]`).value = "";
@@ -410,7 +422,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       reloadAll();
     })
   );
-  ["f-work-order", "f-line"].forEach((id) =>
+  ["f-work-order"].forEach((id) =>
     document.getElementById(id).addEventListener("input", () => {
       clearTimeout(textTimer);
       textTimer = setTimeout(reloadAll, 400);

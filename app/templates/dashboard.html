@@ -58,15 +58,9 @@
 <div class="qt-head">
   <div>
     <h1 class="page-title" style="margin:0;">Quality Today</h1>
-    <div class="qt-date" id="qt-date"></div>
+    <div class="qt-date"><span id="qt-date"></span> · <a class="tv-hide" id="tv-link" href="?tv=1">TV mode</a><a id="tv-exit" href="?" hidden>Exit TV mode</a></div>
   </div>
-  <div style="display:grid; gap:0.4rem; justify-items:end;">
-    <div class="health" id="qt-health"></div>
-    <div class="chip-row">
-      <a class="chip tv-hide" id="tv-link" href="?tv=1">TV mode</a>
-      <a class="chip" id="tv-exit" href="?" hidden>Exit TV mode</a>
-    </div>
-  </div>
+  <div class="health" id="qt-health"></div>
 </div>
 
 <section class="today-tiles" id="qt-today" aria-label="Today"></section>
@@ -149,7 +143,8 @@ function renderHealth(health) {
     .map((f) => {
       const cls = f.state === "late" || f.state === "error" ? "bad" : f.state === "never" ? "never" : "";
       const why = f.state === "late" ? `late · last ${f.last_received_local || "never"}` : f.state === "error" ? f.message || "refused" : f.state === "never" ? "nothing received yet" : `last ${f.last_received_local || ""}`;
-      return `<span class="feed-chip ${cls}" title="${escapeHtml(why)}">${f.state === "ok" ? "✓ " : f.state === "never" ? "" : "⚠ "}${escapeHtml(f.label)}</span>`;
+      const short = { heartbeat: "Connection", drawer_events: "Kickbacks", order_lines: "Order lines", daily_completed: "Completed", daily_schedule: "Schedule", customer_issues: "Customer issues" }[f.feed] || f.label;
+      return `<span class="feed-chip ${cls}" title="${escapeHtml(f.label + ": " + why)}">${f.state === "ok" ? "✓ " : f.state === "never" ? "" : "⚠ "}${escapeHtml(short)}</span>`;
     })
     .join("");
   const received = health.feeds.some((f) => f.state !== "never");

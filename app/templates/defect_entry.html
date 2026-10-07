@@ -4,131 +4,151 @@
 
 {% block content %}
 <div class="page-head">
-  <h1 class="page-title">New Defect</h1>
+  <div>
+    <h1 class="page-title">New Defect</h1>
+    <div class="hint" id="nd-subtitle" style="font-size:0.95rem;"></div>
+  </div>
 </div>
 
 <div id="save-flash" class="save-flash" style="display:none;" role="status" aria-live="polite"></div>
 
-<form id="defect-form" class="card">
-  <div class="field">
-    <label for="work_order_number" class="field-label">Work order <span class="hint">· scan the drawer label</span></label>
-    <div style="display:flex; gap:0.5rem; align-items:center;">
-      <input type="text" id="work_order_number" name="work_order_number" required autocomplete="off" list="recent-work-orders" style="flex:1; font-family:var(--display); font-size:1.4rem; font-weight:700;" placeholder="Scan the label, or type the work order">
-      <button type="button" id="scan-label-btn" class="secondary">📷 Scan label</button>
+<div class="nd-layout">
+<form id="defect-form" class="nd-form">
+  <section class="card nd-panel">
+    <div class="field-label">Work order · scan the drawer label</div>
+    <!-- Start: one big scan button. A USB/Bluetooth scanner can also just scan -
+         the page listens for it (see the keydown buffer below). -->
+    <div id="wo-start">
+      <button type="button" id="scan-label-btn" class="scanbtn">
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7V4h3M21 7V4h-3M3 17v3h3M21 17v3h-3"/><path d="M7 8v8M10 8v8M13 8v8M16 8v8"/></svg>
+        Scan the drawer label
+      </button>
+      <button type="button" class="link-btn" id="wo-type-btn" style="margin-top:0.5rem;">No label? Type the work order</button>
+    </div>
+    <!-- Typed work order (no label): saved with no line. -->
+    <div id="wo-typed" class="field" style="margin:0;" hidden>
+      <div style="display:flex; gap:0.5rem; align-items:center;">
+        <input type="text" id="work_order_number" name="work_order_number" required autocomplete="off" list="recent-work-orders" inputmode="numeric" style="flex:1; font-family:var(--display); font-size:1.4rem; font-weight:700;" placeholder="Work order number" aria-label="Work order number">
+        <button type="button" class="link-btn" id="wo-scan-instead">Scan instead</button>
+      </div>
     </div>
     <datalist id="recent-work-orders"></datalist>
     <!-- 2026-10 redesign: the line comes only from a drawer label (its
-         order_detail_id, via production count's order lines) - there is no
-         letter picker and no typing. A typed work order is saved with no line. -->
+         order_detail_id, via production count's order lines) - no letter picker
+         and no typing. A typed work order is saved with no line. -->
     <input type="hidden" id="line_label" name="line_label">
-    <!-- The scanned drawer (WO, line, customer, size/options) so the operator can
-         check it is the drawer in front of them. -->
-    <div id="scanned-drawer" style="margin-top:0.6rem;" role="status" aria-live="polite" hidden></div>
+    <!-- The scanned drawer (WO, line, customer, size/options). -->
+    <div id="scanned-drawer" role="status" aria-live="polite" hidden></div>
     <!-- "This drawer already has an open case" (or, for a typed work order, how
          many open cases it has). -->
     <div id="open-case-warning" style="margin-top:0.6rem;" role="alert" hidden></div>
-  </div>
+  </section>
 
-  <div class="filters">
-    <div class="field">
-      <label for="production_date">Production date <span class="hint">(today; pick an earlier day for a paper log)</span></label>
-      <input type="date" id="production_date" name="production_date" required>
-    </div>
-    <div class="field">
-      <label for="detected_time">Detected time</label>
-      <div class="time-input-row">
-        <input type="text" id="detected_time" name="detected_time" inputmode="numeric" placeholder="h:mm" required>
-        <div class="ampm-toggle" role="group" aria-label="AM or PM" id="ampm-group">
-          <button type="button" class="ampm-btn" data-ampm="AM">AM</button>
-          <button type="button" class="ampm-btn" data-ampm="PM">PM</button>
+  <section class="card nd-panel">
+    <div class="nd-two">
+      <div class="field">
+        <label for="production_date">Production date</label>
+        <input type="date" id="production_date" name="production_date" required>
+        <p class="hint" style="margin:0.3rem 0 0;">Today. Pick an earlier date for paper-log entry.</p>
+      </div>
+      <div class="field">
+        <label for="detected_time">Detected time</label>
+        <div class="time-input-row">
+          <input type="text" id="detected_time" name="detected_time" inputmode="numeric" placeholder="h:mm" required>
+          <div class="ampm-toggle" role="group" aria-label="AM or PM" id="ampm-group">
+            <button type="button" class="ampm-btn" data-ampm="AM">AM</button>
+            <button type="button" class="ampm-btn" data-ampm="PM">PM</button>
+          </div>
         </div>
       </div>
     </div>
-    <div class="field">
+    <div class="field" style="margin-bottom:0;">
       <label for="drawer_part_reference">Drawer / part reference <span class="hint">(optional)</span></label>
-      <input type="text" id="drawer_part_reference" name="drawer_part_reference">
+      <input type="text" id="drawer_part_reference" name="drawer_part_reference" placeholder="e.g. drawer front, left side">
     </div>
-  </div>
+  </section>
 
-  <div class="field">
-    <label>Defect categories <span class="hint">(tap all that apply — one drawer with 3 sanding scratches is still one "Sanding" tap)</span></label>
-    <div id="category-favorites" class="button-grid" role="group" aria-label="Favorite defect categories" style="display:none;"></div>
-    <div id="category-grid" class="button-grid" role="group" aria-label="Defect categories"></div>
-  </div>
-
-  <div class="field">
-    <label>Found station <span class="hint">(where QC caught it)</span></label>
-    <div id="found-station-common" class="button-grid" role="group" aria-label="Common found stations"></div>
-    <div id="found-station-all" class="button-grid" role="group" aria-label="All found stations" style="display:none;"></div>
-    <button type="button" id="found-station-more-btn" class="secondary">More stations...</button>
-  </div>
-
-  <div class="field">
-    <label>Disposition <span class="hint">(most defects get reworked — that's why Rework is picked for you)</span></label>
-    <!-- Rework and Set Aside side by side, same size - Rework is still
-         pre-selected, so the default is still zero taps. -->
-    <div id="disposition-buttons" class="disposition-grid" role="group" aria-label="Disposition"></div>
-  </div>
-
-  <div class="field" id="repair-preset-field" style="display:none;">
-    <label>What was done? <span class="hint">(quick pick — the case closes as soon as you save)</span></label>
-    <div id="repair-preset-grid" class="button-grid" role="group" aria-label="Repair action preset"></div>
-    <input type="text" id="repair-preset-other-text" placeholder="Describe what was done" style="display:none; margin-top:0.5rem;">
-    <label style="margin-top:0.6rem; display:block;">Outcome</label>
-    <div id="instant-close-outcome" class="button-grid button-grid-2" role="group" aria-label="Instant close outcome"></div>
-  </div>
-
-  <div class="field" id="leave-open-field">
-    <label class="leave-open-label">
-      <input type="checkbox" id="leave-open-checkbox">
-      Not resolved yet — leave this case open
-    </label>
-    <p id="set-aside-hint" class="hint" style="display:none;">Set Aside cases are saved as Open until someone works them — nothing else to fill in here.</p>
-  </div>
-
-  <div class="field">
-    <label>Priority <span class="hint">(defaults to Normal — tap to override)</span></label>
-    <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
-      <div id="priority-override" class="button-grid button-grid-2" role="group" aria-label="Priority override" style="margin-bottom:0;"></div>
-      <span id="priority-current-label"></span>
+  <section class="card nd-panel">
+    <div class="field" style="margin-bottom:0;">
+      <label>Defect categories <span class="hint">(tap all that apply)</span></label>
+      <div id="category-favorites" class="button-grid" role="group" aria-label="Favorite defect categories" style="display:none;"></div>
+      <div id="category-grid" class="button-grid" role="group" aria-label="Defect categories"></div>
     </div>
-  </div>
+  </section>
 
-  <div class="field">
-    <label>Affected drawer quantity</label>
-    <div class="stepper">
-      <button type="button" id="qty-decrement" class="secondary" aria-label="Decrease quantity">&minus;</button>
-      <span id="qty-value" aria-live="polite">1</span>
-      <button type="button" id="qty-increment" class="secondary" aria-label="Increase quantity">+</button>
+  <section class="card nd-panel">
+    <div class="field" style="margin-bottom:0;">
+      <label>Found station <span class="hint">(where it was caught)</span></label>
+      <div id="found-station-common" class="button-grid" role="group" aria-label="Common found stations"></div>
+      <div id="found-station-all" class="button-grid" role="group" aria-label="All found stations" style="display:none;"></div>
+      <button type="button" id="found-station-more-btn" class="link-btn">More stations…</button>
     </div>
-  </div>
+  </section>
 
-  <div class="field">
-    <label for="notes">Notes <span class="hint">(optional)</span></label>
-    <textarea id="notes" name="notes"></textarea>
-  </div>
+  <section class="card nd-panel">
+    <div class="field">
+      <label>Disposition</label>
+      <div id="disposition-buttons" class="disposition-grid" role="group" aria-label="Disposition"></div>
+    </div>
+    <div class="field" id="repair-preset-field" style="display:none;">
+      <label>What was done? <span class="hint">(quick pick, the case closes as soon as you save)</span></label>
+      <div id="repair-preset-grid" class="button-grid" role="group" aria-label="Repair action preset"></div>
+      <input type="text" id="repair-preset-other-text" placeholder="Describe what was done" style="display:none; margin-top:0.5rem;">
+      <label style="margin-top:0.6rem; display:block;">Outcome</label>
+      <div id="instant-close-outcome" class="button-grid button-grid-2" role="group" aria-label="Instant close outcome"></div>
+    </div>
+    <div class="field" id="leave-open-field" style="margin-bottom:0;">
+      <label class="leave-open-label">
+        <input type="checkbox" id="leave-open-checkbox">
+        Not resolved yet, leave this case open
+      </label>
+      <p id="set-aside-hint" class="hint" style="display:none;">Set Aside drawers go straight to the Rework &amp; Kickback Queue as open. Nothing else to fill in.</p>
+    </div>
+  </section>
 
-  <!-- "Save with photo" opens the camera straight from the tap (a phone only
-       allows the camera to open during the tap itself), then saves the case
-       and uploads the photo in one go once the picture is taken. Cancelling
-       the camera saves nothing. "Save without photo" is the old Save. -->
-  <div class="save-actions">
-    <button type="button" id="save-with-photo-btn" class="save-with-photo-btn">📷 Save with photo</button>
-    <button type="submit" id="save-btn" class="secondary">Save without photo</button>
-  </div>
-  <input type="file" id="save-photo-input" accept="image/jpeg,image/png,image/webp" capture="environment" style="display:none;" aria-hidden="true" tabindex="-1">
+  <section class="card nd-panel">
+    <div class="nd-two">
+      <div class="field">
+        <label>Priority</label>
+        <div id="priority-override" class="nd-prio" role="group" aria-label="Priority"></div>
+        <span id="priority-current-label" hidden></span>
+      </div>
+      <div class="field">
+        <label>Affected drawer quantity</label>
+        <div class="stepper">
+          <button type="button" id="qty-decrement" class="secondary" aria-label="Decrease quantity">&minus;</button>
+          <span id="qty-value" aria-live="polite">1</span>
+          <button type="button" id="qty-increment" class="secondary" aria-label="Increase quantity">+</button>
+        </div>
+      </div>
+    </div>
+    <div class="field" style="margin-bottom:0;">
+      <label for="notes">Notes <span class="hint">(optional)</span></label>
+      <textarea id="notes" name="notes" rows="2" placeholder="Anything the rework bench should know"></textarea>
+    </div>
+  </section>
 </form>
 
-<section id="session-log-section" class="card" style="display:none;">
-  <h2>Logged this session</h2>
-  <p class="hint">Add a photo (or another one) to any entry below without leaving this screen.</p>
-  <div class="table-scroll">
-    <table id="session-log-table">
-      <thead><tr><th>Case</th><th>Time</th><th>Categories</th><th>Photo</th></tr></thead>
-      <tbody></tbody>
-    </table>
+<aside class="card nd-side" aria-label="Logged this session">
+  <h2 style="margin-top:0;">Logged this session</h2>
+  <div id="session-log-table" class="stack-list">
+    <p class="hint" id="session-log-empty">Defects you save here show up in this list, with a button to add a photo.</p>
   </div>
-</section>
+</aside>
+</div>
+
+<!-- Pinned save bar. "Save with photo" opens the camera straight from the tap (a
+     phone only allows the camera to open during the tap itself), then saves the
+     case and uploads the photo in one go once the picture is taken. Cancelling
+     the camera saves nothing. -->
+<div class="savebar no-print">
+  <div class="savebar-in">
+    <div class="savebar-sum" id="save-summary"></div>
+    <button type="button" id="save-with-photo-btn" class="save-with-photo-btn">📷 Save with photo</button>
+    <button type="submit" id="save-btn" class="secondary" form="defect-form">Save without photo</button>
+  </div>
+</div>
+<input type="file" id="save-photo-input" accept="image/jpeg,image/png,image/webp" capture="environment" style="display:none;" aria-hidden="true" tabindex="-1">
 
 <!-- "Scan label" camera view (PROJECT_SPEC_PHASE9.md Part 3) - see
      app/static/js/label-scan.js. Reuses the same modal-overlay/modal-panel
@@ -149,6 +169,41 @@
 </div>
 {% endblock %}
 
+{% block extra_head %}
+<style>
+  main { padding-bottom: 7rem; }
+  .nd-layout { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 1rem; align-items: start; }
+  @media (max-width: 920px) { .nd-layout { grid-template-columns: 1fr; } }
+  .nd-form { display: grid; gap: 0.9rem; }
+  .nd-form .card { margin: 0; }
+  .nd-side { position: sticky; top: 4.5rem; }
+  .nd-two { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 640px) { .nd-two { grid-template-columns: 1fr; } }
+  .scanbtn { display:flex; align-items:center; justify-content:center; gap:0.75rem; width:100%; min-height:76px; border-radius:var(--radius); border:2px dashed var(--accent); background:var(--accent-bg); color:var(--accent); font-family:var(--display); font-size:1.6rem; font-weight:700; }
+  .scanbtn:hover { background:#d2e2f3; }
+  .scanbtn svg { width:30px; height:30px; }
+  .nd-prio { display:grid; grid-template-columns:repeat(3, 1fr); gap:0.5rem; }
+  .stack-list { display:grid; gap:0.5rem; }
+  .session-entry { display:grid; grid-template-columns:5px minmax(0,1fr); border:1px solid var(--line); border-radius:var(--radius-sm); overflow:hidden; font-size:0.92rem; }
+  .session-entry .s { background: var(--accent); }
+  .session-entry .s.aside { background: var(--high); }
+  .session-entry .b { padding:0.55rem 0.75rem; display:grid; gap:0.1rem; min-width:0; }
+  .session-entry .b b { font-family:var(--display); font-size:1.15rem; font-weight:700; }
+  .session-entry .b b span { color: var(--accent); }
+  .session-entry .mt { color: var(--muted); font-size: 0.85rem; }
+  .session-photo-cell { display:flex; flex-wrap:wrap; align-items:center; gap:0.5rem; font-size:0.85rem; }
+  .session-photo-cell .session-photo-status { color: var(--good); }
+  .session-photo-cell button.secondary { min-height: 34px; padding: 0.2rem 0.7rem; font-size: 0.85rem; }
+  .session-photo-cell .link-btn { display:inline; text-decoration:none; }
+  .savebar { position:fixed; left:0; right:0; bottom:0; z-index:60; background:var(--surface); border-top:1px solid var(--line); padding:0.7rem 1rem calc(0.7rem + env(safe-area-inset-bottom, 0px)); box-shadow:0 -4px 14px rgba(0,0,0,0.06); }
+  .savebar-in { max-width:1240px; margin:0 auto; display:grid; grid-template-columns:minmax(0,1fr) 2fr 1fr; gap:0.75rem; align-items:center; }
+  .savebar-sum { font-size:0.9rem; color:var(--muted); min-width:0; }
+  .savebar-sum b { color: var(--fg); }
+  .savebar .save-with-photo-btn, .savebar #save-btn { min-height: 60px; width: 100%; }
+  @media (max-width: 640px) { .savebar-in { grid-template-columns: 1fr 1fr; } .savebar-sum { grid-column: 1 / -1; } }
+</style>
+{% endblock %}
+
 {% block extra_scripts %}
 <!-- Vendored - never a CDN. jsQR is the QR fallback for browsers with no
      native BarcodeDetector (iOS Safari) - see app/static/js/label-scan.js. -->
@@ -160,7 +215,7 @@
 // render time and silently skipped if a name doesn't exist (e.g. renamed in
 // Admin) - "More stations..." always has the complete, authoritative list.
 const COMMON_STATION_NAMES = ["Prep Sanding", "Assembly", "QC / Sorting / Shipping", "Top Coat", "Notch & Bore"];
-const PRIORITY_OVERRIDE_ORDER = ["Urgent", "High"];
+const PRIORITY_OVERRIDE_ORDER = ["Normal", "High", "Urgent"];
 // Rework is the default/primary disposition (PROJECT_SPEC_PHASE7.md) - almost
 // every defect gets reworked or re-cut on the spot, so it's pre-selected and shown
 // as one big button. Set Aside (the only other option now - it replaces the old
@@ -268,6 +323,7 @@ function renderCategoryGrid() {
   // it (a category can be tapped from either one), so it re-renders alongside
   // the full grid on every call rather than needing its own call-sites too.
   renderCategoryFavorites();
+  renderSaveSummary();
 }
 
 function dispositionButtonHtml(value, extraClass) {
@@ -306,6 +362,7 @@ function renderResolutionFields() {
   // Outcome toggle: which closed status this instant-close lands on - "Repaired"
   // (default) or "Use As Is" (the DECISION-FLAGGED entry point for recording
   // "defect exists, we're shipping it as is" - see docs/PROJECT_SPEC_PHASE7.md).
+  renderSaveSummary();
   document.getElementById("instant-close-outcome").innerHTML = INSTANT_CLOSE_OUTCOMES.map((o) => {
     const isSelected = selectedInstantCloseOutcome === o;
     return `<button type="button" class="tap-btn${isSelected ? " selected" : ""}" data-value="${escapeHtml(o)}" aria-pressed="${isSelected}">${escapeHtml(o)}</button>`;
@@ -321,7 +378,7 @@ function renderPriorityButtons() {
       return `<button type="button" class="tap-btn priority-${p.toLowerCase()}${isSelected ? " selected" : ""}" data-value="${p}" aria-pressed="${isSelected}">${p}</button>`;
     })
     .join("");
-  document.getElementById("priority-current-label").innerHTML = priorityBadge(selectedPriority);
+  renderSaveSummary();
 }
 
 function renderQty() {
@@ -388,6 +445,7 @@ async function maybePrefillStationFromWorkOrder() {
 
 function renderFoundStations() {
   renderStationGroup("found-station-common", "found-station-all", selectedFoundStationId);
+  renderSaveSummary();
 }
 
 /** Phase 3: the "common" quick-pick tier both Found Station and Possible
@@ -470,9 +528,10 @@ function renderScannedDrawer() {
       <div class="fc-spec">${spec}</div>
       <div class="fc-meta">${unitText ? `<span>${escapeHtml(unitText)}</span>` : ""}<span>Check this is the drawer in front of you.</span></div>
     </div>
-    <div class="fc-side"><span class="tag tag-qc">✓ Label read</span></div>
+    <div class="fc-side" style="width:auto;"><span class="tag tag-good">✓ Label read</span><button type="button" class="link-btn" id="scan-another-btn">Scan another</button></div>
   </div>`;
   el.hidden = false;
+  document.getElementById("scan-another-btn").addEventListener("click", backToScan);
 }
 
 // ---------------------------------------------------------------------------
@@ -544,9 +603,55 @@ async function checkOpenCases() {
   }
 }
 
+/** Which of the three work-order states shows: the big scan button (start), the
+ * typed-work-order box, or the scanned drawer card. */
+let typedMode = false;
+function renderWorkOrderState() {
+  const scanned = Boolean(scannedDrawer);
+  document.getElementById("wo-start").hidden = scanned || typedMode;
+  document.getElementById("wo-typed").hidden = scanned || !typedMode;
+  renderSaveSummary();
+}
+
+function startTyping() {
+  typedMode = true;
+  clearScannedDrawer();
+  renderWorkOrderState();
+  document.getElementById("work_order_number").focus();
+}
+
+function backToScan() {
+  typedMode = false;
+  document.getElementById("work_order_number").value = "";
+  document.getElementById("line_label").value = "";
+  lineEntrySource = "manual";
+  clearScannedDrawer();
+  clearOpenCaseWarning();
+  renderWorkOrderState();
+}
+
+/** One line at the left of the pinned save bar: what is about to be saved. */
+function renderSaveSummary() {
+  const el = document.getElementById("save-summary");
+  if (!el || !masterData) return;
+  const wo = document.getElementById("work_order_number").value.trim();
+  if (!wo) {
+    el.textContent = "Scan a label to start";
+    return;
+  }
+  const line = document.getElementById("line_label").value;
+  const cats = masterData.defect_categories.filter((c) => selectedCategoryIds.has(c.id)).map((c) => c.name);
+  const found = masterData.stations.find((st) => st.id === selectedFoundStationId);
+  const what = selectedDisposition === "Set Aside" ? "Set Aside" : isInstantClose() && selectedRepairPreset ? `fixed: ${selectedRepairPreset}` : "Rework, open";
+  el.innerHTML = `<b>WO ${escapeHtml(wo)}${line ? ` · Line ${escapeHtml(line)}` : ""}</b>${addToCase ? ` → ${escapeHtml(addToCase.case_number)}` : ""}<br>${
+    cats.length ? escapeHtml(cats.join(", ")) : "Pick at least one defect"
+  }${found ? ` · found at ${escapeHtml(found.name)}` : ""} · ${escapeHtml(what)}`;
+}
+
 function clearScannedDrawer() {
   scannedDrawer = null;
   renderScannedDrawer();
+  renderWorkOrderState();
 }
 
 /** {order_detail_id, drawer_unit} for the payload - only while the order
@@ -590,7 +695,9 @@ async function resolveScannedLabel(text) {
     lineEntrySource = "manual";
     setScanStatus(`Order ${result.order_no} found.`, false);
   }
+  typedMode = false;
   renderScannedDrawer();
+  renderWorkOrderState();
   await checkOpenCases();
 }
 
@@ -752,17 +859,26 @@ function sessionPhotoCellHtml(caseId, photoCount) {
     <button type="button" class="link-btn session-photo-btn" data-case-id="${caseId}">+ Add another</button>`;
 }
 
-function addSessionLogRow(created, hasPhoto) {
-  document.getElementById("session-log-section").style.display = "block";
-  const tbody = document.querySelector("#session-log-table tbody");
-  tbody.insertAdjacentHTML(
+function addSessionLogRow(created, hasPhoto, info = {}) {
+  document.getElementById("session-log-empty")?.remove();
+  const aside = created.disposition === "Set Aside";
+  const outcome = created.status.startsWith("Closed")
+    ? `Closed${created.repair_action ? ", " + escapeHtml(created.repair_action) : ""}`
+    : aside
+      ? "Set Aside, in queue"
+      : "Rework, in queue";
+  const line = created.line_label ? ` · <span>Line ${escapeHtml(created.line_label)}</span>` : "";
+  document.getElementById("session-log-table").insertAdjacentHTML(
     "afterbegin",
-    `<tr data-case-id="${created.id}" data-photo-count="${hasPhoto ? 1 : 0}">
-      <td>${escapeHtml(created.case_number)}</td>
-      <td>${escapeHtml(created.detected_at_local || "")}</td>
-      <td>${created.items.map((i) => escapeHtml(i.defect_category_name)).join(", ")}</td>
-      <td class="session-photo-cell">${sessionPhotoCellHtml(created.id, hasPhoto ? 1 : 0)}</td>
-    </tr>`
+    `<div class="session-entry" data-case-id="${created.id}" data-photo-count="${hasPhoto ? 1 : 0}">
+      <div class="s${aside ? " aside" : ""}"></div>
+      <div class="b">
+        <b>WO ${escapeHtml(created.work_order_number)}${line}</b>
+        <div class="mt">${info.customer ? escapeHtml(info.customer) + " · " : ""}${escapeHtml((created.detected_at_local || "").split(" ").slice(-2).join(" "))} · ${escapeHtml(created.case_number)}</div>
+        <div>${created.items.map((i) => escapeHtml(i.defect_category_name)).join(", ")} · ${outcome}</div>
+        <div class="session-photo-cell">${sessionPhotoCellHtml(created.id, hasPhoto ? 1 : 0)}</div>
+      </div>
+    </div>`
   );
 }
 
@@ -813,6 +929,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   loadRecentWorkOrdersIntoDatalist();
   resetFormFully();
+  backToScan();
+  document.getElementById("nd-subtitle").textContent = new Intl.DateTimeFormat("en-US", {
+    timeZone: window.APP_TZ || "America/New_York",
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  }).format(new Date());
 
   wireStationGroup("found-station-common", "found-station-all", "found-station-more-btn", (id) => {
     selectedFoundStationId = selectedFoundStationId === id ? null : id;
@@ -874,8 +997,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("priority-override").addEventListener("click", (e) => {
     const btn = e.target.closest(".tap-btn");
     if (!btn) return;
-    const value = btn.dataset.value;
-    selectedPriority = selectedPriority === value ? "Normal" : value;
+    selectedPriority = btn.dataset.value;
     renderPriorityButtons();
   });
 
@@ -907,6 +1029,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const wo = woInput.value.trim();
     if (scannedDrawer && wo !== scannedDrawer.order_no) clearScannedDrawer();
     clearOpenCaseWarning();
+    renderSaveSummary();
     clearTimeout(woTimer);
     if (looksLikeLabel(wo)) woTimer = setTimeout(() => resolveScannedLabel(wo), 250);
   });
@@ -929,10 +1052,36 @@ document.addEventListener("DOMContentLoaded", async () => {
   // manual entry is unaffected either way.
   const scanBtn = document.getElementById("scan-label-btn");
   if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) {
-    scanBtn.style.display = "none";
+    // No camera here: the hand scanner still works (keydown buffer below).
+    scanBtn.addEventListener("click", () => showToast("Scan the label with the hand scanner, or type the work order.", "info"));
   } else {
     scanBtn.addEventListener("click", openScanModal);
   }
+  document.getElementById("wo-type-btn").addEventListener("click", startTyping);
+  document.getElementById("wo-scan-instead").addEventListener("click", backToScan);
+
+  // A USB/Bluetooth scanner types the label and presses Enter. When no box has
+  // focus, collect those keystrokes and treat a label-looking line as a scan.
+  let scanBuffer = "";
+  let scanBufferAt = 0;
+  document.addEventListener("keydown", (e) => {
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT")) return;
+    if (document.getElementById("label-scan-modal").style.display === "flex") return;
+    const now = Date.now();
+    if (now - scanBufferAt > 300) scanBuffer = "";
+    scanBufferAt = now;
+    if (e.key === "Enter") {
+      const text = scanBuffer.trim();
+      scanBuffer = "";
+      if (/#drawer=|workorderpdfs|^https?:\/\//i.test(text)) {
+        e.preventDefault();
+        resolveScannedLabel(text);
+      }
+    } else if (e.key.length === 1) {
+      scanBuffer += e.key;
+    }
+  });
   document.getElementById("label-scan-close").addEventListener("click", closeScanModal);
   document.getElementById("label-scan-modal").addEventListener("click", (e) => {
     if (e.target.id === "label-scan-modal") closeScanModal();
@@ -951,14 +1100,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   sessionLogTable.addEventListener("click", (e) => {
     const btn = e.target.closest(".session-photo-btn");
     if (!btn || btn.disabled) return;
-    const input = btn.closest("td").querySelector(".session-photo-input");
+    const input = btn.closest(".session-photo-cell").querySelector(".session-photo-input");
     input.value = "";
     input.click();
   });
   sessionLogTable.addEventListener("change", async (e) => {
     const input = e.target.closest(".session-photo-input");
     if (!input || !input.files.length) return;
-    const row = input.closest("tr");
+    const row = input.closest(".session-entry");
     const cell = row.querySelector(".session-photo-cell");
     const caseId = Number(input.dataset.caseId);
     const btn = cell.querySelector(".session-photo-btn");
@@ -1027,12 +1176,13 @@ document.addEventListener("DOMContentLoaded", async () => {
             ? `Resolved on the spot — ${created.case_number} closed.`
             : `Saved: ${created.case_number}`) + photoNote
       );
-      addSessionLogRow(created, Boolean(photoNote));
+      addSessionLogRow(created, Boolean(photoNote), { customer: scannedDrawer?.customer_name });
       if (!recentWorkOrders.includes(created.work_order_number)) {
         recentWorkOrders.unshift(created.work_order_number);
         loadRecentWorkOrdersIntoDatalist();
       }
       resetFormForNextEntry();
+      backToScan();
     } catch (err) {
       if (err instanceof ApiError && err.field) {
         showFieldError(form, err.field, err.message);

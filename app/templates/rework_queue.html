@@ -8,7 +8,7 @@
   <span class="live" id="queue-live"><span class="dot" aria-hidden="true"></span><span id="queue-updated">Loading…</span></span>
 </div>
 
-<div class="search-box" style="margin-bottom:0.5rem;">
+<div class="search-box" style="margin-bottom:0.4rem;">
   <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16.5 16.5L21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>
   <input id="queue-search" type="search" autocomplete="off"
          placeholder="Search work order, customer, line, defect or case. Or scan a drawer label."
@@ -16,21 +16,36 @@
   <button type="button" id="queue-search-clear" class="secondary" hidden>Clear</button>
 </div>
 
+<p class="hint" style="margin:0 0 0.8rem;">Try a work order, a customer, <b>line c</b> or a defect like <b>glue</b>.</p>
+
 <div class="chip-row" style="margin-bottom:0.9rem;" role="group" aria-label="Filter the queue">
   <button type="button" class="chip" data-kind="" aria-pressed="true">All</button>
   <button type="button" class="chip" data-kind="kickback" aria-pressed="false">Kickbacks</button>
   <button type="button" class="chip" data-kind="qc" aria-pressed="false">QC defects</button>
   <span id="queue-drawer-chip" hidden></span>
-  <label class="leave-open-label" style="margin:0 0 0 0.5rem;">
+  <label class="leave-open-label" style="margin:0 0 0 0.5rem; font-size:0.95rem;">
     <input type="checkbox" id="queue-include-closed"> Include closed (last 7 days)
   </label>
-  <label class="leave-open-label" style="margin:0 0 0 auto;">
-    <input type="checkbox" id="queue-select-all" aria-label="Select all cases shown"> Select all
-  </label>
-  <span id="queue-count" class="hint" style="font-weight:600;"></span>
+  <span style="margin-left:auto; display:inline-flex; align-items:center; gap:0.6rem;">
+    <label class="leave-open-label queue-select-all" style="margin:0; font-size:0.95rem;" hidden>
+      <input type="checkbox" id="queue-select-all" aria-label="Select all cases shown"> All
+    </label>
+    <button type="button" class="chip" id="queue-select-mode" aria-pressed="false">Select</button>
+    <span id="queue-count" style="font-family:var(--display); font-weight:600; font-size:1.1rem; color:var(--muted);"></span>
+  </span>
 </div>
 
 <div class="floor-cards" id="queue-cards"></div>
+{% endblock %}
+
+{% block extra_head %}
+<style>
+  /* Cards stay compact like the sample: the close form opens under a card only
+     when its "Close case" button is tapped; select boxes only in Select mode. */
+  #queue-cards:not(.select-mode) .fc-select { display: none; }
+  .fc-select { display: inline-flex; align-items: center; gap: 0.3rem; margin: 0; font-weight: 500; }
+  .fc-select input { width: 18px; height: 18px; min-height: 0; }
+</style>
 {% endblock %}
 
 {% block extra_scripts %}
@@ -119,7 +134,8 @@ function cardHtml(item) {
        <button type="button" class="secondary" data-reopen="${item.id}">Reopen…</button>`
     : `<div class="fc-tags">${kindTag(item)}<span class="fc-pri ${pri}">${escapeHtml(item.priority)}</span></div>
        <div class="fc-age">${ageHtml(item.age_hours)}</div>
-       <span class="fc-status">${escapeHtml(item.status)}</span>`;
+       <span class="fc-status">${escapeHtml(item.status)}</span>
+       <button type="button" data-open-close="${item.id}" aria-expanded="false">Close case</button>`;
   return `<article class="floor-card${item.is_closed ? " closed" : ""}" data-id="${item.id}">
     <div class="stripe ${item.is_closed ? "good" : pri}" aria-hidden="true"></div>
     <div class="fc-main">
@@ -131,15 +147,13 @@ function cardHtml(item) {
       <div class="fc-spec">${spec}</div>
       <div class="fc-meta">
         <span>Defect: <strong>${item.categories.map(escapeHtml).join(", ")}</strong></span>
-        <span>Found at ${escapeHtml(item.found_station_name)}${item.clamp ? ` · assembled at <strong>${escapeHtml(item.clamp)}</strong>` : ""}</span>
+        <span>${item.kind === "kickback" && item.kickback_area === "assembly" ? "Assembly" : "Found at " + escapeHtml(item.found_station_name)}${item.clamp ? ` · ${escapeHtml(item.clamp)}` : ""}</span>
         <a href="#" class="fc-caseno" data-case="${item.id}">case ${escapeHtml(item.case_number)}${drawer}</a>
-        <label class="fc-caseno" style="display:inline-flex;align-items:center;gap:0.3rem;margin:0;font-weight:500;">
-          <input type="checkbox" class="row-check" data-id="${item.id}" style="width:18px;height:18px;min-height:0;"> select
-        </label>
+        <label class="fc-caseno fc-select"><input type="checkbox" class="row-check" data-id="${item.id}"> select</label>
       </div>
     </div>
     <div class="fc-side">${side}</div>
-    ${item.is_closed ? "" : `<div class="fc-actions">${closeFormHtml(item)}${moreOptionsFormHtml(item)}</div>`}
+    ${item.is_closed ? "" : `<div class="fc-actions" hidden>${closeFormHtml(item)}${moreOptionsFormHtml(item)}</div>`}
   </article>`;
 }
 
@@ -158,6 +172,7 @@ function isBusy() {
   const cards = document.getElementById("queue-cards");
   if (cards.contains(document.activeElement) && document.activeElement !== document.body) return true;
   if (cards.querySelector("details[open]")) return true;
+  if (cards.querySelector(".fc-actions:not([hidden])")) return true;
   if (cards.querySelector("input.row-check:checked")) return true;
   for (const el of cards.querySelectorAll("input[type=text], textarea")) {
     if (el.value !== el.defaultValue) return true;
@@ -191,6 +206,16 @@ async function loadQueue({ background = false } = {}) {
   queueBulkSelect.refresh();
   wireCaseLinks(cards);
   wireForms(cards);
+  cards.querySelectorAll("[data-open-close]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const panel = btn.closest(".floor-card").querySelector(".fc-actions");
+      panel.hidden = !panel.hidden;
+      btn.textContent = panel.hidden ? "Close case" : "Cancel";
+      btn.classList.toggle("secondary", !panel.hidden);
+      btn.setAttribute("aria-expanded", String(!panel.hidden));
+      if (!panel.hidden) panel.querySelector("select")?.focus();
+    })
+  );
   cards.querySelectorAll("[data-reopen]").forEach((btn) =>
     btn.addEventListener("click", () => openCaseDetail(Number(btn.dataset.reopen)))
   );
@@ -351,6 +376,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     })
   );
   document.getElementById("queue-include-closed").addEventListener("change", () => loadQueue());
+  document.getElementById("queue-select-mode").addEventListener("click", (e) => {
+    const cards = document.getElementById("queue-cards");
+    const on = !cards.classList.contains("select-mode");
+    cards.classList.toggle("select-mode", on);
+    e.currentTarget.setAttribute("aria-pressed", String(on));
+    document.querySelector(".queue-select-all").hidden = !on;
+    if (!on) document.getElementById("bulk-clear-btn")?.click();
+  });
 
   try {
     masterData = await Api.getMasterData();
