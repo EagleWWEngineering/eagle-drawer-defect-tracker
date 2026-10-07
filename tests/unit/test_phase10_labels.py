@@ -141,3 +141,14 @@ def test_migration_adds_order_lines_and_nullable_drawer_identity(tmp_path):
     assert "order_detail_id" not in case_cols
     assert conn.execute("SELECT count(*) FROM defect_cases").fetchone()[0] == 1
     conn.close()
+
+
+def test_new_defect_can_read_the_label_from_a_photo():
+    """2026-10-07: the live camera view needs https; on eagle-vm (plain http) the
+    scan button takes a photo with the camera app and reads the QR from it."""
+    assert 'id="label-photo-input"' in DEFECT_ENTRY_HTML
+    assert 'capture="environment"' in DEFECT_ENTRY_HTML
+    assert "LabelScan.liveCameraAvailable()" in DEFECT_ENTRY_HTML
+    assert "LabelScan.decodeImageFile(file)" in DEFECT_ENTRY_HTML
+    assert "async function decodeImageFile" in LABEL_SCAN_JS
+    assert "window.isSecureContext" in LABEL_SCAN_JS

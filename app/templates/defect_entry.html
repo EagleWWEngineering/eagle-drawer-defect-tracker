@@ -148,6 +148,8 @@
     <button type="submit" id="save-btn" class="secondary" form="defect-form">Save without photo</button>
   </div>
 </div>
+<!-- The label photo (when the live camera view isn't allowed - plain http). -->
+<input type="file" id="label-photo-input" accept="image/*" capture="environment" style="display:none;" aria-hidden="true" tabindex="-1">
 <input type="file" id="save-photo-input" accept="image/jpeg,image/png,image/webp" capture="environment" style="display:none;" aria-hidden="true" tabindex="-1">
 
 <!-- "Scan label" camera view (PROJECT_SPEC_PHASE9.md Part 3) - see
@@ -679,6 +681,7 @@ async function resolveScannedLabel(text) {
   }
   if (!result.order_no) {
     setScanStatus("QR code didn't look like a work order label. Enter the order number manually.", true);
+    showToast("That QR code isn't a drawer label. Try again, or type the work order.", "error");
     return;
   }
   document.getElementById("work_order_number").value = result.order_no;
@@ -1050,13 +1053,39 @@ document.addEventListener("DOMContentLoaded", async () => {
   // "Scan label" (PROJECT_SPEC_PHASE9.md Part 3): hidden outright on a browser
   // with no camera API at all, rather than opening a modal that can only fail -
   // manual entry is unaffected either way.
+  // "Scan the drawer label": the live camera view where the browser allows it
+  // (https only), otherwise a PHOTO of the label - the camera app opens, and
+  // the QR code is read from the picture (works on plain http, like eagle-vm).
   const scanBtn = document.getElementById("scan-label-btn");
-  if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) {
-    // No camera here: the hand scanner still works (keydown buffer below).
-    scanBtn.addEventListener("click", () => showToast("Scan the label with the hand scanner, or type the work order.", "info"));
-  } else {
-    scanBtn.addEventListener("click", openScanModal);
-  }
+  const labelPhotoInput = document.getElementById("label-photo-input");
+  scanBtn.addEventListener("click", () => {
+    if (window.LabelScan.liveCameraAvailable()) {
+      openScanModal();
+      return;
+    }
+    labelPhotoInput.value = "";
+    labelPhotoInput.click(); // must run inside the tap, or the camera won't open
+  });
+  labelPhotoInput.addEventListener("change", async () => {
+    const file = labelPhotoInput.files[0];
+    if (!file) return; // camera cancelled
+    const label = scanBtn.innerHTML;
+    scanBtn.disabled = true;
+    scanBtn.textContent = "Reading the label…";
+    try {
+      const text = await window.LabelScan.decodeImageFile(file);
+      if (text) {
+        await resolveScannedLabel(text);
+      } else {
+        showToast("Couldn't find the QR code in that photo. Try again a little closer, with the whole code in the picture.", "error");
+      }
+    } catch (err) {
+      showToast(`Couldn't read the photo: ${err.message}`, "error");
+    } finally {
+      scanBtn.disabled = false;
+      scanBtn.innerHTML = label;
+    }
+  });
   document.getElementById("wo-type-btn").addEventListener("click", startTyping);
   document.getElementById("wo-scan-instead").addEventListener("click", backToScan);
 

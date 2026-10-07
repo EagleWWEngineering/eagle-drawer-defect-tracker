@@ -232,5 +232,69 @@
     return controller;
   }
 
-  window.LabelScan = { startScan };
+  /* 2026-10-07: read the QR code from a PHOTO of the label. The live camera view
+   * (startScan) needs a secure (https) page; on eagle-vm the tracker is served
+   * over plain http, where browsers refuse it. Taking a picture with the camera
+   * app (<input type="file" capture>) works on http, and this decodes it.
+   * Resolves the QR text, or null when no code could be read. */
+  async function loadImage(file) {
+    if (window.createImageBitmap) {
+      try {
+        return await createImageBitmap(file, { imageOrientation: "from-image" });
+      } catch (err) {
+        /* older browsers: fall through to an <img> */
+      }
+    }
+    return await new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        resolve(img);
+      };
+      img.onerror = (e) => {
+        URL.revokeObjectURL(url);
+        reject(e);
+      };
+      img.src = url;
+    });
+  }
+
+  async function decodeImageFile(file) {
+    const image = await loadImage(file);
+    const width = image.width || image.naturalWidth;
+    const height = image.height || image.naturalHeight;
+    if (window.BarcodeDetector) {
+      try {
+        const detector = new window.BarcodeDetector({ formats: ["qr_code"] });
+        const codes = await detector.detect(image);
+        if (codes.length && codes[0].rawValue) return codes[0].rawValue;
+      } catch (err) {
+        /* not supported on this device - jsQR below */
+      }
+    }
+    if (!window.jsQR) return null;
+    // A full-size tablet photo is too big for jsQR and a label far away is too
+    // small when shrunk, so try a few sizes.
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    for (const target of [1600, 1000, 2400]) {
+      const scale = Math.min(1, target / Math.max(width, height));
+      canvas.width = Math.round(width * scale);
+      canvas.height = Math.round(height * scale);
+      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+      const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const result = window.jsQR(data.data, data.width, data.height, { inversionAttempts: "attemptBoth" });
+      if (result && result.data) return result.data;
+      if (scale === 1) break;
+    }
+    return null;
+  }
+
+  /** True when this page may use the live camera view at all. */
+  function liveCameraAvailable() {
+    return Boolean(window.isSecureContext && navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+  }
+
+  window.LabelScan = { startScan, decodeImageFile, liveCameraAvailable };
 })();
