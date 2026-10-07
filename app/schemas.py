@@ -1155,3 +1155,7 @@ class FeedStateOut(BaseModel):
 class FeedHealthOut(BaseModel):
     ok: bool
     feeds: list[FeedStateOut]
+
+
+class QualityTargetOut(BaseModel):
+    target_per_100: float | None = None

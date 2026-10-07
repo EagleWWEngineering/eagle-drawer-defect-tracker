@@ -438,16 +438,16 @@ def test_reports_page_renders_the_shared_preset_button_row_once(client):
     assert 'id="f-end-date"' in html
 
 
-def test_dashboard_page_still_renders_the_shared_preset_button_row(client):
-    """Regression guard: extracting the shared partial must not remove or
-    duplicate the Dashboard's own preset row."""
+def test_dashboard_is_quality_today_with_no_filters(client):
+    """2026-10 redesign: the Dashboard is a glance-first page (desk and TV) - the
+    filters and the filtered Pareto moved to Reports, so it has no preset row."""
     resp = client.get("/")
     assert resp.status_code == 200
     html = resp.text
-    for preset in PRESET_CHIPS:
-        assert html.count(f'data-range="{preset}"') == 1
-    assert 'id="dr-start-date"' in html
-    assert 'id="dr-end-date"' in html
+    assert "Quality Today" in html
+    assert "/api/v1/reports/quality-today" in html
+    assert 'data-range="' not in html
+    assert 'id="dr-start-date"' not in html
 
 
 # ---------------------------------------------------------------------------
@@ -464,7 +464,6 @@ def test_dashboard_page_still_renders_the_shared_preset_button_row(client):
 def test_dashboard_page_no_longer_defines_the_deleted_client_side_default(client):
     html = client.get("/").text
     assert "defaultDateRange" not in html
-    assert "loadDefaultDateRange" in html
 
 
 def test_reports_page_no_longer_defines_the_deleted_client_side_default(client):

@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.dependencies import get_actor_role, get_db
-from app.schemas import CostSettingsOut, CostSettingsUpdate, UndoCategorySettings
+from app.schemas import CostSettingsOut, CostSettingsUpdate, QualityTargetOut, UndoCategorySettings
 from app.services import audit_service, settings_service
 
 router = APIRouter(prefix="/api/v1/settings", tags=["settings"])
@@ -79,3 +79,30 @@ def update_undo_categories(
         after=after.model_dump(),
     )
     return after
+
+
+@router.get("/quality-target", response_model=QualityTargetOut)
+def get_quality_target(db: Session = Depends(get_db)) -> QualityTargetOut:
+    """The defects-per-100 target on the Quality Today dashboard (blank = none)."""
+    return QualityTargetOut(target_per_100=settings_service.get_quality_target(db))
+
+
+@router.put("/quality-target", response_model=QualityTargetOut)
+def update_quality_target(
+    payload: QualityTargetOut,
+    db: Session = Depends(get_db),
+    actor_role: str = Depends(get_actor_role),
+) -> QualityTargetOut:
+    before = settings_service.get_quality_target(db)
+    after = settings_service.set_quality_target(db, payload.target_per_100)
+    audit_service.record(
+        db,
+        actor_role=actor_role,
+        action="update",
+        entity_type="AppSetting",
+        entity_id=settings_service.QUALITY_TARGET_KEY,
+        inputs=payload.model_dump(),
+        before={"target_per_100": before},
+        after={"target_per_100": after},
+    )
+    return QualityTargetOut(target_per_100=after)

@@ -82,3 +82,28 @@ def set_undo_category_ids(db: Session, ids: dict[str, int | None]) -> dict[str, 
             setting.value = value
     db.commit()
     return {area: get_undo_category_id(db, area) for area in UNDO_CATEGORY_SETTING_KEYS}
+
+
+# 2026-10 redesign: the defects-per-100 target drawn on the Quality Today
+# dashboard's trend. Blank = no target line. Set in Admin.
+QUALITY_TARGET_KEY = "quality_target_per_100"
+
+
+def get_quality_target(db: Session) -> float | None:
+    setting = db.get(AppSetting, QUALITY_TARGET_KEY)
+    if setting is None or not setting.value:
+        return None
+    return float(setting.value)
+
+
+def set_quality_target(db: Session, value: float | None) -> float | None:
+    if value is not None and not (0 < value < 1000):
+        raise ValidationError("The target must be a number above 0.", field="target_per_100")
+    setting = db.get(AppSetting, QUALITY_TARGET_KEY)
+    stored = "" if value is None else f"{value:g}"
+    if setting is None:
+        db.add(AppSetting(key=QUALITY_TARGET_KEY, value=stored))
+    else:
+        setting.value = stored
+    db.commit()
+    return get_quality_target(db)

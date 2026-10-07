@@ -55,6 +55,31 @@
 </section>
 
 <section class="card">
+  <h2>Dashboard target</h2>
+  <form id="quality-target-form" class="filters">
+    <div class="field">
+      <label for="quality-target-input">Defects per 100 drawers</label>
+      <input type="number" id="quality-target-input" min="0.1" step="0.1" placeholder="No target">
+    </div>
+    <div class="field">
+      <button type="submit">Save</button>
+    </div>
+  </form>
+  <p class="hint">Drawn as a dashed line on the Quality Today trend. Leave it empty for no line.</p>
+</section>
+
+<section class="card">
+  <h2>Feeds from production count</h2>
+  <p class="hint">When each feed last arrived. "Late" means it hasn't arrived for much longer than its schedule allows.</p>
+  <div class="table-scroll">
+    <table id="feed-health-table">
+      <thead><tr><th>Feed</th><th>State</th><th>Last received</th><th>Details</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<section class="card">
   <h2>UNDO Card Kickbacks</h2>
   <p class="hint">When QC or Assembly In scans the UNDO card and then a drawer, a
     Set Aside case is opened for that drawer automatically, and it closes as
@@ -223,6 +248,24 @@ async function loadTables() {
   });
 }
 
+async function loadQualityTarget() {
+  const r = await Api.get("/api/v1/settings/quality-target");
+  document.getElementById("quality-target-input").value = r.target_per_100 ?? "";
+}
+
+async function loadFeedHealth() {
+  const health = await Api.get("/api/v1/sync/health");
+  const label = { ok: "✓ Current", late: "⚠ Late", error: "⚠ Refused", never: "Nothing received yet" };
+  document.querySelector("#feed-health-table tbody").innerHTML = health.feeds
+    .map(
+      (f) => `<tr><td>${escapeHtml(f.label)}</td>
+        <td style="font-weight:700;color:${f.state === "ok" ? "var(--good)" : f.state === "never" ? "var(--muted)" : "var(--bad)"}">${label[f.state]}</td>
+        <td>${escapeHtml(f.last_received_local || "—")}</td>
+        <td class="hint">${escapeHtml(f.message || "")}</td></tr>`
+    )
+    .join("");
+}
+
 async function loadDeletedMasterData() {
   const md = await Api.get("/api/v1/master-data", { include_deleted: true });
   const rows = [
@@ -358,6 +401,19 @@ async function loadCostSettings() {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
+  loadQualityTarget().catch((err) => showToast(err.message, "error"));
+  loadFeedHealth().catch((err) => showToast(err.message, "error"));
+  document.getElementById("quality-target-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const raw = document.getElementById("quality-target-input").value;
+    try {
+      await Api.put("/api/v1/settings/quality-target", { target_per_100: raw === "" ? null : Number(raw) });
+      showToast(raw === "" ? "Target removed." : "Target saved.", "success");
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  });
+
   try {
     await loadTables();
     await loadSyncLog();

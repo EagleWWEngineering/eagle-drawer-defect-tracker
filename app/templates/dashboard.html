@@ -1,376 +1,302 @@
 {% extends "base.html" %}
-{% block title %}Dashboard - Eagle Drawer Defect Tracker{% endblock %}
+{% block title %}Quality Today - Drawer Defects{% endblock %}
 {% block page_name %}dashboard{% endblock %}
 
+{% block extra_head %}
+<style>
+  .qt-head { display:flex; flex-wrap:wrap; align-items:flex-end; justify-content:space-between; gap:0.5rem 1.25rem; margin:0.4rem 0 1rem; }
+  .qt-date { color: var(--muted); font-size: 1rem; margin-top: 0.2rem; }
+  .health { display:flex; flex-wrap:wrap; align-items:center; gap:0.35rem 0.6rem; font-size:0.92rem; }
+  .health .state { display:flex; align-items:center; gap:0.45rem; font-weight:700; }
+  .health .state.ok { color: var(--good); }
+  .health .state.bad { color: var(--bad); }
+  .health .dot { width:10px; height:10px; border-radius:50%; background:currentColor; }
+  .feed-chip { font-size:0.78rem; padding:0.1rem 0.55rem; border-radius:999px; background:var(--good-bg); color:var(--good); white-space:nowrap; }
+  .feed-chip.bad { background:var(--bad-bg); color:var(--bad); font-weight:700; }
+  .feed-chip.never { background:var(--surface-2); color:var(--muted); }
+  .today-tiles { display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:0.75rem; margin-bottom:1rem; }
+  .progress { height:8px; border-radius:4px; background:var(--grid); overflow:hidden; margin-top:0.25rem; }
+  .progress span { display:block; height:100%; background:var(--accent); border-radius:4px; }
+  .auto-tag { font-size:0.68rem; font-weight:700; color:var(--accent); letter-spacing:0.05em; }
+  .week-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:0.75rem; }
+  .week-item { display:flex; align-items:center; justify-content:space-between; gap:0.6rem; padding:0.7rem 0.9rem; border:1px solid var(--line); border-radius:var(--radius-sm); }
+  .week-item .kpi-label { font-size:0.75rem; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:0.07em; }
+  .week-item .kpi-value { font-family:var(--display); font-weight:700; font-size:2.1rem; line-height:1.05; font-variant-numeric:tabular-nums; }
+  .week-item .kpi-value small { font-size:1.1rem; color:var(--muted); }
+  body.tv-mode .week-item .kpi-value { font-size:2.8rem; }
+  .qt-cols { display:grid; grid-template-columns:3fr 2fr; gap:1rem; }
+  .qt-cols > .card { margin-bottom:1rem; min-width:0; }
+  @media (max-width: 900px) { .qt-cols { grid-template-columns:1fr; } }
+  .mini { display:grid; grid-template-columns:5px minmax(0,1fr) auto; border:1px solid var(--line); border-radius:var(--radius-sm); overflow:hidden; text-decoration:none; color:inherit; }
+  .mini .stripe { background:var(--normal); } .mini .stripe.urgent { background:var(--urgent); } .mini .stripe.high { background:var(--high); }
+  .mini .m { padding:0.55rem 0.8rem; min-width:0; }
+  .mini .m b { font-family:var(--display); font-size:1.2rem; font-weight:700; }
+  .mini .m b span { color:var(--accent); }
+  .mini .m div { font-size:0.85rem; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .mini .age { padding:0.55rem 0.8rem; font-family:var(--display); font-weight:700; font-size:1.25rem; align-self:center; font-variant-numeric:tabular-nums; }
+  .stack { display:grid; gap:0.5rem; }
+  .issue { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:0.1rem 0.6rem; padding:0.55rem 0.8rem; border:1px solid var(--line); border-radius:var(--radius-sm); font-size:0.92rem; }
+  .issue .sub { grid-column:1/-1; color:var(--muted); font-size:0.85rem; }
+  .catch { font-size:0.75rem; font-weight:700; color:var(--warn-fg); background:var(--warn-bg); padding:0.1rem 0.45rem; border-radius:5px; white-space:nowrap; align-self:start; }
+
+  /* TV mode (?tv=1): no menu, bigger type, no hover. */
+  body.tv-mode .app-header, body.tv-mode .tv-hide { display:none !important; }
+  body.tv-mode main { max-width:none; padding:1.25rem 2rem; }
+  body.tv-mode .page-title { font-size:3rem; }
+  body.tv-mode .qt-date, body.tv-mode .health { font-size:1.25rem; }
+  body.tv-mode .kpi-tile .kpi-value { font-size:3.6rem; }
+  body.tv-mode .kpi-tile .kpi-label { font-size:1rem; }
+  body.tv-mode .kpi-tile .kpi-sub { font-size:1.15rem; }
+  body.tv-mode h2 { font-size:1.8rem; }
+  body.tv-mode .bar-row, body.tv-mode .mini .m div, body.tv-mode .issue { font-size:1.15rem; }
+  body.tv-mode .mini .m b { font-size:1.6rem; }
+  body.tv-mode .svg-chart text { font-size:15px; }
+</style>
+{% endblock %}
+
 {% block content %}
-<h1 class="page-title">Dashboard</h1>
-
-<section class="card">
-  <h2>Date range</h2>
-  <form id="date-range-form" class="filters">
-    <div class="field">
-      <label for="dr-start-date">Start date</label>
-      <input type="date" id="dr-start-date" name="start_date" required>
-    </div>
-    <div class="field">
-      <label for="dr-end-date">End date</label>
-      <input type="date" id="dr-end-date" name="end_date" required>
-    </div>
-    <div class="field">
-      <button type="submit">Apply</button>
-    </div>
-  </form>
-  {% include "_date_presets.html" %}
-</section>
-
-<section class="card">
-  <h2>Summary</h2>
-  <div id="summary-kpis" class="kpi-grid"><p>Loading...</p></div>
-</section>
-
-<section class="card">
-  <h2>Scheduled vs Completed</h2>
-  <p class="hint">Scheduled comes from the production brief (or a manual override on the
-    Daily Summary form); Completed is drawers inspected, summed across shifts. A day with a
-    scheduled bar and no completed bar is the gap worth investigating.</p>
-  <div id="schedule-attainment-tile" class="kpi-grid"></div>
-  <div class="chart-container"><canvas id="schedule-canvas" class="chart-canvas"></canvas></div>
-  <div class="table-scroll">
-    <table id="schedule-table">
-      <thead><tr><th>Date</th><th>Scheduled</th><th>Completed (inspected)</th></tr></thead>
-      <tbody></tbody>
-    </table>
+<div class="qt-head">
+  <div>
+    <h1 class="page-title" style="margin:0;">Quality Today</h1>
+    <div class="qt-date" id="qt-date"></div>
   </div>
-</section>
-
-<section class="card">
-  <div style="display:flex; justify-content: space-between; align-items:center;">
-    <h2 style="margin:0;">Customer Issues</h2>
-    <a class="btn secondary" href="{{ base }}/customer-issues">Open full tab</a>
+  <div style="display:grid; gap:0.4rem; justify-items:end;">
+    <div class="health" id="qt-health"></div>
+    <div class="chip-row">
+      <a class="chip tv-hide" id="tv-link" href="?tv=1">TV mode</a>
+      <a class="chip" id="tv-exit" href="?" hidden>Exit TV mode</a>
+    </div>
   </div>
-  <div id="customer-issues-kpis" class="kpi-grid"><p>Loading...</p></div>
-</section>
+</div>
+
+<section class="today-tiles" id="qt-today" aria-label="Today"></section>
 
 <section class="card">
-  <h2>Quality Cost</h2>
-  <p class="hint">One cost unit per defect case (not per category/item), snapshotted at the
-    rate active when the case was created. A case closed "Use As Is" contributes to Cost
-    Avoided instead of Internal Rework Cost.</p>
-  <div id="quality-cost-kpis" class="kpi-grid"><p>Loading...</p></div>
+  <div class="card-head"><h2>This week vs last week</h2><span class="hint" id="qt-week-span"></span></div>
+  <div class="week-grid" id="qt-week"></div>
 </section>
 
-<section class="card">
-  <h2>Additional filters</h2>
-  <p class="hint">These narrow the Pareto, Trend, and KPI tiles below by work order,
-    category, station, priority, status, or disposition, on top of the date range
-    selected above.</p>
-  <form id="filter-form" class="filters">
-    <div class="field">
-      <label for="f-work-order">Work order</label>
-      <input type="text" id="f-work-order" name="work_order_number" placeholder="e.g. WO-1024">
-    </div>
-    <div class="field">
-      <label for="f-category">Category</label>
-      <select id="f-category" name="category_id"><option value="">All</option></select>
-    </div>
-    <div class="field">
-      <label for="f-found-station">Found station</label>
-      <select id="f-found-station" name="found_station_id"><option value="">All</option></select>
-    </div>
-    <div class="field">
-      <label for="f-source-station">Possible source station</label>
-      <select id="f-source-station" name="possible_source_station_id"><option value="">All</option></select>
-    </div>
-    <div class="field">
-      <label for="f-priority">Priority</label>
-      <select id="f-priority" name="priority">
-        <option value="">All</option>
-        <option>Urgent</option><option>High</option><option>Normal</option>
-      </select>
-    </div>
-    <div class="field">
-      <label for="f-status">Status</label>
-      <select id="f-status" name="status"><option value="">All</option></select>
-    </div>
-    <div class="field">
-      <label for="f-disposition">Disposition</label>
-      <select id="f-disposition" name="disposition"><option value="">All</option></select>
-    </div>
-    <div class="field">
-      <button type="submit">Apply filters</button>
-    </div>
-  </form>
+<div class="qt-cols">
+  <section class="card">
+    <div class="card-head"><h2>Defects per 100 drawers</h2><span class="hint" id="qt-trend-note">Last 20 working days</span></div>
+    <div id="qt-trend"></div>
+  </section>
+  <section class="card">
+    <div class="card-head"><h2>Top 5 defects this week</h2><span class="hint">change vs last week</span></div>
+    <div id="qt-top"></div>
+  </section>
+</div>
 
-  <div id="period-kpis" class="kpi-grid" style="margin-top: 1rem;"><p>Loading...</p></div>
-</section>
+<div class="qt-cols">
+  <section class="card">
+    <div class="card-head"><h2>Kickbacks per day</h2><span class="hint">Last 10 working days</span></div>
+    <div class="legend" style="margin-bottom:0.4rem;"><span><i style="background:var(--s-asm)"></i>Assembly</span><span><i style="background:var(--s-qc)"></i>QC</span></div>
+    <div id="qt-kicks"></div>
+  </section>
+  <section class="card">
+    <div class="card-head"><h2>Kickbacks by clamp</h2><span class="hint">This week · clamp that assembled the drawer</span></div>
+    <div id="qt-clamps"></div>
+  </section>
+</div>
 
-<section class="card">
-  <h2>Pareto by defect category</h2>
-  <p class="hint">Bars = defect events. Line = cumulative percentage. Default measure is
-    Defect Events (not unique drawers), per the project's counting rules.</p>
-  <div class="chart-container"><canvas id="pareto-canvas" class="chart-canvas"></canvas></div>
-  <div class="table-scroll">
-    <table id="pareto-table">
-      <thead><tr><th>Category</th><th>Defect events</th><th>Cumulative %</th></tr></thead>
-      <tbody></tbody>
-    </table>
-  </div>
-</section>
+<div class="qt-cols">
+  <section class="card">
+    <div class="card-head"><h2>Oldest open drawers</h2><a class="tv-hide" href="{{ base }}/rework-queue">Open the queue →</a></div>
+    <div class="stack" id="qt-oldest"></div>
+  </section>
+  <section class="card">
+    <div class="card-head"><h2>Customer issues this week</h2><span class="hint" id="qt-issues-note"></span></div>
+    <div class="stack" id="qt-issues"></div>
+  </section>
+</div>
 
-<section class="card">
-  <h2>Trend</h2>
-  <div class="field" style="max-width: 220px;">
-    <label for="trend-group-by">Group by</label>
-    <select id="trend-group-by"><option value="day">Day</option><option value="week">Week</option></select>
-  </div>
-  <div class="chart-container"><canvas id="trend-canvas" class="chart-canvas"></canvas></div>
-</section>
-
-<section class="card">
-  <div style="display:flex; justify-content: space-between; align-items:center;">
-    <h2 style="margin:0;">Priority rework queue</h2>
-    <a class="btn secondary" href="{{ base }}/rework-queue">Open full queue</a>
-  </div>
-  <div class="table-scroll">
-    <table id="rework-preview-table">
-      <thead><tr><th>Case</th><th>Work order</th><th>Priority</th><th>Status</th><th>Age (hrs)</th></tr></thead>
-      <tbody></tbody>
-    </table>
-  </div>
-</section>
+<p class="hint tv-hide" style="text-align:center;">Filters and the detailed Pareto are on <a href="{{ base }}/reports">Reports</a>.</p>
 {% endblock %}
 
 {% block extra_scripts %}
 <script>
-function kpiTile(label, value) {
-  return `<div class="kpi-tile"><div class="kpi-label">${escapeHtml(label)}</div><div class="kpi-value">${value}</div></div>`;
+const REFRESH_SECONDS = 60;
+const TV = new URLSearchParams(window.location.search).get("tv") === "1";
+let loadedAt = null;
+
+function n(value, digits = 1) {
+  return value === null || value === undefined ? "—" : value.toFixed(digits);
 }
 
-function renderKpis(container, kpis) {
-  container.innerHTML = [
-    kpiTile("Drawers inspected", kpis.drawers_inspected),
-    kpiTile("Defect events", kpis.defect_events),
-    kpiTile("Unique drawers rejected", kpis.unique_drawers_rejected),
-    kpiTile("Defects / 100 drawers", formatRate(kpis.defects_per_100)),
-    kpiTile("Rejection rate", formatRate(kpis.rejection_rate)),
-    kpiTile("First pass yield", formatRate(kpis.first_pass_yield)),
-    kpiTile("Rework rate", formatRate(kpis.rework_rate)),
+function hoursText(h) {
+  if (h === null || h === undefined) return "—";
+  return h >= 24 ? `${(h / 24).toFixed(1)} days` : `${h.toFixed(0)} h`;
+}
+
+function tile(label, value, sub, extra = "") {
+  return `<div class="kpi-tile"><span class="kpi-label">${label}</span><span class="kpi-value">${value}</span>${extra}${sub ? `<span class="kpi-sub">${sub}</span>` : ""}</div>`;
+}
+
+/** lowerIsBetter: a drop is good (defects, rejections, kickbacks). */
+function deltaChip(now, before, { lowerIsBetter, unit = "", digits = 1 }) {
+  if (now === null || now === undefined || before === null || before === undefined) return '<span class="delta flat">no comparison</span>';
+  const d = now - before;
+  if (Math.abs(d) < Math.pow(10, -digits) / 2) return '<span class="delta flat">= same</span>';
+  const better = lowerIsBetter ? d < 0 : d > 0;
+  const arrow = d < 0 ? "▼" : "▲";
+  return `<span class="delta ${better ? "good" : "bad"}">${arrow} ${Math.abs(d).toFixed(digits)}${unit} ${better ? "better" : "worse"}</span>`;
+}
+
+function renderHealth(health) {
+  const box = document.getElementById("qt-health");
+  const bad = health.feeds.filter((f) => f.state === "late" || f.state === "error");
+  const chips = health.feeds
+    .map((f) => {
+      const cls = f.state === "late" || f.state === "error" ? "bad" : f.state === "never" ? "never" : "";
+      const why = f.state === "late" ? `late · last ${f.last_received_local || "never"}` : f.state === "error" ? f.message || "refused" : f.state === "never" ? "nothing received yet" : `last ${f.last_received_local || ""}`;
+      return `<span class="feed-chip ${cls}" title="${escapeHtml(why)}">${f.state === "ok" ? "✓ " : f.state === "never" ? "" : "⚠ "}${escapeHtml(f.label)}</span>`;
+    })
+    .join("");
+  const received = health.feeds.some((f) => f.state !== "never");
+  const state = bad.length
+    ? `<span class="state bad"><span class="dot"></span>${bad.length} feed${bad.length === 1 ? "" : "s"} not current</span>`
+    : received
+      ? `<span class="state ok"><span class="dot"></span>All feeds current</span>`
+      : `<span class="state" style="color:var(--muted)"><span class="dot"></span>Waiting for production count</span>`;
+  box.innerHTML = `${state}<span class="hint" id="qt-updated"></span>${TV ? "" : chips}`;
+  if (TV && bad.length) box.insertAdjacentHTML("beforeend", bad.map((f) => `<span class="feed-chip bad">⚠ ${escapeHtml(f.label)}</span>`).join(""));
+  tick();
+}
+
+function renderToday(d) {
+  const t = d.today_stats;
+  const sched = t.drawers_scheduled;
+  const pct = sched ? Math.min(100, (t.drawers_inspected / sched) * 100) : null;
+  const plan = sched
+    ? `<b>${pct.toFixed(0)}%</b> of today's plan`
+    : "no schedule for today";
+  document.getElementById("qt-today").innerHTML = [
+    tile("Completed vs scheduled", `${t.drawers_inspected.toLocaleString()}${sched ? `<small> / ${sched.toLocaleString()}</small>` : ""}`, plan,
+      sched ? `<div class="progress"><span style="width:${pct.toFixed(1)}%"></span></div>` : ""),
+    tile("Defects found", t.defect_events, t.defects_per_100 === null ? "per 100: waiting for completed count" : `<b>${n(t.defects_per_100)}</b> per 100 drawers`),
+    tile("Kickbacks", t.kickbacks, `Assembly <b>${t.kickbacks_assembly}</b> · QC <b>${t.kickbacks_qc}</b>`),
+    tile("Open in queue", t.open_cases, t.oldest_open_hours === null ? "nothing open" : `oldest <b>${hoursText(t.oldest_open_hours)}</b> · WO ${escapeHtml(t.oldest_open_work_order)}`),
+    tile(`First-pass yield <span class="auto-tag">· AUTO</span>`, t.first_pass_yield === null ? "—" : `${n(t.first_pass_yield)}<small>%</small>`, `<b>${t.unique_drawers_rejected}</b> unique drawers rejected`),
   ].join("");
 }
 
-function currentDateRange() {
-  return {
-    start_date: document.getElementById("dr-start-date").value,
-    end_date: document.getElementById("dr-end-date").value,
-  };
-}
-
-function currentFilters() {
-  const form = document.getElementById("filter-form");
-  const data = new FormData(form);
-  const params = { ...currentDateRange() };
-  for (const [key, value] of data.entries()) params[key] = value;
-  return params;
-}
-
-function updateUrlDateRange(range) {
-  const url = new URL(window.location.href);
-  url.searchParams.set("start_date", range.start_date);
-  url.searchParams.set("end_date", range.end_date);
-  window.history.replaceState({}, "", url);
-}
-
-function dateRangeFromUrl() {
-  const params = new URLSearchParams(window.location.search);
-  const start = params.get("start_date");
-  const end = params.get("end_date");
-  return start && end ? { start_date: start, end_date: end } : null;
-}
-
-async function loadSummaryKpis(range) {
-  const kpis = await Api.getSummary(range);
-  renderKpis(document.getElementById("summary-kpis"), kpis);
-}
-
-async function loadCustomerIssuesSummary(range) {
-  const summary = await Api.get("/api/v1/customer-issues/summary", range);
-  const cost = summary.total_estimated_cost.toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-  document.getElementById("customer-issues-kpis").innerHTML = [
-    kpiTile("Customer issues", summary.total_issues),
-    kpiTile("Est. external rework cost", `$${cost}`),
-    kpiTile("Internal catch rate", formatRate(summary.internal_catch_rate)),
+function renderWeek(d) {
+  const a = d.this_week, b = d.last_week;
+  document.getElementById("qt-week-span").textContent = `${a.start} to ${a.end}, against ${b.start} to ${b.end}`;
+  const item = (label, value, chip) => `<div class="week-item"><div><div class="kpi-label">${label}</div><div class="kpi-value">${value}</div></div>${chip}</div>`;
+  document.getElementById("qt-week").innerHTML = [
+    item("Defects per 100", n(a.defects_per_100), deltaChip(a.defects_per_100, b.defects_per_100, { lowerIsBetter: true })),
+    item("Rejection rate", a.rejection_rate === null ? "—" : `${n(a.rejection_rate)}<small>%</small>`, deltaChip(a.rejection_rate, b.rejection_rate, { lowerIsBetter: true, unit: " pts" })),
+    item("First-pass yield", a.first_pass_yield === null ? "—" : `${n(a.first_pass_yield)}<small>%</small>`, deltaChip(a.first_pass_yield, b.first_pass_yield, { lowerIsBetter: false, unit: " pts" })),
+    item("Kickbacks", a.kickbacks, deltaChip(a.kickbacks, b.kickbacks, { lowerIsBetter: true, digits: 0 })),
   ].join("");
 }
 
-async function loadQualityCost(range) {
-  const [internal, external] = await Promise.all([
-    Api.getSummary(range),
-    Api.get("/api/v1/customer-issues/summary", range),
-  ]);
-  const combinedTotal = internal.total_internal_quality_cost + external.total_estimated_cost;
-  document.getElementById("quality-cost-kpis").innerHTML = [
-    kpiTile("Internal rework cost", formatCurrency(internal.internal_rework_cost)),
-    kpiTile("Cost avoided (Use As Is)", formatCurrency(internal.cost_avoided)),
-    kpiTile("Total internal quality cost", formatCurrency(internal.total_internal_quality_cost)),
-    kpiTile("Total quality cost (internal + external)", formatCurrency(combinedTotal)),
-  ].join("");
+function shortDate(iso) {
+  const [, m, day] = iso.split("-");
+  return `${Number(m)}/${Number(day)}`;
 }
 
-/** Phase 6: Scheduled vs Completed card - grouped bar chart + Schedule
- * Attainment % tile, over the SAME date range as the rest of the dashboard
- * (see PROJECT_SPEC.md Phase 6 addendum 5b - the date filter controls the whole
- * dashboard, not just this card). */
-async function loadScheduleCard(range) {
-  const result = await Api.getScheduleAttainment(range);
-
-  document.getElementById("schedule-attainment-tile").innerHTML = [
-    kpiTile("Total scheduled", result.total_scheduled === null ? "—" : result.total_scheduled),
-    kpiTile("Total completed (inspected)", result.total_inspected),
-    kpiTile("Schedule attainment", formatRate(result.attainment_pct)),
-  ].join("");
-
-  renderScheduleVsCompletedChart(document.getElementById("schedule-canvas"), result.days);
-
-  const tbody = document.querySelector("#schedule-table tbody");
-  tbody.innerHTML = result.days
-    .map((d) =>
-      d.is_working_day === false
-        ? `<tr class="row-no-production">
-            <td>${d.production_date} (no production)</td>
-            <td colspan="2">No drawers scheduled that day - holiday/shutdown.</td>
-          </tr>`
-        : `<tr>
-            <td>${d.production_date}</td>
-            <td>${d.drawers_scheduled === null ? "—" : d.drawers_scheduled}</td>
-            <td>${d.drawers_inspected}</td>
-          </tr>`
-    )
-    .join("") || `<tr><td colspan="3">No dates in the selected range.</td></tr>`;
+function renderCharts(d) {
+  Viz.line(
+    document.getElementById("qt-trend"),
+    d.trend.map((p) => ({
+      label: shortDate(p.date),
+      value: p.defects_per_100,
+      tip: `<b>${escapeHtml(p.date)}</b> · ${p.defects_per_100 === null ? "no completed count yet" : p.defects_per_100.toFixed(1) + " per 100"}<br>${p.defect_events} defects · ${p.drawers_inspected} drawers`,
+    })),
+    {
+      target: d.target_per_100,
+      targetLabel: d.target_per_100 === null ? "" : `Target ${d.target_per_100}`,
+      hover: !TV,
+      ariaLabel: "Defects per 100 drawers, last 20 working days",
+      empty: "No completed counts yet.",
+    }
+  );
+  document.getElementById("qt-trend-note").textContent =
+    d.target_per_100 === null ? "Last 20 working days · set a target in Admin" : `Last 20 working days · dashed line = target ${d.target_per_100}`;
+  Viz.barList(
+    document.getElementById("qt-top"),
+    d.top_defects.map((r) => ({ label: r.label, value: r.count, delta: r.delta })),
+    { empty: "No defects logged this week yet." }
+  );
+  Viz.stacked(
+    document.getElementById("qt-kicks"),
+    d.kickbacks_by_day.map((p) => ({ label: shortDate(p.date), a: p.assembly, b: p.qc })),
+    { names: ["Assembly", "QC"], hover: !TV, ariaLabel: "Kickbacks per day, Assembly and QC" }
+  );
+  Viz.barList(
+    document.getElementById("qt-clamps"),
+    d.kickbacks_by_clamp.map((r) => ({ label: r.label, value: r.count, color: "var(--s-asm)" })),
+    { empty: "No clamp known for this week's kickbacks yet." }
+  );
 }
 
-async function loadPeriod() {
-  const params = currentFilters();
-  const kpis = await Api.getSummary(params);
-  renderKpis(document.getElementById("period-kpis"), kpis);
-
-  const rows = await Api.getPareto(params);
-  const tbody = document.querySelector("#pareto-table tbody");
-  tbody.innerHTML = rows
-    .map((r) => `<tr><td>${escapeHtml(r.label)}</td><td>${r.defect_events}</td><td>${formatRate(r.cumulative_pct)}</td></tr>`)
-    .join("") || `<tr><td colspan="3">No defect events in this period.</td></tr>`;
-  renderParetoChart(document.getElementById("pareto-canvas"), rows);
-
-  const groupBy = document.getElementById("trend-group-by").value;
-  const trend = await Api.getTrend({ start_date: params.start_date, end_date: params.end_date, group_by: groupBy });
-  renderTrendChart(document.getElementById("trend-canvas"), trend);
+function renderLists(d) {
+  document.getElementById("qt-oldest").innerHTML =
+    d.oldest_open
+      .map((o) => {
+        const pri = (o.priority || "Normal").toLowerCase();
+        const kick = o.kind === "kickback" ? ` <span class="tag tag-kick">Kickback${o.kickback_area === "assembly" ? " · Assembly" : o.kickback_area === "qc" ? " · QC" : ""}</span>` : "";
+        return `<a class="mini" href="${appUrl("/rework-queue")}">
+          <div class="stripe ${pri}"></div>
+          <div class="m"><b>WO ${escapeHtml(o.work_order_number)}${o.line ? ` · <span>Line ${escapeHtml(o.line)}</span>` : ""}</b>${kick}
+            <div>${o.customer_name ? escapeHtml(o.customer_name) + " · " : ""}${o.categories.map(escapeHtml).join(", ")}</div></div>
+          <div class="age">${hoursText(o.age_hours)}</div></a>`;
+      })
+      .join("") || '<p class="hint">Nothing open. 🎉</p>';
+  const caught = d.customer_issues.filter((i) => i.should_have_caught_at).length;
+  document.getElementById("qt-issues-note").textContent = d.customer_issues.length
+    ? `${d.customer_issues.length} issue${d.customer_issues.length === 1 ? "" : "s"} · ${caught} we could have caught`
+    : "";
+  document.getElementById("qt-issues").innerHTML =
+    d.customer_issues
+      .map(
+        (i) => `<div class="issue"><span><b>${escapeHtml(i.customer_name)}</b>${i.order_number ? ` · WO ${escapeHtml(i.order_number)}` : ""}</span>
+          ${i.should_have_caught_at ? `<span class="catch">Catch at ${escapeHtml(i.should_have_caught_at)}</span>` : "<span></span>"}
+          <span class="sub">${escapeHtml(i.category)} · ${i.pieces} piece${i.pieces === 1 ? "" : "s"}${i.description ? " · " + escapeHtml(i.description) : ""}</span></div>`
+      )
+      .join("") || '<p class="hint">No customer issues this week.</p>';
 }
 
-async function loadReworkPreview() {
-  const rows = (await Api.getReworkQueue()).slice(0, 8);
-  const tbody = document.querySelector("#rework-preview-table tbody");
-  tbody.innerHTML = rows
-    .map(
-      (r) => `<tr>
-        <td><a href="#" data-case="${r.id}">${escapeHtml(r.case_number)}</a></td>
-        <td>${escapeHtml(r.work_order_number)}</td>
-        <td>${priorityBadge(r.priority)}</td>
-        <td>${statusBadge(r.status)}</td>
-        <td>${r.age_hours}</td>
-      </tr>`
-    )
-    .join("") || `<tr><td colspan="5">Nothing in the rework queue right now.</td></tr>`;
-  wireCaseLinks(tbody);
+function tick() {
+  const el = document.getElementById("qt-updated");
+  if (!el || !loadedAt) return;
+  const secs = Math.round((Date.now() - loadedAt) / 1000);
+  el.textContent = secs < 5 ? "· updated just now" : `· updated ${secs < 120 ? secs + " s" : Math.round(secs / 60) + " min"} ago`;
 }
 
-async function populateMasterDataFilters() {
-  const md = await Api.getMasterData();
-  const catSelect = document.getElementById("f-category");
-  md.defect_categories.forEach((c) => {
-    catSelect.insertAdjacentHTML("beforeend", `<option value="${c.id}">${escapeHtml(c.name)}</option>`);
-  });
-  ["f-found-station", "f-source-station"].forEach((id) => {
-    const select = document.getElementById(id);
-    md.stations.forEach((s) => {
-      select.insertAdjacentHTML("beforeend", `<option value="${s.id}">${escapeHtml(s.name)}</option>`);
-    });
-  });
-  const statusSelect = document.getElementById("f-status");
-  md.statuses.forEach((s) => statusSelect.insertAdjacentHTML("beforeend", `<option>${escapeHtml(s)}</option>`));
-  const dispSelect = document.getElementById("f-disposition");
-  md.dispositions.forEach((d) => dispSelect.insertAdjacentHTML("beforeend", `<option>${escapeHtml(d)}</option>`));
-}
-
-/** The page's load-time default, resolved through the SAME server-side path
- * the "Last 7 Working Days" button uses (GET /api/v1/reports/date-preset),
- * rather than a second, client-side calendar-day calculation - see the
- * "Align page-load default date ranges with preset buttons" prompt. A
- * bookmarked/shared URL with explicit start_date/end_date query params still
- * wins over the default, same as before; it doesn't correspond to any one
- * preset, so no button is highlighted for it. If the preset call itself
- * fails (e.g. a network hiccup), falls back to a plain last-7-calendar-days
- * range - the page's old default - rather than leaving the inputs empty. */
-async function loadDefaultDateRange() {
-  const urlRange = dateRangeFromUrl();
-  if (urlRange) {
-    document.getElementById("dr-start-date").value = urlRange.start_date;
-    document.getElementById("dr-end-date").value = urlRange.end_date;
+async function load() {
+  let d;
+  try {
+    d = await Api.get("/api/v1/reports/quality-today");
+  } catch (err) {
+    showToast(`Couldn't refresh: ${err.message}`, "error");
     return;
   }
-  try {
-    const range = await Api.getDatePreset("last_7_days");
-    document.getElementById("dr-start-date").value = range.start_date;
-    document.getElementById("dr-end-date").value = range.end_date;
-    setActivePresetButton("last_7_days");
-  } catch (err) {
-    const end = new Date();
-    const start = new Date();
-    start.setDate(start.getDate() - 6);
-    document.getElementById("dr-start-date").value = isoDate(start);
-    document.getElementById("dr-end-date").value = isoDate(end);
-    showToast(
-      "Could not load the default date range from the server - showing the last 7 calendar days instead.",
-      "error"
-    );
-  }
-}
-
-async function reloadDashboard() {
-  const range = currentDateRange();
-  updateUrlDateRange(range);
-  await Promise.all([
-    loadSummaryKpis(range),
-    loadCustomerIssuesSummary(range),
-    loadQualityCost(range),
-    loadScheduleCard(range),
-    loadPeriod(),
-  ]);
+  loadedAt = Date.now();
+  const when = new Date();
+  document.getElementById("qt-date").textContent =
+    new Intl.DateTimeFormat("en-US", { timeZone: window.APP_TZ || "America/New_York", weekday: "long", month: "long", day: "numeric" }).format(when) +
+    " · " +
+    new Intl.DateTimeFormat("en-US", { timeZone: window.APP_TZ || "America/New_York", hour: "numeric", minute: "2-digit" }).format(when);
+  renderHealth(d.feed_health);
+  renderToday(d);
+  renderWeek(d);
+  renderCharts(d);
+  renderLists(d);
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
-  try {
-    await loadDefaultDateRange();
-    await populateMasterDataFilters();
-    await reloadDashboard();
-    await loadReworkPreview();
-  } catch (err) {
-    showToast(err.message, "error");
+  if (TV) {
+    document.body.classList.add("tv-mode");
+    document.getElementById("tv-exit").hidden = false;
+    // Keep a TV awake where the browser allows it; harmless where it doesn't.
+    try { await navigator.wakeLock?.request("screen"); } catch (err) { /* not allowed - fine */ }
   }
-
-  document.getElementById("date-range-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    try { await reloadDashboard(); } catch (err) { showToast(err.message, "error"); }
-  });
-  initDatePresetButtons({ startInputId: "dr-start-date", endInputId: "dr-end-date", onApply: reloadDashboard });
-  document.getElementById("filter-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    try { await loadPeriod(); } catch (err) { showToast(err.message, "error"); }
-  });
-  document.getElementById("trend-group-by").addEventListener("change", async () => {
-    try { await loadPeriod(); } catch (err) { showToast(err.message, "error"); }
-  });
+  await load();
+  setInterval(load, REFRESH_SECONDS * 1000);
+  setInterval(tick, 1000);
 });
 </script>
 {% endblock %}

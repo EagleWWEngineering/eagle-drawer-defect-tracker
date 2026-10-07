@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime as dt
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session, selectinload
 
 from app.dependencies import get_db
@@ -32,6 +33,7 @@ from app.services import (
     defect_service,
     metrics_service,
     order_line_service,
+    quality_today_service,
     schedule_service,
     settings_service,
     working_days_service,
@@ -638,3 +640,10 @@ def get_shop_vs_customer(
         return [LabelCountOut(label=k, count=v) for k, v in rows]
 
     return ShopVsCustomerOut(shop=ranked(shop), customer=ranked(customer))
+
+
+@router.get("/quality-today")
+def get_quality_today(db: Session = Depends(get_db)) -> dict:
+    """Everything the Quality Today dashboard shows, in one call (2026-10 redesign;
+    app/services/quality_today_service.py)."""
+    return jsonable_encoder(quality_today_service.build(db, today_in_display_timezone()))

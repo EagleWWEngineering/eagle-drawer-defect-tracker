@@ -110,7 +110,9 @@
     }
     const every = Math.max(1, Math.ceil(n / 7));
     points.forEach((p, i) => {
-      if (i % every === 0 || i === n - 1) {
+      // Every few points, plus the last one - but never one crowding the last.
+      const nearLast = i !== n - 1 && n - 1 - i < Math.ceil(every * 0.75);
+      if ((i % every === 0 && !nearLast) || i === n - 1) {
         const anchor = n > 1 && i === 0 ? "start" : n > 1 && i === n - 1 ? "end" : "middle";
         el("text", { x: x(i), y: H - 8, "text-anchor": anchor }, svg).textContent = p.label;
       }
