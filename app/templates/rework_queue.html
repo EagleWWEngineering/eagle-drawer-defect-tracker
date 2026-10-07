@@ -40,6 +40,10 @@
 
 {% block extra_head %}
 <style>
+  .close-case-box .close-form { grid-template-columns: minmax(0, 1fr) auto; }
+  .close-buttons { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+  .close-buttons button { min-height: 52px; }
+  @media (max-width: 680px) { .close-case-box .close-form { grid-template-columns: 1fr; } .close-buttons button { flex: 1; } }
   /* Cards stay compact like the sample: the close form opens under a card only
      when its "Close case" button is tapped; select boxes only in Select mode. */
   #queue-cards:not(.select-mode) .fc-select { display: none; }
@@ -76,16 +80,22 @@ function kindTag(item) {
 
 // The primary action on every open card: close the case directly (Repaired / Use
 // As Is) with an optional note - PROJECT_SPEC_PHASE7.md, no recheck step.
+// One big button per way of closing (no dropdown: a native <select> inside a card
+// was unreliable on the QC iPad - 2026-10-07).
+const CLOSE_LABELS = { "Closed - Repaired": "Close · Repaired", "Closed - Use As Is": "Close · Use As Is" };
 function closeFormHtml(item) {
-  const options = item.direct_close_statuses
-    .map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`)
+  const buttons = ["Closed - Repaired", "Closed - Use As Is"]
+    .filter((s) => item.direct_close_statuses.includes(s))
+    .map(
+      (s, i) =>
+        `<button type="button" class="${i === 0 ? "" : "secondary"} close-as-btn" data-close-status="${escapeHtml(s)}">${escapeHtml(CLOSE_LABELS[s] || s)}</button>`
+    )
     .join("");
   return `<div class="close-case-box">
-    <form class="close-form" data-case-id="${item.id}">
-      <div class="field"><label>Close as</label><select name="close_status">${options}</select></div>
+    <form class="close-form" data-case-id="${item.id}" onsubmit="return false;">
       <div class="field"><label>What was done <span class="hint">(optional)</span></label>
         <input type="text" name="note" placeholder="e.g. Reglued at the bench"></div>
-      <button type="submit">Close case</button>
+      <div class="close-buttons">${buttons}</div>
     </form>
   </div>`;
 }
@@ -213,7 +223,6 @@ async function loadQueue({ background = false } = {}) {
       btn.textContent = panel.hidden ? "Close case" : "Cancel";
       btn.classList.toggle("secondary", !panel.hidden);
       btn.setAttribute("aria-expanded", String(!panel.hidden));
-      if (!panel.hidden) panel.querySelector("select")?.focus();
     })
   );
   cards.querySelectorAll("[data-reopen]").forEach((btn) =>
@@ -259,25 +268,21 @@ function wireForms(container) {
   });
 
   container.querySelectorAll(".close-form").forEach((form) => {
-    const btn = form.querySelector("button");
-    form.addEventListener(
-      "submit",
-      guardDoubleSubmit(btn, async (e) => {
-        e.preventDefault();
-        const fd = new FormData(form);
-        const note = fd.get("note") || null;
-        try {
-          await Api.changeStatus(form.dataset.caseId, {
-            new_status: fd.get("close_status"),
-            note,
-            repair_action: note,
-          });
-          showToast("Case closed.", "success");
-          await loadQueue();
-        } catch (err) {
-          showToast(err.message, "error");
-        }
-      })
+    form.querySelectorAll(".close-as-btn").forEach((btn) =>
+      btn.addEventListener(
+        "click",
+        guardDoubleSubmit(btn, async () => {
+          const note = form.querySelector('[name="note"]').value.trim() || null;
+          const status = btn.dataset.closeStatus;
+          try {
+            await Api.changeStatus(form.dataset.caseId, { new_status: status, note, repair_action: note });
+            showToast(`Case closed (${status.replace("Closed - ", "")}).`, "success");
+            await loadQueue();
+          } catch (err) {
+            showToast(err.message, "error");
+          }
+        })
+      )
     );
   });
 }
