@@ -1,6 +1,6 @@
 # RESUME: where eagle-drawer-defect-tracker stands
 
-Last updated 2026-10-07. Hand-off for the next session. The redesign and the move to
+Last updated 2026-10-07 (redesign deployed 06:27 ET). Hand-off for the next session. The redesign and the move to
 eagle-vm are in [`docs/PROJECT_SPEC_PHASE12.md`](docs/PROJECT_SPEC_PHASE12.md); the
 baseline is [`docs/TECHNICAL_SUMMARY_2026-10-01.md`](docs/TECHNICAL_SUMMARY_2026-10-01.md).
 
@@ -12,20 +12,12 @@ baseline is [`docs/TECHNICAL_SUMMARY_2026-10-01.md`](docs/TECHNICAL_SUMMARY_2026
   commit). Render is still up but receives nothing - Rodolfo suspends it once the
   brief's PR #37 (defect panel URL) is deployed.
 - **All five production-count feeds land on the VM** (verified 10-06).
-- **Redesign built, NOT deployed**: branch `redesign-2026-10` (pushed), 793 tests.
-  Waiting for Rodolfo's review on the laptop copy, then one deploy.
-- Production count master has two undeployed commits for the redesign: customer
-  name in the order-lines feed (39ce46f) and clamp on drawer events (4de3ab5). Both
-  are safe in either order (the live tracker ignores unknown keys).
-
-## Deploying the redesign (after Rodolfo says go)
-
-1. Tracker: merge `redesign-2026-10` into master, push, `bash deploy/push.sh`
-   (runs the 5 migrations on start; `alembic upgrade head` is ExecStartPre).
-2. Production count: `git push origin master` (already pushed) + `bash deploy/push.sh`.
-3. Check: `/defects/` pages, `/api/v1/sync/health` all ok, a customer name on the
-   queue after the next :30 order-lines push.
-4. Rodolfo sets the dashboard target in Admin; shop TV gets `/defects/?tv=1`.
+- **Redesign LIVE since 2026-10-07 06:27 ET** (77b2c53, migrations to b5e1a7c3d9f2),
+  with production count db4ada3 (customer + clamp in the feeds). Pre-deploy backup:
+  `~/tmp/tracker-migration/pre-redesign-20261007-0626.sqlite` and the 02:20-style
+  snapshot in `~/state-backups/local/`.
+- **Kickback station fix (10-07):** QC kickbacks had been filed at hidden "Area 3";
+  now chosen in Admin > UNDO Card (QC / Sorting id 16, Assembly id 5); 22 cases moved.
 
 ## How to operate it
 
@@ -40,7 +32,7 @@ baseline is [`docs/TECHNICAL_SUMMARY_2026-10-01.md`](docs/TECHNICAL_SUMMARY_2026
 
 ## Open items
 
-1. Review of the redesign (Rodolfo).
+1. Watch the first day on the floor (queue, New Defect scans, TV dashboard).
 2. Brief PR #37, then suspend Render; later delete it and remove
    `app/routers/migration_export.py`.
 3. eagle-ops `services.toml` entry for the tracker (Blake).
