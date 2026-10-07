@@ -21,16 +21,17 @@
       <input type="text" id="shift" name="shift" value="Day" required>
     </div>
     <div class="field">
-      <label for="drawers_inspected">Drawers completed <span class="hint">(from Production Count)</span></label>
+      <label for="drawers_inspected">Drawers completed</label>
       <!-- Read-only (PROJECT_SPEC_PHASE10.md Part 1): written only by the
            production-count feed, never by this form - it isn't sent on save. -->
       <input type="text" id="drawers_inspected" readonly tabindex="-1" aria-readonly="true" value="—" placeholder="—" style="background:var(--surface-2);">
       <p id="inspected-source-indicator" class="hint"></p>
     </div>
     <div class="field">
-      <label for="drawers_scheduled">Drawers scheduled <span class="hint">(from the production brief; edit to override)</span></label>
+      <label for="drawers_scheduled">Drawers scheduled</label>
       <input type="number" id="drawers_scheduled" name="drawers_scheduled" min="0" placeholder="—">
       <p id="schedule-source-indicator" class="hint"></p>
+      <p class="hint" style="margin:0;">From the production brief; type to override.</p>
     </div>
     <div class="field">
       <label for="drawers_rejected_unique">Unique drawers rejected</label>

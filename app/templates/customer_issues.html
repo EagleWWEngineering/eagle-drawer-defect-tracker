@@ -6,7 +6,7 @@
 <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:0.75rem;">
   <div>
     <h1 class="page-title" style="margin-bottom:0.25rem;">Customer Issues</h1>
-    <p class="hint" style="margin-top:0;">Synced hourly from the production brief. This
+    <p class="hint" style="margin-top:0;">Synced hourly from the production brief (through production count). This
       is separate from internal QC defect cases, but an issue can be linked to one
       once QC confirms the connection. Manual entries (phone/walk-in reports) are
       never touched by sync.</p>
@@ -79,25 +79,13 @@
 
 <section class="card">
   <h2>Pareto by category</h2>
-  <div class="chart-container"><canvas id="pareto-category-canvas" class="chart-canvas"></canvas></div>
-  <div class="table-scroll">
-    <table id="pareto-category-table">
-      <thead><tr><th>Category</th><th>Issues</th><th>Cumulative %</th></tr></thead>
-      <tbody></tbody>
-    </table>
-  </div>
+  <div id="pareto-category-bars"></div>
 </section>
 
 <section class="card">
   <h2>Pareto by should-have-caught station</h2>
   <p class="hint">Shows where Eagle's internal QC is failing to catch problems before shipment.</p>
-  <div class="chart-container"><canvas id="pareto-caught-canvas" class="chart-canvas"></canvas></div>
-  <div class="table-scroll">
-    <table id="pareto-caught-table">
-      <thead><tr><th>Should've caught at</th><th>Issues</th><th>Cumulative %</th></tr></thead>
-      <tbody></tbody>
-    </table>
-  </div>
+  <div id="pareto-caught-bars"></div>
 </section>
 
 <section class="card">
@@ -148,24 +136,20 @@ async function loadSummary(params) {
 
 async function loadParetoByCategory(params) {
   const rows = await Api.get("/api/v1/customer-issues/pareto", { ...params, group_by: "category" });
-  const tbody = document.querySelector("#pareto-category-table tbody");
-  tbody.innerHTML =
-    rows
-      .map((r) => `<tr><td>${escapeHtml(r.label)}</td><td>${r.issue_count}</td><td>${formatRate(r.cumulative_pct)}</td></tr>`)
-      .join("") || `<tr><td colspan="3">No customer issues for this selection.</td></tr>`;
-  const chartRows = rows.map((r) => ({ label: r.label, defect_events: r.issue_count, cumulative_pct: r.cumulative_pct }));
-  renderParetoChart(document.getElementById("pareto-category-canvas"), chartRows);
+  Viz.barList(
+    document.getElementById("pareto-category-bars"),
+    rows.map((r) => ({ label: r.label, value: r.issue_count, cum: r.cumulative_pct })),
+    { head: ["Category", "Issues", "Cum."], empty: "No customer issues for this selection." }
+  );
 }
 
 async function loadParetoByCaughtAt(params) {
   const rows = await Api.get("/api/v1/customer-issues/pareto", { ...params, group_by: "should_have_caught_at" });
-  const tbody = document.querySelector("#pareto-caught-table tbody");
-  tbody.innerHTML =
-    rows
-      .map((r) => `<tr><td>${escapeHtml(r.label)}</td><td>${r.issue_count}</td><td>${formatRate(r.cumulative_pct)}</td></tr>`)
-      .join("") || `<tr><td colspan="3">No customer issues for this selection.</td></tr>`;
-  const chartRows = rows.map((r) => ({ label: r.label, defect_events: r.issue_count, cumulative_pct: r.cumulative_pct }));
-  renderParetoChart(document.getElementById("pareto-caught-canvas"), chartRows);
+  Viz.barList(
+    document.getElementById("pareto-caught-bars"),
+    rows.map((r) => ({ label: r.label, value: r.issue_count, cum: r.cumulative_pct })),
+    { head: ["Should've caught at", "Issues", "Cum."], empty: "No customer issues for this selection." }
+  );
 }
 
 function detailRowHtml(issue) {
@@ -337,11 +321,11 @@ async function loadSyncStatus() {
   try {
     const status = await Api.get("/api/v1/sync/customer-issues/relay-connection");
     if (status.relay_connected) {
-      line.textContent = `🟢 Local relay connected — last checked in at ${status.relay_last_seen_at_local}.`;
+      line.textContent = `🟢 Production count connected (last check-in ${status.relay_last_seen_at_local}).`;
       line.style.color = "";
     } else {
       const lastSeen = status.relay_last_seen_at_local || "never";
-      line.textContent = `🔴 Local relay not connected — sync will resume automatically once it's back online. Last seen: ${lastSeen}.`;
+      line.textContent = `🔴 Production count not connected. Sync resumes on its own once it's back. Last check-in: ${lastSeen}.`;
       line.style.color = "var(--color-danger)";
     }
   } catch (err) {

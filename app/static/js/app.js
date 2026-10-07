@@ -358,12 +358,6 @@ async function renderCaseDetail(caseId) {
     c.found_station_id,
     c.found_station_name
   );
-  const sourceStationOptionsHtml = buildStationOptionsHtml(
-    activeMasterData.stations,
-    c.possible_source_station_id,
-    c.possible_source_station_name,
-    { allowNone: true }
-  );
   const addItemCategoryOptionsHtml = activeMasterData.defect_categories
     .map((cat) => `<option value="${cat.id}">${escapeHtml(cat.name)}</option>`)
     .join("");
@@ -387,11 +381,10 @@ async function renderCaseDetail(caseId) {
       <p><strong>Detected:</strong> ${escapeHtml(c.detected_at_local || "")} &nbsp; <strong>Production date:</strong> ${c.production_date}</p>
       <p>
         <strong>Found station:</strong>
-        <span id="case-detail-stations-display">${escapeHtml(c.found_station_name)} &nbsp; <strong>Possible source station:</strong> ${escapeHtml(c.possible_source_station_name || "unknown")}</span>
+        <span id="case-detail-stations-display">${escapeHtml(c.found_station_name)}${c.possible_source_station_name ? ` &nbsp; <span class="hint">Possible source (no longer asked for): ${escapeHtml(c.possible_source_station_name)}</span>` : ""}</span>
         <button type="button" id="case-detail-stations-edit-btn" class="secondary" style="padding:0.1rem 0.5rem; margin-left:0.5rem;">Edit</button>
         <span id="case-detail-stations-form" class="inline-form" style="display:none;">
           <label>Found <select id="case-detail-found-station-select">${foundStationOptionsHtml}</select></label>
-          <label>Possible source <select id="case-detail-source-station-select">${sourceStationOptionsHtml}</select></label>
           <button type="button" id="case-detail-stations-save-btn" class="secondary">Save</button>
           <button type="button" id="case-detail-stations-cancel-btn" class="secondary">Cancel</button>
         </span>
@@ -500,13 +493,11 @@ async function renderCaseDetail(caseId) {
     "click",
     guardDoubleSubmit(stationsSaveBtn, async () => {
       const foundId = Number(document.getElementById("case-detail-found-station-select").value);
-      const sourceRaw = document.getElementById("case-detail-source-station-select").value;
       try {
-        await Api.updateDefectCase(caseId, {
-          found_station_id: foundId,
-          possible_source_station_id: sourceRaw ? Number(sourceRaw) : null,
-        });
-        showToast("Stations updated.", "success");
+        // Found station only: possible source is no longer edited (2026-10
+        // redesign) - leaving it out of the update keeps any old value as it was.
+        await Api.updateDefectCase(caseId, { found_station_id: foundId });
+        showToast("Found station updated.", "success");
         await renderCaseDetail(caseId);
       } catch (err) {
         showToast(err.message, "error");

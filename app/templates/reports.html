@@ -310,7 +310,7 @@ async function loadShopVsCustomer(params) {
   Viz.barList(document.getElementById("shop-list"), data.shop.map((r) => ({ label: r.label, value: r.count })), { empty: "Nothing caught in these dates." });
   Viz.barList(
     document.getElementById("customer-list"),
-    data.customer.map((r) => ({ label: r.label, value: r.count, color: "var(--s-asm)" })),
+    data.customer.map((r) => ({ label: r.label, value: r.count })),
     { empty: "No customer issues in these dates." }
   );
 }
