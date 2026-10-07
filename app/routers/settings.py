@@ -46,9 +46,15 @@ def update_cost_per_drawer(
 
 
 def _undo_categories(db: Session) -> UndoCategorySettings:
+    from app.services.drawer_event_service import kickback_station
+
+    qc_station = kickback_station(db, "qc")
+    assembly_station = kickback_station(db, "assembly")
     return UndoCategorySettings(
         qc_category_id=settings_service.get_undo_category_id(db, "qc"),
         assembly_category_id=settings_service.get_undo_category_id(db, "assembly"),
+        qc_station_id=qc_station.id if qc_station else None,
+        assembly_station_id=assembly_station.id if assembly_station else None,
     )
 
 
@@ -66,6 +72,9 @@ def update_undo_categories(
     before = _undo_categories(db)
     settings_service.set_undo_category_ids(
         db, {"qc": payload.qc_category_id, "assembly": payload.assembly_category_id}
+    )
+    settings_service.set_undo_station_ids(
+        db, {"qc": payload.qc_station_id, "assembly": payload.assembly_station_id}
     )
     after = _undo_categories(db)
     audit_service.record(

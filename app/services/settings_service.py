@@ -107,3 +107,41 @@ def set_quality_target(db: Session, value: float | None) -> float | None:
         setting.value = stored
     db.commit()
     return get_quality_target(db)
+
+
+# 2026-10-07: the STATION an UNDO-card kickback case is recorded at, per area, by
+# id - chosen in Admin next to the category. Looking it up by its built-in name
+# picked a hidden leftover row ("Area 3" still holds "QC / Sorting / Shipping"
+# from the 09-03 duplicate incident) once the real station had been renamed.
+UNDO_STATION_SETTING_KEYS: dict[str, str] = {
+    "qc": "undo_station_qc",
+    "assembly": "undo_station_assembly",
+}
+
+
+def get_undo_station_id(db: Session, area: str) -> int | None:
+    setting = db.get(AppSetting, UNDO_STATION_SETTING_KEYS[area])
+    if setting is None or not setting.value:
+        return None
+    return int(setting.value)
+
+
+def set_undo_station_ids(db: Session, ids: dict[str, int | None]) -> dict[str, int | None]:
+    """Save both areas at once. None goes back to the automatic choice."""
+    from app.models import Station
+
+    for area, station_id in ids.items():
+        if station_id is not None and db.get(Station, station_id) is None:
+            raise ValidationError(
+                f"Station {station_id} doesn't exist.", field=f"{area}_station_id"
+            )
+    for area, station_id in ids.items():
+        key = UNDO_STATION_SETTING_KEYS[area]
+        value = str(station_id) if station_id is not None else ""
+        setting = db.get(AppSetting, key)
+        if setting is None:
+            db.add(AppSetting(key=key, value=value))
+        else:
+            setting.value = value
+    db.commit()
+    return {area: get_undo_station_id(db, area) for area in UNDO_STATION_SETTING_KEYS}

@@ -144,13 +144,14 @@ def update_category(
 def _protected_station_ids(db: Session) -> dict[int, str]:
     """Stations the UNDO-card kickbacks open their cases at - deleting one would
     make every kickback in that area fail."""
-    from app.services.drawer_event_service import AREA_STATIONS, _seeded
+    from app.services.drawer_event_service import AREA_STATIONS, kickback_station
 
     out: dict[int, str] = {}
-    for area, name in AREA_STATIONS.items():
-        station = _seeded(db, Station, name)
+    for area in AREA_STATIONS:
+        station = kickback_station(db, area)
         if station is not None:
-            out[station.id] = f"UNDO-card kickbacks ({area}) are recorded at it"
+            area_name = {"qc": "QC", "assembly": "Assembly In"}.get(area, area)
+            out[station.id] = f"it is the {area_name} kickback station (Admin > UNDO Card)"
     return out
 
 
@@ -165,9 +166,14 @@ def _protected_category_ids(db: Session) -> dict[int, str]:
         if category_id is not None:
             area_name = {"qc": "QC", "assembly": "Assembly In"}.get(area, area)
             out[category_id] = f"it is the {area_name} kickback category (Admin > UNDO Card)"
-    fallback = _seeded(db, DefectCategory, FALLBACK_CATEGORY)
-    if fallback is not None:
-        out.setdefault(fallback.id, "kickbacks fall back to it when no category is set")
+    # The fallback only matters for an area with no category chosen.
+    if any(
+        settings_service.get_undo_category_id(db, area) is None
+        for area in settings_service.UNDO_CATEGORY_SETTING_KEYS
+    ):
+        fallback = _seeded(db, DefectCategory, FALLBACK_CATEGORY)
+        if fallback is not None:
+            out.setdefault(fallback.id, "kickbacks fall back to it when no category is set")
     return out
 
 

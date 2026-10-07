@@ -937,6 +937,9 @@ class UndoCategorySettings(BaseModel):
 
     qc_category_id: int | None = None
     assembly_category_id: int | None = None
+    # 2026-10-07: the station the case is recorded at. None = automatic.
+    qc_station_id: int | None = None
+    assembly_station_id: int | None = None
 
 
 # ---------------------------------------------------------------------------

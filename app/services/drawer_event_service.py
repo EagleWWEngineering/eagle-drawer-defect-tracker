@@ -139,10 +139,27 @@ def _clamp(value) -> str | None:
 
 
 def _seeded(db: Session, model: type[Station] | type[DefectCategory], default_name: str):
+    """The row for a built-in name. Live (active, not deleted) rows first: since the
+    09-03 duplicate incident some built-in names sit on hidden leftover rows (e.g.
+    "Area 3" holds "QC / Sorting / Shipping") while the real one was renamed."""
+    live = (model.active.is_(True)) & (model.is_deleted.is_(False))
     return (
-        db.query(model).filter(model.seed_key == default_name).first()
+        db.query(model).filter(model.seed_key == default_name, live).first()
+        or db.query(model).filter(model.name == default_name, live).first()
+        or db.query(model).filter(model.seed_key == default_name).first()
         or db.query(model).filter(model.name == default_name).first()
     )
+
+
+def kickback_station(db: Session, area: str) -> Station | None:
+    """Admin's choice for this area (Admin > UNDO Card), else the built-in station
+    by name - live rows first."""
+    station_id = settings_service.get_undo_station_id(db, area)
+    if station_id is not None:
+        station = db.get(Station, station_id)
+        if station is not None and not station.is_deleted:
+            return station
+    return _seeded(db, Station, AREA_STATIONS[area])
 
 
 def kickback_category(db: Session, area: str) -> DefectCategory | None:
@@ -181,7 +198,7 @@ def _apply_kickback(db: Session, event: dict) -> tuple[str, int | None, bool]:
     if existing:
         return f"already open: {existing[0].case_number}", existing[0].id, False
 
-    station = _seeded(db, Station, AREA_STATIONS[event["area"]])
+    station = kickback_station(db, event["area"])
     if station is None:
         return f"failed: no '{AREA_STATIONS[event['area']]}' station", None, False
     category = kickback_category(db, event["area"])

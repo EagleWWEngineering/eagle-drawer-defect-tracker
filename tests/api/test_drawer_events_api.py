@@ -217,10 +217,10 @@ def test_renamed_categories_still_work(client, relay_key, master_data):
 
 
 def test_undo_category_settings_default_and_validation(client):
-    assert client.get(SETTINGS_PATH).json() == {
-        "qc_category_id": None,
-        "assembly_category_id": None,
-    }
+    body = client.get(SETTINGS_PATH).json()
+    assert (body["qc_category_id"], body["assembly_category_id"]) == (None, None)
+    # 2026-10-07: the stations come back resolved (automatic until chosen).
+    assert body["qc_station_id"] is not None and body["assembly_station_id"] is not None
     resp = client.put(SETTINGS_PATH, json={"qc_category_id": 99999, "assembly_category_id": None})
     assert resp.status_code == 400
     assert client.get(SETTINGS_PATH).json()["qc_category_id"] is None

@@ -95,6 +95,14 @@
       <select id="undo-category-assembly"></select>
     </div>
     <div class="field">
+      <label for="undo-station-qc">QC kickback station</label>
+      <select id="undo-station-qc"></select>
+    </div>
+    <div class="field">
+      <label for="undo-station-assembly">Assembly In kickback station</label>
+      <select id="undo-station-assembly"></select>
+    </div>
+    <div class="field">
       <button type="submit">Save</button>
     </div>
   </form>
@@ -201,7 +209,7 @@ async function loadTables() {
     el.style.display = favoritesEnabled ? "" : "none";
   });
 
-  await fillUndoCategorySelects(md.defect_categories);
+  await fillUndoCategorySelects(md.defect_categories, md.stations);
   await loadDeletedMasterData();
 
   document.querySelectorAll(".delete-row-btn").forEach((btn) => {
@@ -379,7 +387,7 @@ async function loadSyncLog() {
 
 /** UNDO Card Kickbacks: one dropdown per area, listing every category
  * (inactive ones only if currently chosen). Blank = the built-in Other. */
-async function fillUndoCategorySelects(categories) {
+async function fillUndoCategorySelects(categories, stations = []) {
   const current = await Api.get("/api/v1/settings/undo-categories");
   const fill = (selectId, selectedId) => {
     const options = categories
@@ -393,6 +401,17 @@ async function fillUndoCategorySelects(categories) {
   };
   fill("undo-category-qc", current.qc_category_id);
   fill("undo-category-assembly", current.assembly_category_id);
+  const fillStation = (selectId, selectedId) => {
+    document.getElementById(selectId).innerHTML = stations
+      .filter((s) => s.active || s.id === selectedId)
+      .map(
+        (s) =>
+          `<option value="${s.id}"${s.id === selectedId ? " selected" : ""}>${escapeHtml(s.name)}${s.active ? "" : " (inactive)"}</option>`
+      )
+      .join("");
+  };
+  fillStation("undo-station-qc", current.qc_station_id);
+  fillStation("undo-station-assembly", current.assembly_station_id);
 }
 
 async function loadCostSettings() {
@@ -445,8 +464,11 @@ document.addEventListener("DOMContentLoaded", async () => {
       await Api.put("/api/v1/settings/undo-categories", {
         qc_category_id: idOf("undo-category-qc"),
         assembly_category_id: idOf("undo-category-assembly"),
+        qc_station_id: idOf("undo-station-qc"),
+        assembly_station_id: idOf("undo-station-assembly"),
       });
-      showToast("Kickback categories saved.", "success");
+      showToast("Kickback settings saved.", "success");
+      await loadTables();
     } catch (err) {
       showToast(err.message, "error");
     }
