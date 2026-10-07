@@ -130,10 +130,31 @@ def validate_payload(data: Any) -> list[dict]:
 
 
 def _seeded(db: Session, model: type[Station] | type[DefectCategory], default_name: str):
+    """The row for a built-in name, active rows first: since the 09-03 duplicate
+    incident some built-in names sit on hidden leftover rows (e.g. "Area 3" holds
+    "QC / Sorting / Shipping") while the real one was renamed."""
     return (
-        db.query(model).filter(model.seed_key == default_name).first()
+        db.query(model).filter(model.seed_key == default_name, model.active.is_(True)).first()
+        or db.query(model).filter(model.name == default_name, model.active.is_(True)).first()
+        or db.query(model).filter(model.seed_key == default_name).first()
         or db.query(model).filter(model.name == default_name).first()
     )
+
+
+# 2026-10-07: the station a kickback case is recorded at, per area, by id (Admin
+# picks it in the redesign; set directly on the VM until then).
+UNDO_STATION_SETTING_KEYS = {"qc": "undo_station_qc", "assembly": "undo_station_assembly"}
+
+
+def kickback_station(db: Session, area: str) -> Station | None:
+    from app.models import AppSetting
+
+    setting = db.get(AppSetting, UNDO_STATION_SETTING_KEYS[area])
+    if setting is not None and setting.value:
+        station = db.get(Station, int(setting.value))
+        if station is not None:
+            return station
+    return _seeded(db, Station, AREA_STATIONS[area])
 
 
 def kickback_category(db: Session, area: str) -> DefectCategory | None:
@@ -172,7 +193,7 @@ def _apply_kickback(db: Session, event: dict) -> tuple[str, int | None, bool]:
     if existing:
         return f"already open: {existing[0].case_number}", existing[0].id, False
 
-    station = _seeded(db, Station, AREA_STATIONS[event["area"]])
+    station = kickback_station(db, event["area"])
     if station is None:
         return f"failed: no '{AREA_STATIONS[event['area']]}' station", None, False
     category = kickback_category(db, event["area"])
