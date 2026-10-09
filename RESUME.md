@@ -47,7 +47,7 @@ baseline is [`docs/TECHNICAL_SUMMARY_2026-10-01.md`](docs/TECHNICAL_SUMMARY_2026
 
 ## Open items
 
-1. Watch the floor: New Defect (no disposition), queue, TV dashboard.
+1. Floor checked by Rodolfo 10-09: New Defect (no disposition) working, drawers register.
 2. Later: delete Render and remove `app/routers/migration_export.py`.
 3. eagle-ops `services.toml` entry for the tracker (Blake's side).
 
