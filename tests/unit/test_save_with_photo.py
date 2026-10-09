@@ -1,4 +1,4 @@
-"""New Defect form: "Save with photo" + equal-size disposition buttons.
+"""New Defect form: "Save with photo" + every new case goes to the queue.
 
 No JS test framework exists in this repo (see test_line_label_picker.py), so
 these pin the wiring that matters in the template/scripts themselves; the
@@ -53,11 +53,17 @@ def test_every_upload_is_shrunk_first():
     assert "PHOTO_MAX_DIMENSION = 1600" in API_JS
 
 
-def test_disposition_buttons_are_equal_size():
-    assert 'id="disposition-buttons"' in HTML
-    assert 'dispositionButtonHtml(DISPOSITION_PRIMARY, "tap-btn-disposition")' in HTML
-    assert 'dispositionButtonHtml(DISPOSITION_SECONDARY, "tap-btn-disposition")' in HTML
-    assert "grid-template-columns: 1fr 1fr" in CSS[CSS.index(".disposition-grid") :][:200]
+def test_new_defect_always_goes_to_the_queue():
+    # No disposition choice and no close-on-the-spot on the form (2026-10-09):
+    # every new case is an open Rework case in the Rework & Kickback Queue.
+    assert 'id="disposition-buttons"' not in HTML
+    assert 'id="repair-preset-field"' not in HTML
+    assert 'id="leave-open-checkbox"' not in HTML
+    payload = HTML[HTML.index("function collectPayload") :]
+    payload = payload[: payload.index("function validateBeforeSubmit")]
+    assert "disposition: NEW_CASE_DISPOSITION" in payload
+    assert "resolved_on_the_spot: false" in payload
+    assert 'const NEW_CASE_DISPOSITION = "Rework";' in HTML
 
 
 def test_session_log_photo_is_one_tap_camera_upload():

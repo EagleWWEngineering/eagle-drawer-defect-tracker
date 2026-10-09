@@ -479,20 +479,6 @@ button.danger:hover, .btn.danger:hover { background: #991b1b; }
 .tap-btn.priority-urgent.selected { background: var(--bad-bg); color: var(--urgent); border-color: var(--urgent); }
 .tap-btn.priority-high.selected { background: var(--warn-bg); color: var(--warn-fg); border-color: var(--high); }
 
-/* Disposition: Rework and Set Aside as two equal columns, same height. */
-.disposition-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.5rem;
-  max-width: 560px;
-}
-
-.tap-btn-disposition {
-  min-height: 72px;
-  font-family: var(--display);
-  font-size: 1.4rem;
-}
-
 /* Save row: "Save with photo" is the big main action, "Save without photo"
    sits beside it (stacks under it on a phone). */
 .save-actions {

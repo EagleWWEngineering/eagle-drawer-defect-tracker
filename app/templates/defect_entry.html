@@ -89,27 +89,6 @@
   </section>
 
   <section class="card nd-panel">
-    <div class="field">
-      <label>Disposition</label>
-      <div id="disposition-buttons" class="disposition-grid" role="group" aria-label="Disposition"></div>
-    </div>
-    <div class="field" id="repair-preset-field" style="display:none;">
-      <label>What was done? <span class="hint">(quick pick, the case closes as soon as you save)</span></label>
-      <div id="repair-preset-grid" class="button-grid" role="group" aria-label="Repair action preset"></div>
-      <input type="text" id="repair-preset-other-text" placeholder="Describe what was done" style="display:none; margin-top:0.5rem;">
-      <label style="margin-top:0.6rem; display:block;">Outcome</label>
-      <div id="instant-close-outcome" class="button-grid button-grid-2" role="group" aria-label="Instant close outcome"></div>
-    </div>
-    <div class="field" id="leave-open-field" style="margin-bottom:0;">
-      <label class="leave-open-label">
-        <input type="checkbox" id="leave-open-checkbox">
-        Not resolved yet, leave this case open
-      </label>
-      <p id="set-aside-hint" class="hint" style="display:none;">Set Aside drawers go straight to the Rework &amp; Kickback Queue as open. Nothing else to fill in.</p>
-    </div>
-  </section>
-
-  <section class="card nd-panel">
     <div class="nd-two">
       <div class="field">
         <label>Priority</label>
@@ -221,46 +200,19 @@
 // Admin) - "More stations..." always has the complete, authoritative list.
 const COMMON_STATION_NAMES = ["Prep Sanding", "Assembly", "QC / Sorting / Shipping", "Top Coat", "Notch & Bore"];
 const PRIORITY_OVERRIDE_ORDER = ["Normal", "High", "Urgent"];
-// Rework is the default/primary disposition (PROJECT_SPEC_PHASE7.md) - almost
-// every defect gets reworked or re-cut on the spot, so it's pre-selected and shown
-// as one big button. Set Aside (the only other option now - it replaces the old
-// Use As Is / Hold / Scrap, which all collapse into "not being worked right now")
-// is secondary.
-const DISPOSITION_PRIMARY = "Rework";
-const DISPOSITION_SECONDARY = "Set Aside";
-// Only Rework has an instant-close path (Set Aside means "waiting to be worked",
-// the opposite of "already done") - see leaveOpen below.
-const INSTANT_CLOSE_DISPOSITIONS = new Set(["Rework"]);
-// Which closed status the instant-close path lands on - "Repaired" (default) or
-// "Use As Is" (how "defect exists, we're shipping it as is" gets recorded now
-// that Use As Is is no longer its own disposition - see
-// app/services/defect_service.py INSTANT_CLOSE_OUTCOMES).
-const INSTANT_CLOSE_OUTCOMES = ["Repaired", "Use As Is"];
-const DEFAULT_INSTANT_CLOSE_OUTCOME = "Repaired";
-const REPAIR_PRESETS = [
-  "Resanded",
-  "Replaned/re-cut",
-  "Reglued",
-  "Replaced part",
-  "Re-bored/re-notched",
-  "Other",
-];
+// Every new defect is saved as an open Rework case and goes to the Rework &
+// Kickback Queue - no disposition choice and no close-on-the-spot on this form
+// (2026-10-09). Cases are closed from the queue (Repaired / Use As Is).
+const NEW_CASE_DISPOSITION = "Rework";
 
 let masterData = null;
 let recentWorkOrders = [];
 
 let selectedCategoryIds = new Set();
 let selectedFoundStationId = null;
-let selectedDisposition = DISPOSITION_PRIMARY; // Rework pre-selected by default
 let selectedPriority = "Normal";
 let selectedAmPm = "AM";
 let qty = 1;
-// Immediate resolution is now the form's DEFAULT flow, not a toggle to think about -
-// leaveOpen only becomes true via the small secondary checkbox for the genuinely
-// rare case where nothing's decided yet (PROJECT_SPEC.md section 3.3).
-let leaveOpen = false;
-let selectedRepairPreset = null;
-let selectedInstantCloseOutcome = DEFAULT_INSTANT_CLOSE_OUTCOME;
 // entry_source tracks the Line field's own provenance: "manual" (typed or
 // tapped from the picker), "scanned" (filled from a unique-ID drawer label -
 // PROJECT_SPEC_PHASE10.md Part 2), or "scanned_edited" (filled by a scan, then
@@ -276,14 +228,6 @@ let scanController = null;
 // by "Add to that case" on the duplicate warning, cleared by "Log a new defect
 // anyway" / a different work order / the next entry.
 let addToCase = null;
-
-function dispositionSupportsInstantClose(disposition) {
-  return INSTANT_CLOSE_DISPOSITIONS.has(disposition);
-}
-
-function isInstantClose() {
-  return dispositionSupportsInstantClose(selectedDisposition) && !leaveOpen;
-}
 
 function stationByName(name) {
   return masterData.stations.find((s) => s.name === name) || null;
@@ -329,49 +273,6 @@ function renderCategoryGrid() {
   // the full grid on every call rather than needing its own call-sites too.
   renderCategoryFavorites();
   renderSaveSummary();
-}
-
-function dispositionButtonHtml(value, extraClass) {
-  const isSelected = selectedDisposition === value;
-  return `<button type="button" class="tap-btn${extraClass ? " " + extraClass : ""}${isSelected ? " selected" : ""}" data-value="${escapeHtml(value)}" aria-pressed="${isSelected}">${escapeHtml(value)}</button>`;
-}
-
-function renderDispositionButtons() {
-  // Rework (pre-selected default) and Set Aside, equal size side by side -
-  // only two dispositions exist (PROJECT_SPEC_PHASE7.md).
-  document.getElementById("disposition-buttons").innerHTML =
-    dispositionButtonHtml(DISPOSITION_PRIMARY, "tap-btn-disposition") +
-    dispositionButtonHtml(DISPOSITION_SECONDARY, "tap-btn-disposition");
-}
-
-function renderResolutionFields() {
-  const isSetAside = selectedDisposition === "Set Aside";
-
-  // Set Aside has no "resolved" concept of its own - it's always saved as Open,
-  // so there's nothing to decide here; show a short explanatory hint instead of
-  // the leave-open checkbox / repair preset.
-  document.getElementById("leave-open-field").style.display = isSetAside ? "none" : "block";
-  document.getElementById("set-aside-hint").style.display = isSetAside ? "block" : "none";
-  document.getElementById("leave-open-checkbox").checked = leaveOpen;
-
-  const showRepairPreset = isInstantClose();
-  document.getElementById("repair-preset-field").style.display = showRepairPreset ? "block" : "none";
-  const grid = document.getElementById("repair-preset-grid");
-  grid.innerHTML = REPAIR_PRESETS.map((p) => {
-    const isSelected = selectedRepairPreset === p;
-    return `<button type="button" class="tap-btn${isSelected ? " selected" : ""}" data-value="${escapeHtml(p)}" aria-pressed="${isSelected}">${escapeHtml(p)}</button>`;
-  }).join("");
-  const otherInput = document.getElementById("repair-preset-other-text");
-  otherInput.style.display = selectedRepairPreset === "Other" ? "block" : "none";
-
-  // Outcome toggle: which closed status this instant-close lands on - "Repaired"
-  // (default) or "Use As Is" (the DECISION-FLAGGED entry point for recording
-  // "defect exists, we're shipping it as is" - see docs/PROJECT_SPEC_PHASE7.md).
-  renderSaveSummary();
-  document.getElementById("instant-close-outcome").innerHTML = INSTANT_CLOSE_OUTCOMES.map((o) => {
-    const isSelected = selectedInstantCloseOutcome === o;
-    return `<button type="button" class="tap-btn${isSelected ? " selected" : ""}" data-value="${escapeHtml(o)}" aria-pressed="${isSelected}">${escapeHtml(o)}</button>`;
-  }).join("");
 }
 
 function renderPriorityButtons() {
@@ -647,10 +548,9 @@ function renderSaveSummary() {
   const line = document.getElementById("line_label").value;
   const cats = masterData.defect_categories.filter((c) => selectedCategoryIds.has(c.id)).map((c) => c.name);
   const found = masterData.stations.find((st) => st.id === selectedFoundStationId);
-  const what = selectedDisposition === "Set Aside" ? "Set Aside" : isInstantClose() && selectedRepairPreset ? `fixed: ${selectedRepairPreset}` : "Rework, open";
   el.innerHTML = `<b>WO ${escapeHtml(wo)}${line ? ` · Line ${escapeHtml(line)}` : ""}</b>${addToCase ? ` → ${escapeHtml(addToCase.case_number)}` : ""}<br>${
     cats.length ? escapeHtml(cats.join(", ")) : "Pick at least one defect"
-  }${found ? ` · found at ${escapeHtml(found.name)}` : ""} · ${escapeHtml(what)}`;
+  }${found ? ` · found at ${escapeHtml(found.name)}` : ""} · goes to the queue`;
 }
 
 function clearScannedDrawer() {
@@ -783,14 +683,6 @@ function closeScanModal() {
 }
 
 function collectPayload() {
-  const instantClose = isInstantClose();
-  let repairAction = null;
-  if (instantClose) {
-    repairAction =
-      selectedRepairPreset === "Other"
-        ? document.getElementById("repair-preset-other-text").value.trim() || "Other"
-        : selectedRepairPreset;
-  }
   return {
     production_date: document.getElementById("production_date").value,
     detected_at: buildDetectedAtIso(),
@@ -805,10 +697,8 @@ function collectPayload() {
       defect_category_id: id,
       affected_drawer_quantity: qty,
     })),
-    disposition: selectedDisposition,
-    resolved_on_the_spot: instantClose,
-    instant_close_outcome: instantClose ? selectedInstantCloseOutcome : null,
-    repair_action: repairAction,
+    disposition: NEW_CASE_DISPOSITION,
+    resolved_on_the_spot: false,
     notes: document.getElementById("notes").value || null,
   };
 }
@@ -828,10 +718,6 @@ function validateBeforeSubmit(form) {
   }
   if (selectedCategoryIds.size === 0) {
     showToast("Select at least one defect category.", "error");
-    return false;
-  }
-  if (isInstantClose() && !selectedRepairPreset) {
-    showToast("Pick what was done to fix it (or choose 'Other').", "error");
     return false;
   }
   return true;
@@ -891,11 +777,7 @@ function addSessionLogRow(created, hasPhoto, info = {}) {
 function resetFormForNextEntry() {
   selectedCategoryIds = new Set();
   selectedFoundStationId = null;
-  selectedDisposition = DISPOSITION_PRIMARY;
   selectedPriority = "Normal";
-  leaveOpen = false;
-  selectedRepairPreset = null;
-  selectedInstantCloseOutcome = DEFAULT_INSTANT_CLOSE_OUTCOME;
   qty = 1;
   document.getElementById("line_label").value = "";
   lineEntrySource = "manual";
@@ -903,12 +785,9 @@ function resetFormForNextEntry() {
   clearOpenCaseWarning();
   document.getElementById("drawer_part_reference").value = "";
   document.getElementById("notes").value = "";
-  document.getElementById("repair-preset-other-text").value = "";
   setDetectedTimeToNow();
   renderCategoryGrid();
   renderFoundStations();
-  renderDispositionButtons();
-  renderResolutionFields();
   renderPriorityButtons();
   renderQty();
   document.getElementById("work_order_number").focus();
@@ -966,45 +845,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
   document.getElementById("category-favorites").addEventListener("click", handleCategoryTap);
   document.getElementById("category-grid").addEventListener("click", handleCategoryTap);
-
-  function handleDispositionClick(e) {
-    const btn = e.target.closest(".tap-btn");
-    if (!btn) return;
-    // Disposition is always exactly one of the two values now - Rework by
-    // default - not an optional "leave blank if undecided" field; "undecided"
-    // is what Set Aside is for.
-    selectedDisposition = btn.dataset.value;
-    leaveOpen = false;
-    selectedRepairPreset = null;
-    selectedInstantCloseOutcome = DEFAULT_INSTANT_CLOSE_OUTCOME;
-    document.getElementById("repair-preset-other-text").value = "";
-    renderDispositionButtons();
-    renderResolutionFields();
-  }
-  document.getElementById("disposition-buttons").addEventListener("click", handleDispositionClick);
-
-  document.getElementById("leave-open-checkbox").addEventListener("change", (e) => {
-    leaveOpen = e.target.checked;
-    selectedRepairPreset = null;
-    selectedInstantCloseOutcome = DEFAULT_INSTANT_CLOSE_OUTCOME;
-    document.getElementById("repair-preset-other-text").value = "";
-    renderResolutionFields();
-  });
-
-  document.getElementById("repair-preset-grid").addEventListener("click", (e) => {
-    const btn = e.target.closest(".tap-btn");
-    if (!btn) return;
-    const value = btn.dataset.value;
-    selectedRepairPreset = selectedRepairPreset === value ? null : value;
-    renderResolutionFields();
-  });
-
-  document.getElementById("instant-close-outcome").addEventListener("click", (e) => {
-    const btn = e.target.closest(".tap-btn");
-    if (!btn) return;
-    selectedInstantCloseOutcome = btn.dataset.value;
-    renderResolutionFields();
-  });
 
   document.getElementById("priority-override").addEventListener("click", (e) => {
     const btn = e.target.closest(".tap-btn");
@@ -1190,8 +1030,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       items: payload.items,
       notes: payload.notes,
       priority: payload.priority === "Normal" ? null : payload.priority,
-      instant_close_outcome: payload.resolved_on_the_spot ? payload.instant_close_outcome : null,
-      repair_action: payload.resolved_on_the_spot ? payload.repair_action : null,
     });
   }
 
@@ -1219,13 +1057,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
       }
       showSaveFlash(
-        (target
-          ? created.status.startsWith("Closed")
-            ? `Added to ${created.case_number} and closed (fixed on the spot).`
-            : `Added to ${created.case_number}.`
-          : created.resolved_on_the_spot
-            ? `Resolved on the spot — ${created.case_number} closed.`
-            : `Saved: ${created.case_number}`) + photoNote
+        (target ? `Added to ${created.case_number}.` : `Saved: ${created.case_number}, in the queue.`) + photoNote
       );
       addSessionLogRow(created, Boolean(photoNote), { customer: scannedDrawer?.customer_name });
       if (!recentWorkOrders.includes(created.work_order_number)) {
