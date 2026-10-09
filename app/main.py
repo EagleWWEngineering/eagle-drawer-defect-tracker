@@ -5,6 +5,8 @@ Run with: uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -43,6 +45,7 @@ from app.routers import (
 from app.routers import settings as settings_router
 from app.schemas import HealthOut
 from app.seed_data import seed_master_data
+from app.services import feed_alert_service
 
 settings = get_settings()
 APP_DIR = Path(__file__).resolve().parent
@@ -114,7 +117,20 @@ async def lifespan(_app: FastAPI):
     # deliberately left in place (not deleted) for a future local-network
     # deployment or manual debugging - only this automatic background task is
     # retired, so it no longer fires on its own.
-    yield
+    # 2026-10-09: Slack DM when a production count feed is late or refused
+    # (app/services/feed_alert_service.py) - only where FEED_ALERT_ENABLED=true.
+    alert_task = (
+        asyncio.create_task(feed_alert_service.run_periodic(SessionLocal))
+        if settings.feed_alert_enabled
+        else None
+    )
+    try:
+        yield
+    finally:
+        if alert_task is not None:
+            alert_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await alert_task
 
 
 app = FastAPI(

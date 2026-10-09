@@ -112,6 +112,18 @@ class Settings:
         self.label_scanner_url: str = os.getenv(
             "LABEL_SCANNER_URL", "https://eaglewwengineering.github.io/eagle-label-scanner/"
         ).strip()
+        # 2026-10-09: Slack message when a production count feed goes late or is
+        # refused, and again when it is back (app/services/feed_alert_service.py).
+        # Off by default so a laptop or test copy never posts; the VM turns it on
+        # in its .env. Channel = a Slack user id posts a DM (Rodolfo).
+        self.feed_alert_enabled: bool = _env_bool("FEED_ALERT_ENABLED", False)
+        self.feed_alert_channel: str = os.getenv("FEED_ALERT_CHANNEL", "U0BFBDY3QBF").strip()
+        self.feed_alert_check_minutes: int = int(os.getenv("FEED_ALERT_CHECK_MINUTES", "5"))
+        # The VM's shared "Eagle Ops" bot token file (same one production count's
+        # 06:00 post uses); read at send time, never copied into this app's .env.
+        self.slack_token_file: str = os.getenv(
+            "SLACK_TOKEN_FILE", "~/.config/eagle-slack-gateway.env"
+        )
 
     @property
     def max_upload_bytes(self) -> int:
